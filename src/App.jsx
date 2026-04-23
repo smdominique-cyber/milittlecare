@@ -6,8 +6,8 @@ import DashboardLayout from '@/components/dashboard/DashboardLayout'
 import LoginPage from '@/pages/LoginPage'
 import AuthCallbackPage from '@/pages/AuthCallbackPage'
 import DashboardPage from '@/pages/DashboardPage'
+import ReceiptsPage from '@/pages/ReceiptsPage'
 import {
-  ReceiptsPage,
   DeductionsPage,
   TSRatioPage,
   FamiliesPage,
