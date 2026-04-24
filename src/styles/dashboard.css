@@ -713,9 +713,22 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ============================================================
-   Responsive
-   ============================================================ */
+/* ---- Mobile menu button (hidden on desktop) ---- */
+.topbar-menu-btn {
+  display: none;
+}
+
+/* ---- Sidebar backdrop for mobile ---- */
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(30, 38, 32, 0.5);
+  backdrop-filter: blur(2px);
+  z-index: 45;
+  animation: modalFade 0.2s var(--ease-out);
+}
+
+/* ---- Responsive ---- */
 @media (max-width: 1024px) {
   .content-grid {
     grid-template-columns: 1fr;
@@ -729,11 +742,11 @@
 
   .sidebar {
     transform: translateX(-240px);
+    width: 240px;
   }
 
   .sidebar.open {
     transform: translateX(0);
-    width: 240px;
   }
 
   .dashboard-main {
@@ -741,7 +754,22 @@
   }
 
   .topbar {
-    padding: 0 var(--space-5);
+    padding: 0 var(--space-4);
+    gap: var(--space-3);
+  }
+
+  .topbar-menu-btn {
+    display: grid;
+    margin-left: calc(var(--space-4) * -1 + var(--space-2));
+  }
+
+  .topbar-btn-desktop {
+    display: none;
+  }
+
+  .topbar-pill {
+    padding: var(--space-1) var(--space-3);
+    font-size: 0.75rem;
   }
 
   .page-content {
