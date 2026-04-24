@@ -24,10 +24,44 @@ function categoryEmoji(cat) {
   return map[cat] || '📄'
 }
 
+// Converts any image (including iPhone HEIC) to a JPEG base64 string
+// that Claude's vision API can read
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
+    const img = new Image()
     const reader = new FileReader()
-    reader.onload = () => resolve(reader.result.split(',')[1])
+
+    reader.onload = (e) => {
+      img.onload = () => {
+        try {
+          // Draw to canvas, which auto-converts to a readable format
+          const canvas = document.createElement('canvas')
+          // Cap at 1600px on longest side to keep file size reasonable
+          const maxSize = 1600
+          let { width, height } = img
+          if (width > height && width > maxSize) {
+            height = (height * maxSize) / width
+            width = maxSize
+          } else if (height > maxSize) {
+            width = (width * maxSize) / height
+            height = maxSize
+          }
+          canvas.width = width
+          canvas.height = height
+          const ctx = canvas.getContext('2d')
+          ctx.drawImage(img, 0, 0, width, height)
+
+          // Export as JPEG, which Claude reads reliably
+          const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.85)
+          const base64 = jpegDataUrl.split(',')[1]
+          resolve({ base64, mimeType: 'image/jpeg' })
+        } catch (err) {
+          reject(err)
+        }
+      }
+      img.onerror = () => reject(new Error('Could not read image. Try a different photo.'))
+      img.src = e.target.result
+    }
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
@@ -132,8 +166,8 @@ export default function ReceiptsPage() {
     setStage('scanning')
 
     try {
-      const base64 = await fileToBase64(file)
-      const result = await scanReceiptWithAI(base64, file.type)
+      const { base64, mimeType } = await fileToBase64(file)
+      const result = await scanReceiptWithAI(base64, mimeType)
       setForm({
         merchant: result.merchant || '',
         amount: result.amount?.toString() || '',
