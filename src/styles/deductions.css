@@ -1,375 +1,500 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useAuth } from '@/hooks/useAuth'
-import { supabase } from '@/lib/supabase'
-import { ChevronRight, Pencil, Trash2, X, Save, LayoutGrid, Calendar, ScanLine } from 'lucide-react'
-import '@/styles/deductions.css'
+/* ============================================================
+   Deductions Tracker — Full analytics & list view
+   ============================================================ */
 
-const CATEGORIES = [
-  'Groceries & Food', 'Office Supplies', 'Toys & Educational',
-  'Cleaning & Household', 'Vehicle & Transportation', 'Meals & Entertainment',
-  'Utilities', 'Insurance', 'Professional Services', 'Equipment & Furniture',
-  'Outdoor & Playground', 'Medical & Safety', 'Other',
-]
-
-const PAYMENT_METHODS = ['Cash', 'Credit Card', 'Debit Card', 'Check', 'Other']
-
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-]
-
-function categoryEmoji(cat) {
-  const map = {
-    'Groceries & Food': '🛒', 'Office Supplies': '📎', 'Toys & Educational': '🧸',
-    'Cleaning & Household': '🧹', 'Vehicle & Transportation': '🚗',
-    'Meals & Entertainment': '🍽️', 'Utilities': '💡', 'Insurance': '🛡️',
-    'Professional Services': '💼', 'Equipment & Furniture': '🪑',
-    'Outdoor & Playground': '🌳', 'Medical & Safety': '🩺', 'Other': '📄',
-  }
-  return map[cat] || '📄'
+.deductions-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
 }
 
-function formatCurrency(n) {
-  return '$' + parseFloat(n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+/* ---- Summary stats row ---- */
+.summary-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
 }
 
-export default function DeductionsPage() {
-  const { user } = useAuth()
-  const navigate = useNavigate()
+.summary-card {
+  background: var(--clr-white);
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-sm);
+  animation: fadeUp 0.4s var(--ease-out) both;
+  transition: all var(--duration-base) var(--ease-out);
+}
 
-  const [receipts, setReceipts] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [view, setView] = useState('category') // 'category' | 'month'
-  const [year, setYear] = useState(new Date().getFullYear())
-  const [expanded, setExpanded] = useState(new Set())
-  const [editing, setEditing] = useState(null) // receipt being edited
-  const [saving, setSaving] = useState(false)
+.summary-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
 
-  useEffect(() => { loadReceipts() }, [])
+.summary-card:nth-child(1) { animation-delay: 0.05s; }
+.summary-card:nth-child(2) { animation-delay: 0.10s; }
+.summary-card:nth-child(3) { animation-delay: 0.15s; }
+.summary-card:nth-child(4) { animation-delay: 0.20s; }
 
-  async function loadReceipts() {
-    setLoading(true)
-    const { data, error } = await supabase
-      .from('receipts')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('date', { ascending: false })
-    if (!error) setReceipts(data || [])
-    setLoading(false)
-  }
+.summary-label {
+  font-size: 0.75rem;
+  color: var(--clr-ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 500;
+  margin-bottom: var(--space-2);
+}
 
-  // Filter by year
-  const yearReceipts = receipts.filter(r => {
-    if (!r.date) return false
-    return new Date(r.date).getFullYear() === year
-  })
+.summary-value {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  font-weight: 400;
+  color: var(--clr-ink);
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
 
-  // Available years
-  const years = [...new Set(receipts.map(r => r.date ? new Date(r.date).getFullYear() : null).filter(Boolean))]
-  if (!years.includes(new Date().getFullYear())) years.unshift(new Date().getFullYear())
+.summary-sub {
+  font-size: 0.8125rem;
+  color: var(--clr-ink-soft);
+  margin-top: var(--space-1);
+}
 
-  // Totals
-  const total = yearReceipts.reduce((s, r) => s + parseFloat(r.total || r.amount || 0), 0)
-  const count = yearReceipts.length
-  const avgPerMonth = total / 12
-  const largestReceipt = yearReceipts.reduce((max, r) => {
-    const amt = parseFloat(r.total || r.amount || 0)
-    return amt > max ? amt : max
-  }, 0)
+/* ---- View toggle ---- */
+.view-toggle-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
 
-  // Group by category or month
-  const groups = {}
-  if (view === 'category') {
-    yearReceipts.forEach(r => {
-      const cat = r.category || 'Other'
-      if (!groups[cat]) groups[cat] = { items: [], total: 0, label: cat, emoji: categoryEmoji(cat) }
-      groups[cat].items.push(r)
-      groups[cat].total += parseFloat(r.total || r.amount || 0)
-    })
-  } else {
-    yearReceipts.forEach(r => {
-      const m = new Date(r.date).getMonth()
-      const key = `${m}`
-      if (!groups[key]) groups[key] = { items: [], total: 0, label: MONTHS[m], emoji: '📅', month: m }
-      groups[key].items.push(r)
-      groups[key].total += parseFloat(r.total || r.amount || 0)
-    })
-  }
+.view-toggle {
+  display: inline-flex;
+  padding: 3px;
+  background: var(--clr-warm);
+  border: 1.5px solid var(--clr-warm-mid);
+  border-radius: var(--radius-md);
+}
 
-  // Sort groups: category by total desc, month by month order
-  const groupEntries = Object.entries(groups).sort((a, b) => {
-    if (view === 'month') return a[1].month - b[1].month
-    return b[1].total - a[1].total
-  })
+.view-toggle button {
+  padding: 6px 16px;
+  border-radius: calc(var(--radius-md) - 3px);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--clr-ink-soft);
+  transition: all var(--duration-fast) var(--ease-out);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 
-  const toggleGroup = (key) => {
-    setExpanded(prev => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
+.view-toggle button.active {
+  background: var(--clr-white);
+  color: var(--clr-ink);
+  box-shadow: var(--shadow-sm);
+}
 
-  const handleEditSave = async () => {
-    if (!editing) return
-    setSaving(true)
-    const { error } = await supabase
-      .from('receipts')
-      .update({
-        merchant: editing.merchant || null,
-        amount: editing.amount ? parseFloat(editing.amount) : null,
-        tax: editing.tax ? parseFloat(editing.tax) : null,
-        tip: editing.tip ? parseFloat(editing.tip) : null,
-        total: editing.total ? parseFloat(editing.total) : null,
-        date: editing.date || null,
-        category: editing.category || null,
-        description: editing.description || null,
-        payment_method: editing.payment_method || null,
-        notes: editing.notes || null,
-      })
-      .eq('id', editing.id)
+.year-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 14px;
+  background: var(--clr-sage-pale);
+  border-radius: var(--radius-full);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--clr-sage-dark);
+}
 
-    setSaving(false)
-    if (!error) {
-      await loadReceipts()
-      setEditing(null)
-    }
-  }
+.year-selector select {
+  background: transparent;
+  border: none;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  color: var(--clr-sage-dark);
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  padding-right: 14px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%233e5849' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right center;
+}
 
-  const handleDelete = async (id, imagePath) => {
-    if (!window.confirm('Delete this receipt? This cannot be undone.')) return
+/* ---- Group card (category or month) ---- */
+.group-card {
+  background: var(--clr-white);
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  animation: fadeUp 0.5s var(--ease-out) both;
+  margin-bottom: var(--space-4);
+}
 
-    // Remove from storage
-    if (imagePath) {
-      await supabase.storage.from('receipts').remove([imagePath])
-    }
-    // Remove from db
-    await supabase.from('receipts').delete().eq('id', id)
-    await loadReceipts()
-    setEditing(null)
-  }
+.group-header {
+  padding: var(--space-4) var(--space-5);
+  background: var(--clr-cream);
+  border-bottom: 1px solid var(--clr-warm-mid);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  cursor: pointer;
+  transition: background var(--duration-fast);
+  user-select: none;
+}
 
-  const updateEditing = (field) => (e) => {
-    setEditing(prev => ({ ...prev, [field]: e.target.value }))
-  }
+.group-header:hover {
+  background: var(--clr-warm);
+}
 
-  // ─── Render ─────────────────────────────────────────────
+.group-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+}
 
-  if (loading) {
-    return (
-      <div style={{ padding: 'var(--space-12)', textAlign: 'center' }}>
-        <div className="loading-spinner" style={{ margin: '0 auto' }} />
-      </div>
-    )
-  }
+.group-emoji {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--clr-white);
+  border: 1px solid var(--clr-warm-mid);
+  display: grid;
+  place-items: center;
+  font-size: 1.125rem;
+  flex-shrink: 0;
+}
 
-  if (receipts.length === 0) {
-    return (
-      <div className="deductions-empty">
-        <div className="deductions-empty-icon">📊</div>
-        <div className="deductions-empty-title">No deductions yet</div>
-        <div className="deductions-empty-desc">
-          Start by scanning a receipt and your deductions will be tracked here automatically.
-        </div>
-        <button className="btn-go-scan" onClick={() => navigate('/receipts')}>
-          <ScanLine size={16} /> Scan your first receipt
-        </button>
-      </div>
-    )
-  }
+.group-title {
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  font-weight: 400;
+  color: var(--clr-ink);
+  letter-spacing: -0.01em;
+}
 
-  const maxTotal = Math.max(...groupEntries.map(([, g]) => g.total))
+.group-count {
+  font-size: 0.75rem;
+  color: var(--clr-ink-soft);
+  margin-top: 1px;
+}
 
-  return (
-    <div className="deductions-page">
+.group-total-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
 
-      {/* Summary */}
-      <div className="summary-row">
-        <div className="summary-card">
-          <div className="summary-label">Total Deductions</div>
-          <div className="summary-value">{formatCurrency(total)}</div>
-          <div className="summary-sub">for tax year {year}</div>
-        </div>
-        <div className="summary-card">
-          <div className="summary-label">Receipts</div>
-          <div className="summary-value">{count}</div>
-          <div className="summary-sub">{count === 1 ? 'tracked' : 'total tracked'}</div>
-        </div>
-        <div className="summary-card">
-          <div className="summary-label">Avg / Month</div>
-          <div className="summary-value">{formatCurrency(avgPerMonth)}</div>
-          <div className="summary-sub">spread over 12 months</div>
-        </div>
-        <div className="summary-card">
-          <div className="summary-label">Largest Receipt</div>
-          <div className="summary-value">{formatCurrency(largestReceipt)}</div>
-          <div className="summary-sub">single transaction</div>
-        </div>
-      </div>
+.group-total {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 400;
+  color: var(--clr-ink);
+  letter-spacing: -0.02em;
+}
 
-      {/* Controls */}
-      <div className="view-toggle-bar">
-        <div className="view-toggle">
-          <button className={view === 'category' ? 'active' : ''} onClick={() => setView('category')}>
-            <LayoutGrid size={14} /> By Category
-          </button>
-          <button className={view === 'month' ? 'active' : ''} onClick={() => setView('month')}>
-            <Calendar size={14} /> By Month
-          </button>
-        </div>
-        <div className="year-selector">
-          <span>Tax year</span>
-          <select value={year} onChange={(e) => setYear(parseInt(e.target.value))}>
-            {years.sort((a, b) => b - a).map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </div>
-      </div>
+.group-percent-bar {
+  width: 80px;
+  height: 5px;
+  background: var(--clr-warm-mid);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
 
-      {/* Groups */}
-      <div>
-        {groupEntries.map(([key, group]) => {
-          const isOpen = expanded.has(key)
-          const percent = maxTotal ? (group.total / maxTotal) * 100 : 0
-          return (
-            <div key={key} className={`group-card${isOpen ? ' expanded' : ''}`}>
-              <div className="group-header" onClick={() => toggleGroup(key)}>
-                <div className="group-title-wrap">
-                  <div className="group-emoji">{group.emoji}</div>
-                  <div>
-                    <div className="group-title">{group.label}</div>
-                    <div className="group-count">{group.items.length} {group.items.length === 1 ? 'receipt' : 'receipts'}</div>
-                  </div>
-                </div>
-                <div className="group-total-wrap">
-                  <div className="group-percent-bar">
-                    <div className="group-percent-fill" style={{ width: `${percent}%` }} />
-                  </div>
-                  <div className="group-total">{formatCurrency(group.total)}</div>
-                  <ChevronRight size={18} className="group-chevron" />
-                </div>
-              </div>
+.group-percent-fill {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  background: linear-gradient(90deg, var(--clr-sage), var(--clr-sage-light));
+  border-radius: 2px;
+  transition: width 0.6s var(--ease-out);
+}
 
-              <div className="group-items">
-                {group.items.map(r => (
-                  <div key={r.id} className="deduction-row" onClick={() => setEditing(r)}>
-                    <div className="deduction-thumb">
-                      {r.image_url ? <img src={r.image_url} alt={r.merchant} /> : categoryEmoji(r.category)}
-                    </div>
-                    <div className="deduction-info">
-                      <div className="deduction-merchant">{r.merchant || 'Unknown merchant'}</div>
-                      <div className="deduction-meta">
-                        <span>{r.date ? new Date(r.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</span>
-                        {view === 'month' && r.category && <span>· {r.category}</span>}
-                        {r.description && <span>· {r.description.slice(0, 30)}{r.description.length > 30 ? '…' : ''}</span>}
-                      </div>
-                    </div>
-                    <div className="deduction-amount">{formatCurrency(r.total || r.amount)}</div>
-                    <div className="deduction-actions">
-                      <button className="icon-btn" onClick={(e) => { e.stopPropagation(); setEditing(r) }} title="Edit">
-                        <Pencil />
-                      </button>
-                      <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); handleDelete(r.id, r.image_path) }} title="Delete">
-                        <Trash2 />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )
-        })}
-      </div>
+.group-chevron {
+  color: var(--clr-ink-faint);
+  transition: transform var(--duration-base);
+  flex-shrink: 0;
+}
 
-      {/* Edit Modal */}
-      {editing && (
-        <div className="modal-overlay" onClick={() => setEditing(null)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-title">Edit receipt</span>
-              <button className="modal-close" onClick={() => setEditing(null)}>
-                <X size={18} />
-              </button>
-            </div>
-            <div className="modal-body">
-              {editing.image_url && (
-                <img src={editing.image_url} alt="Receipt" className="modal-image-preview" />
-              )}
+.group-card.expanded .group-chevron {
+  transform: rotate(90deg);
+}
 
-              <div className="form-row">
-                <div className="form-field-group">
-                  <label className="field-label">Merchant</label>
-                  <input className="field-input" value={editing.merchant || ''} onChange={updateEditing('merchant')} />
-                </div>
-                <div className="form-field-group">
-                  <label className="field-label">Date</label>
-                  <input className="field-input" type="date" value={editing.date || ''} onChange={updateEditing('date')} />
-                </div>
-              </div>
+/* ---- Items inside group ---- */
+.group-items {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.4s var(--ease-out);
+}
 
-              <div className="form-row">
-                <div className="form-field-group">
-                  <label className="field-label">Subtotal ($)</label>
-                  <input className="field-input" type="number" step="0.01" value={editing.amount || ''} onChange={updateEditing('amount')} />
-                </div>
-                <div className="form-field-group">
-                  <label className="field-label">Tax ($)</label>
-                  <input className="field-input" type="number" step="0.01" value={editing.tax || ''} onChange={updateEditing('tax')} />
-                </div>
-              </div>
+.group-card.expanded .group-items {
+  max-height: 5000px;
+}
 
-              <div className="form-row">
-                <div className="form-field-group">
-                  <label className="field-label">Tip ($)</label>
-                  <input className="field-input" type="number" step="0.01" value={editing.tip || ''} onChange={updateEditing('tip')} />
-                </div>
-                <div className="form-field-group">
-                  <label className="field-label">Total ($)</label>
-                  <input className="field-input" type="number" step="0.01" value={editing.total || ''} onChange={updateEditing('total')} />
-                </div>
-              </div>
+.deduction-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--clr-warm-mid);
+  transition: background var(--duration-fast);
+  cursor: pointer;
+}
 
-              <div className="form-row">
-                <div className="form-field-group">
-                  <label className="field-label">Category</label>
-                  <select className="field-input" value={editing.category || ''} onChange={updateEditing('category')}>
-                    <option value="">Select…</option>
-                    {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div className="form-field-group">
-                  <label className="field-label">Payment</label>
-                  <select className="field-input" value={editing.payment_method || ''} onChange={updateEditing('payment_method')}>
-                    <option value="">Select…</option>
-                    {PAYMENT_METHODS.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                </div>
-              </div>
+.deduction-row:last-child { border-bottom: none; }
+.deduction-row:hover { background: var(--clr-warm); }
 
-              <div className="form-field-group">
-                <label className="field-label">Description</label>
-                <input className="field-input" value={editing.description || ''} onChange={updateEditing('description')} />
-              </div>
+.deduction-thumb {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  background: var(--clr-warm);
+  display: grid;
+  place-items: center;
+  font-size: 1rem;
+  flex-shrink: 0;
+  overflow: hidden;
+}
 
-              <div className="form-field-group">
-                <label className="field-label">Notes</label>
-                <textarea className="field-input" value={editing.notes || ''} onChange={updateEditing('notes')} />
-              </div>
-            </div>
+.deduction-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 
-            <div className="modal-footer">
-              <button className="btn-danger" onClick={() => handleDelete(editing.id, editing.image_path)}>
-                <Trash2 size={14} /> Delete
-              </button>
-              <button className="btn-discard" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-save" onClick={handleEditSave} disabled={saving} style={{ flex: 'initial', padding: '0.625rem var(--space-5)' }}>
-                <Save size={14} /> {saving ? 'Saving…' : 'Save changes'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
+.deduction-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.deduction-merchant {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--clr-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deduction-meta {
+  font-size: 0.78125rem;
+  color: var(--clr-ink-soft);
+  display: flex;
+  gap: var(--space-2);
+  margin-top: 1px;
+}
+
+.deduction-amount {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 400;
+  color: var(--clr-ink);
+  letter-spacing: -0.01em;
+  flex-shrink: 0;
+}
+
+.deduction-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+}
+
+.deduction-row:hover .deduction-actions { opacity: 1; }
+
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  color: var(--clr-ink-soft);
+  transition: all var(--duration-fast);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: var(--clr-warm-mid);
+  color: var(--clr-ink);
+}
+
+.icon-btn.danger:hover {
+  background: var(--clr-error-pale);
+  color: var(--clr-error);
+}
+
+.icon-btn svg { width: 15px; height: 15px; }
+
+/* ---- Modal ---- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(30, 38, 32, 0.5);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+  padding: var(--space-4);
+  animation: modalFade 0.2s var(--ease-out);
+}
+
+@keyframes modalFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-card {
+  background: var(--clr-white);
+  border-radius: var(--radius-xl);
+  width: 100%;
+  max-width: 540px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-xl);
+  animation: modalSlide 0.3s var(--ease-out);
+}
+
+@keyframes modalSlide {
+  from { opacity: 0; transform: translateY(20px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-header {
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--clr-warm-mid);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-title {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 400;
+  color: var(--clr-ink);
+  letter-spacing: -0.01em;
+}
+
+.modal-close {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  color: var(--clr-ink-soft);
+  transition: all var(--duration-fast);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.modal-close:hover { background: var(--clr-warm); color: var(--clr-ink); }
+
+.modal-body {
+  padding: var(--space-5) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.modal-image-preview {
+  width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background: var(--clr-warm);
+  border: 1px solid var(--clr-warm-mid);
+}
+
+.modal-footer {
+  padding: var(--space-4) var(--space-6);
+  border-top: 1px solid var(--clr-warm-mid);
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+}
+
+.btn-danger {
+  padding: 0.625rem var(--space-5);
+  background: var(--clr-error-pale);
+  color: var(--clr-error);
+  border: 1.5px solid rgba(192,57,43,0.25);
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  font-weight: 500;
+  font-family: var(--font-body);
+  transition: all var(--duration-fast);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+}
+
+.btn-danger:hover {
+  background: var(--clr-error);
+  color: white;
+  border-color: var(--clr-error);
+}
+
+/* ---- Empty state ---- */
+.deductions-empty {
+  background: var(--clr-white);
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-lg);
+  padding: var(--space-12) var(--space-8);
+  text-align: center;
+}
+
+.deductions-empty-icon {
+  font-size: 3rem;
+  margin-bottom: var(--space-3);
+}
+
+.deductions-empty-title {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  color: var(--clr-ink);
+  margin-bottom: var(--space-2);
+}
+
+.deductions-empty-desc {
+  color: var(--clr-ink-soft);
+  max-width: 340px;
+  margin: 0 auto var(--space-5);
+}
+
+.btn-go-scan {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.625rem var(--space-5);
+  background: var(--clr-sage-dark);
+  color: white;
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.btn-go-scan:hover {
+  background: var(--clr-sage);
+  box-shadow: 0 4px 12px rgba(62,88,73,0.25);
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 640px) {
+  .group-percent-bar { display: none; }
+  .summary-value { font-size: 1.5rem; }
+  .deduction-actions { opacity: 1; }
 }
