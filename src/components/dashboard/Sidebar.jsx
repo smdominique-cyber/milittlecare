@@ -51,7 +51,7 @@ function getInitials(name) {
     .toUpperCase()
 }
 
-export default function Sidebar() {
+export default function Sidebar({ isOpen = false }) {
   const { user, signOut } = useAuth()
   const navigate = useNavigate()
 
@@ -65,7 +65,7 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${isOpen ? ' open' : ''}`}>
       <div className="sidebar-header">
         <div className="sidebar-logo">
           <div className="logo-mark">🏡</div>
