@@ -1,6 +1,7 @@
+import { useState, useEffect } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
-import { Bell, HelpCircle } from 'lucide-react'
+import { Bell, HelpCircle, Menu, X } from 'lucide-react'
 import '@/styles/dashboard.css'
 
 const PAGE_TITLES = {
@@ -17,13 +18,36 @@ const CURRENT_TAX_YEAR = new Date().getFullYear()
 
 export default function DashboardLayout() {
   const location = useLocation()
-  const title = PAGE_TITLES[location.pathname] || 'Mi Little Care'
+  const title = PAGE_TITLES[location.pathname] || 'MI Little Care'
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  // Close sidebar when route changes (e.g. user taps a nav link)
+  useEffect(() => {
+    setSidebarOpen(false)
+  }, [location.pathname])
 
   return (
     <div className="dashboard-shell">
-      <Sidebar />
+      <Sidebar isOpen={sidebarOpen} />
+
+      {sidebarOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       <div className="dashboard-main">
         <header className="topbar">
+          <button
+            className="topbar-btn topbar-menu-btn"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            aria-label="Toggle menu"
+          >
+            {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
+
           <span className="topbar-title">{title}</span>
           <div className="topbar-spacer" />
           <div className="topbar-actions">
@@ -31,10 +55,10 @@ export default function DashboardLayout() {
               <span>Tax Year</span>
               <span className="tax-year">{CURRENT_TAX_YEAR}</span>
             </div>
-            <button className="topbar-btn" aria-label="Help">
+            <button className="topbar-btn topbar-btn-desktop" aria-label="Help">
               <HelpCircle size={18} />
             </button>
-            <button className="topbar-btn" aria-label="Notifications">
+            <button className="topbar-btn topbar-btn-desktop" aria-label="Notifications">
               <Bell size={18} />
             </button>
           </div>
