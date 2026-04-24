@@ -9,8 +9,8 @@ import DashboardPage from '@/pages/DashboardPage'
 import ReceiptsPage from '@/pages/ReceiptsPage'
 import DeductionsPage from '@/pages/DeductionsPage'
 import TSRatioPage from '@/pages/TSRatioPage'
+import FamiliesPage from '@/pages/FamiliesPage'
 import {
-  FamiliesPage,
   ReportsPage,
   SettingsPage,
 } from '@/pages/PlaceholderPages'
