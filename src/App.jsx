@@ -8,8 +8,8 @@ import AuthCallbackPage from '@/pages/AuthCallbackPage'
 import DashboardPage from '@/pages/DashboardPage'
 import ReceiptsPage from '@/pages/ReceiptsPage'
 import DeductionsPage from '@/pages/DeductionsPage'
+import TSRatioPage from '@/pages/TSRatioPage'
 import {
-  TSRatioPage,
   FamiliesPage,
   ReportsPage,
   SettingsPage,
