@@ -9,6 +9,7 @@ import {
   Settings,
   LogOut,
   Megaphone,
+  DollarSign,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -19,17 +20,23 @@ const NAV_ITEMS = [
     ],
   },
   {
+    section: 'Revenue',
+    items: [
+      { label: 'Families', icon: Users, path: '/families' },
+      { label: 'Billing', icon: DollarSign, path: '/billing', badge: 'New' },
+    ],
+  },
+  {
     section: 'Tax Tools',
     items: [
-      { label: 'Receipts', icon: Receipt, path: '/receipts', badge: 'New' },
+      { label: 'Receipts', icon: Receipt, path: '/receipts' },
       { label: 'Deductions', icon: Calculator, path: '/deductions' },
       { label: 'T/S Ratio', icon: BarChart2, path: '/ts-ratio' },
     ],
   },
   {
-    section: 'Business',
+    section: 'Reports',
     items: [
-      { label: 'Families', icon: Users, path: '/families' },
       { label: 'Reports', icon: Megaphone, path: '/reports' },
     ],
   },
