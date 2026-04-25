@@ -10,6 +10,7 @@ import ReceiptsPage from '@/pages/ReceiptsPage'
 import DeductionsPage from '@/pages/DeductionsPage'
 import TSRatioPage from '@/pages/TSRatioPage'
 import FamiliesPage from '@/pages/FamiliesPage'
+import BillingPage from '@/pages/BillingPage'
 import {
   ReportsPage,
   SettingsPage,
@@ -41,6 +42,7 @@ export default function App() {
             <Route path="deductions" element={<DeductionsPage />} />
             <Route path="ts-ratio" element={<TSRatioPage />} />
             <Route path="families" element={<FamiliesPage />} />
+            <Route path="billing" element={<BillingPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
