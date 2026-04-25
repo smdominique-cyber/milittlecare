@@ -10,6 +10,7 @@ const PAGE_TITLES = {
   '/deductions': 'Deductions',
   '/ts-ratio': 'T/S Ratio Calculator',
   '/families': 'Families',
+  '/billing': 'Billing & Invoices',
   '/reports': 'Reports',
   '/settings': 'Settings',
 }
