@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
+import TrialBanner from '@/components/subscription/TrialBanner'
 import { Bell, HelpCircle, Menu, X } from 'lucide-react'
 import '@/styles/dashboard.css'
 
@@ -13,6 +14,7 @@ const PAGE_TITLES = {
   '/billing': 'Billing & Invoices',
   '/reports': 'Reports',
   '/settings': 'Settings',
+  '/subscription': 'Subscription',
 }
 
 const CURRENT_TAX_YEAR = new Date().getFullYear()
@@ -40,6 +42,7 @@ export default function DashboardLayout() {
       )}
 
       <div className="dashboard-main">
+        <TrialBanner />
         <header className="topbar">
           <button
             className="topbar-btn topbar-menu-btn"
