@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from '@/hooks/useAuth'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
+import PaywallGate from '@/components/subscription/PaywallGate'
 import DashboardLayout from '@/components/dashboard/DashboardLayout'
 
 import LoginPage from '@/pages/LoginPage'
@@ -11,6 +12,7 @@ import DeductionsPage from '@/pages/DeductionsPage'
 import TSRatioPage from '@/pages/TSRatioPage'
 import FamiliesPage from '@/pages/FamiliesPage'
 import BillingPage from '@/pages/BillingPage'
+import SubscriptionPage from '@/pages/SubscriptionPage'
 import {
   ReportsPage,
   SettingsPage,
@@ -28,12 +30,14 @@ export default function App() {
           {/* Redirect root to dashboard */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
-          {/* Protected dashboard routes */}
+          {/* Protected dashboard routes (with paywall gate) */}
           <Route
             path="/"
             element={
               <ProtectedRoute>
-                <DashboardLayout />
+                <PaywallGate>
+                  <DashboardLayout />
+                </PaywallGate>
               </ProtectedRoute>
             }
           >
@@ -45,6 +49,7 @@ export default function App() {
             <Route path="billing" element={<BillingPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="subscription" element={<SubscriptionPage />} />
           </Route>
 
           {/* 404 fallback */}
