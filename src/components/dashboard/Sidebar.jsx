@@ -10,6 +10,7 @@ import {
   LogOut,
   Megaphone,
   DollarSign,
+  CreditCard,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -43,6 +44,7 @@ const NAV_ITEMS = [
   {
     section: 'Account',
     items: [
+      { label: 'Subscription', icon: CreditCard, path: '/subscription' },
       { label: 'Settings', icon: Settings, path: '/settings' },
     ],
   },
