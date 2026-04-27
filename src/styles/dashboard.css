@@ -4,9 +4,6 @@
 
 /* ---- Shell ---- */
 .dashboard-shell {
-  display: grid;
-  grid-template-columns: var(--sidebar-width) 1fr;
-  grid-template-rows: 1fr;
   min-height: 100vh;
   background: var(--clr-cream);
 }
