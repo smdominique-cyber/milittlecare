@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from '@/hooks/useAuth'
+import { RoleProvider } from '@/hooks/useRole'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import PaywallGate from '@/components/subscription/PaywallGate'
 import DashboardLayout from '@/components/dashboard/DashboardLayout'
@@ -15,7 +16,9 @@ import BillingPage from '@/pages/BillingPage'
 import SubscriptionPage from '@/pages/SubscriptionPage'
 import HowMoneyWorksPage from '@/pages/HowMoneyWorksPage'
 import BusinessInfoPage from '@/pages/BusinessInfoPage'
+import StaffPage from '@/pages/StaffPage'
 import InviteAcceptPage from '@/pages/InviteAcceptPage'
+import StaffInviteAcceptPage from '@/pages/StaffInviteAcceptPage'
 import ParentDashboardPage from '@/pages/ParentDashboardPage'
 import ParentMyFamilyPage from '@/pages/ParentMyFamilyPage'
 import {
@@ -27,46 +30,52 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Routes>
-          {/* Public routes */}
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/auth/callback" element={<AuthCallbackPage />} />
+        <RoleProvider>
+          <Routes>
+            {/* Public routes */}
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
-          {/* Parent-facing routes — no provider auth, no paywall */}
-          <Route path="/invite/:token" element={<InviteAcceptPage />} />
-          <Route path="/parent" element={<ParentDashboardPage />} />
-          <Route path="/parent/family" element={<ParentMyFamilyPage />} />
+            {/* Parent-facing routes — no provider auth, no paywall */}
+            <Route path="/invite/:token" element={<InviteAcceptPage />} />
+            <Route path="/parent" element={<ParentDashboardPage />} />
+            <Route path="/parent/family" element={<ParentMyFamilyPage />} />
 
-          {/* Redirect root to dashboard */}
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            {/* Staff invitation accept — no auth required */}
+            <Route path="/staff-invite/:token" element={<StaffInviteAcceptPage />} />
 
-          {/* Protected dashboard routes (with paywall gate) */}
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <PaywallGate>
-                  <DashboardLayout />
-                </PaywallGate>
-              </ProtectedRoute>
-            }
-          >
-            <Route path="dashboard" element={<DashboardPage />} />
-            <Route path="receipts" element={<ReceiptsPage />} />
-            <Route path="deductions" element={<DeductionsPage />} />
-            <Route path="ts-ratio" element={<TSRatioPage />} />
-            <Route path="families" element={<FamiliesPage />} />
-            <Route path="billing" element={<BillingPage />} />
-            <Route path="reports" element={<ReportsPage />} />
-            <Route path="settings" element={<SettingsPage />} />
-            <Route path="subscription" element={<SubscriptionPage />} />
-            <Route path="how-money-works" element={<HowMoneyWorksPage />} />
-            <Route path="business-info" element={<BusinessInfoPage />} />
-          </Route>
+            {/* Redirect root to dashboard */}
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
-          {/* 404 fallback */}
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
+            {/* Protected dashboard routes (with paywall gate) */}
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <PaywallGate>
+                    <DashboardLayout />
+                  </PaywallGate>
+                </ProtectedRoute>
+              }
+            >
+              <Route path="dashboard" element={<DashboardPage />} />
+              <Route path="receipts" element={<ReceiptsPage />} />
+              <Route path="deductions" element={<DeductionsPage />} />
+              <Route path="ts-ratio" element={<TSRatioPage />} />
+              <Route path="families" element={<FamiliesPage />} />
+              <Route path="billing" element={<BillingPage />} />
+              <Route path="reports" element={<ReportsPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+              <Route path="subscription" element={<SubscriptionPage />} />
+              <Route path="how-money-works" element={<HowMoneyWorksPage />} />
+              <Route path="business-info" element={<BusinessInfoPage />} />
+              <Route path="staff" element={<StaffPage />} />
+            </Route>
+
+            {/* 404 fallback */}
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+        </RoleProvider>
       </AuthProvider>
     </BrowserRouter>
   )
