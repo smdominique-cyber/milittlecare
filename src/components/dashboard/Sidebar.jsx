@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useRole } from '@/hooks/useRole'
+import { InstallLink } from '@/components/ui/InstallBanner'
 import {
   LayoutDashboard,
   Receipt,
@@ -124,6 +125,9 @@ export default function Sidebar({ isOpen = false }) {
       </nav>
 
       <div className="sidebar-footer">
+        <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <InstallLink>📱 Install on phone</InstallLink>
+        </div>
         <div className="sidebar-user">
           <div className="user-avatar">{initials}</div>
           <div className="user-info">
