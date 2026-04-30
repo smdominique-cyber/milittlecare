@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/hooks/useAuth'
+import { useRole } from '@/hooks/useRole'
 import { supabase } from '@/lib/supabase'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -60,6 +61,7 @@ function categoryClass(cat) {
 
 export default function DashboardPage() {
   const { user } = useAuth()
+  const { licenseeId, isLicensee, role } = useRole()
   const navigate = useNavigate()
   const firstName = user?.user_metadata?.full_name?.split(' ')[0] || 'there'
   const greeting = getGreeting()
@@ -72,19 +74,19 @@ export default function DashboardPage() {
   const [invitations, setInvitations] = useState([])
   const [policies, setPolicies] = useState(null)
 
-  useEffect(() => { loadAll() }, [])
+  useEffect(() => { if (licenseeId) loadAll() }, [licenseeId])
 
   async function loadAll() {
-    if (!user) return
+    if (!licenseeId) return
     setLoading(true)
     const currentYear = new Date().getFullYear()
     const [f, i, r, t, inv, p] = await Promise.all([
-      supabase.from('families').select('*').eq('user_id', user.id),
-      supabase.from('invoices').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
-      supabase.from('receipts').select('*').eq('user_id', user.id).order('purchase_date', { ascending: false }).limit(10),
-      supabase.from('ts_ratios').select('*').eq('user_id', user.id).eq('tax_year', currentYear).maybeSingle(),
-      supabase.from('family_invitations').select('id').eq('user_id', user.id).limit(1),
-      supabase.from('business_policies').select('*').eq('user_id', user.id).maybeSingle(),
+      supabase.from('families').select('*').eq('user_id', licenseeId),
+      supabase.from('invoices').select('*').eq('user_id', licenseeId).order('created_at', { ascending: false }),
+      supabase.from('receipts').select('*').eq('user_id', licenseeId).order('purchase_date', { ascending: false }).limit(10),
+      supabase.from('ts_ratios').select('*').eq('user_id', licenseeId).eq('tax_year', currentYear).maybeSingle(),
+      supabase.from('family_invitations').select('id').eq('user_id', licenseeId).limit(1),
+      supabase.from('business_policies').select('*').eq('user_id', licenseeId).maybeSingle(),
     ])
     setFamilies(f.data || [])
     setInvoices(i.data || [])
