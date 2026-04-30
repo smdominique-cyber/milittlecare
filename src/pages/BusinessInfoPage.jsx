@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabase'
+import { notifyStateChange } from '@/lib/notifications'
 import {
   Clock, Calendar, DollarSign, Phone, AlertTriangle,
   Plus, X, Save, Trash2, ChevronDown, ChevronRight, Check,
@@ -109,6 +110,23 @@ export default function BusinessInfoPage() {
         hours_set: true,
       }, { onConflict: 'user_id' })
       setMessage({ type: 'success', text: '✓ Business hours saved' })
+
+      // Fire notifications to all linked parents (one per family)
+      const { data: families } = await supabase.from('families').select('id, family_name').eq('user_id', user.id)
+      const provider = user.user_metadata?.full_name || user.email
+      const summary = DAYS
+        .map(d => {
+          const h = hours[d.value]
+          return h.is_open ? `${d.short}: ${h.open_time}-${h.close_time}` : `${d.short}: Closed`
+        })
+        .join(' · ')
+      for (const f of families || []) {
+        notifyStateChange('hours_changed', f.id, {
+          providerName: provider,
+          summary,
+        })
+      }
+
       await loadAll()
     } catch (err) {
       setMessage({ type: 'error', text: err.message })
@@ -131,6 +149,24 @@ export default function BusinessInfoPage() {
         closures_set: true,
       }, { onConflict: 'user_id' })
       setMessage({ type: 'success', text: '✓ Closure added' })
+
+      // Notify parents (only if notify_parents is true on the closure, default true)
+      if (closure.notify_parents !== false) {
+        const { data: families } = await supabase.from('families').select('id').eq('user_id', user.id)
+        const provider = user.user_metadata?.full_name || user.email
+        const formatD = (d) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        const dateRange = closure.start_date === closure.end_date
+          ? formatD(closure.start_date)
+          : `${formatD(closure.start_date)} – ${formatD(closure.end_date)}`
+        for (const f of families || []) {
+          notifyStateChange('closure_added', f.id, {
+            providerName: provider,
+            dateRange,
+            reason: closure.reason || '',
+          })
+        }
+      }
+
       await loadAll()
     } catch (err) {
       setMessage({ type: 'error', text: err.message })
