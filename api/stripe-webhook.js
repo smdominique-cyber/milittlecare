@@ -88,17 +88,67 @@ export default async function handler(req, res) {
 
   try {
     switch (event.type) {
-      // ─── Checkout completed: subscription created ──────────
+      // ─── Checkout completed: subscription created OR invoice paid ──────────
       case 'checkout.session.completed': {
         const session = event.data.object
-        const userId = session.client_reference_id || session.metadata?.user_id
-        if (!userId) break
 
-        await supabaseRequest(`profiles?id=eq.${userId}`, 'PATCH', {
-          stripe_customer_id: session.customer,
-          stripe_subscription_id: session.subscription,
-          subscription_status: 'active',
-        })
+        // Case A: Subscription checkout (provider subscribing)
+        if (session.mode === 'subscription') {
+          const userId = session.client_reference_id || session.metadata?.user_id
+          if (!userId) break
+
+          await supabaseRequest(`profiles?id=eq.${userId}`, 'PATCH', {
+            stripe_customer_id: session.customer,
+            stripe_subscription_id: session.subscription,
+            subscription_status: 'active',
+          })
+          break
+        }
+
+        // Case B: One-time payment checkout (parent paying invoice)
+        if (session.mode === 'payment' && session.metadata?.invoice_id) {
+          const invoiceId = session.metadata.invoice_id
+          const amountPaid = (session.amount_total || 0) / 100  // cents → dollars
+          const paymentIntentId = session.payment_intent
+
+          // Get the invoice
+          const invResp = await supabaseRequest(
+            `invoices?id=eq.${invoiceId}&select=*`,
+            'GET'
+          )
+          const invoices = await invResp.json()
+          if (!invoices || invoices.length === 0) break
+          const invoice = invoices[0]
+
+          const newAmountPaid = parseFloat(invoice.amount_paid || 0) + amountPaid
+          const totalDue = parseFloat(invoice.total || 0)
+          let newStatus = invoice.status
+          if (newAmountPaid >= totalDue) newStatus = 'paid'
+          else if (newAmountPaid > 0) newStatus = 'partial'
+
+          // Update invoice
+          await supabaseRequest(`invoices?id=eq.${invoiceId}`, 'PATCH', {
+            amount_paid: newAmountPaid,
+            status: newStatus,
+            paid_at: newStatus === 'paid' ? new Date().toISOString() : invoice.paid_at,
+            payment_method: 'stripe',
+          })
+
+          // Insert payment record
+          await supabaseRequest('payments', 'POST', {
+            user_id: invoice.user_id,
+            invoice_id: invoiceId,
+            family_id: invoice.family_id,
+            amount: amountPaid,
+            payment_date: new Date().toISOString().split('T')[0],
+            payment_method: 'stripe',
+            reference: session.id,
+            stripe_payment_intent: paymentIntentId,
+          })
+
+          break
+        }
+
         break
       }
 
