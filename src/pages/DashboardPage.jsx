@@ -4,8 +4,9 @@ import { supabase } from '@/lib/supabase'
 import { useNavigate } from 'react-router-dom'
 import {
   DollarSign, AlertCircle, CheckCircle, ScanLine, Sparkles,
-  Users, Send, Plus, Calculator,
+  Users, Send, Plus, Calculator, Zap,
 } from 'lucide-react'
+import SetupWidget from '@/components/dashboard/SetupWidget'
 
 function getGreeting() {
   const h = new Date().getHours()
@@ -68,6 +69,8 @@ export default function DashboardPage() {
   const [invoices, setInvoices] = useState([])
   const [receipts, setReceipts] = useState([])
   const [tsRatio, setTsRatio] = useState(null)
+  const [invitations, setInvitations] = useState([])
+  const [policies, setPolicies] = useState(null)
 
   useEffect(() => { loadAll() }, [])
 
@@ -75,16 +78,20 @@ export default function DashboardPage() {
     if (!user) return
     setLoading(true)
     const currentYear = new Date().getFullYear()
-    const [f, i, r, t] = await Promise.all([
+    const [f, i, r, t, inv, p] = await Promise.all([
       supabase.from('families').select('*').eq('user_id', user.id),
       supabase.from('invoices').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
       supabase.from('receipts').select('*').eq('user_id', user.id).order('purchase_date', { ascending: false }).limit(10),
       supabase.from('ts_ratios').select('*').eq('user_id', user.id).eq('tax_year', currentYear).maybeSingle(),
+      supabase.from('family_invitations').select('id').eq('user_id', user.id).limit(1),
+      supabase.from('business_policies').select('*').eq('user_id', user.id).maybeSingle(),
     ])
     setFamilies(f.data || [])
     setInvoices(i.data || [])
     setReceipts(r.data || [])
     setTsRatio(t.data)
+    setInvitations(inv.data || [])
+    setPolicies(p.data)
     setLoading(false)
   }
 
@@ -112,16 +119,26 @@ export default function DashboardPage() {
     .sort((a, b) => b.outstanding - a.outstanding)
     .slice(0, 5)
 
+  const autopayFamilies = families.filter(f => f.autopay_enabled)
+
   const currentYear = new Date().getFullYear()
-  const yearReceipts = receipts.filter(r => {
-    if (!r.purchase_date) return false
-    return new Date(r.purchase_date).getFullYear() === currentYear
-  })
+  const yearReceipts = receipts.filter(r => r.purchase_date && new Date(r.purchase_date).getFullYear() === currentYear)
   const totalDeductions = yearReceipts.reduce((s, r) => s + parseFloat(r.total || 0), 0)
   const monthStart = new Date()
   monthStart.setDate(1)
   monthStart.setHours(0, 0, 0, 0)
   const receiptsThisMonth = receipts.filter(r => r.created_at && new Date(r.created_at) >= monthStart).length
+
+  // Setup widget stats
+  const setupStats = {
+    has_family: families.length > 0,
+    has_invitation: invitations.length > 0,
+    has_invoice: invoices.length > 0,
+    has_autopay: autopayFamilies.length > 0,
+    hours_set: !!policies?.hours_set,
+    closures_set: !!policies?.closures_set,
+    has_tsratio: !!tsRatio,
+  }
 
   if (loading) {
     return (
@@ -173,18 +190,18 @@ export default function DashboardPage() {
                 <div className="qa-desc">Start tracking enrollment and billing</div>
               </div>
             </button>
-            <button className="quick-action-btn" onClick={() => navigate('/receipts')}>
-              <div className="qa-icon accent"><ScanLine /></div>
+            <button className="quick-action-btn" onClick={() => navigate('/business-info')}>
+              <div className="qa-icon accent"><Calculator /></div>
               <div>
-                <div className="qa-label">Scan a receipt</div>
-                <div className="qa-desc">Try the AI scanner with any receipt</div>
+                <div className="qa-label">Set your business hours</div>
+                <div className="qa-desc">Stop "what time do you open?" texts</div>
               </div>
             </button>
-            <button className="quick-action-btn" onClick={() => navigate('/ts-ratio')}>
-              <div className="qa-icon neutral"><Calculator /></div>
+            <button className="quick-action-btn" onClick={() => navigate('/receipts')}>
+              <div className="qa-icon neutral"><ScanLine /></div>
               <div>
-                <div className="qa-label">Set your T/S ratio</div>
-                <div className="qa-desc">For accurate tax deductions</div>
+                <div className="qa-label">Scan a receipt</div>
+                <div className="qa-desc">Try the AI scanner</div>
               </div>
             </button>
           </div>
@@ -222,6 +239,9 @@ export default function DashboardPage() {
         </button>
       </div>
 
+      {/* Setup Progress Widget */}
+      <SetupWidget stats={setupStats} />
+
       <div className="stats-grid">
         <div className="stat-card" onClick={() => navigate('/billing')} style={{ cursor: 'pointer' }}>
           <div className="stat-header">
@@ -241,6 +261,15 @@ export default function DashboardPage() {
           <div className="stat-label">Paid This Week</div>
         </div>
 
+        <div className="stat-card" onClick={() => navigate('/families')} style={{ cursor: 'pointer' }}>
+          <div className="stat-header">
+            <div className="stat-icon accent"><Zap /></div>
+            <span className="stat-change neutral">{autopayFamilies.length} of {families.length}</span>
+          </div>
+          <div className="stat-value">{autopayFamilies.length}</div>
+          <div className="stat-label">On Autopay</div>
+        </div>
+
         <div className="stat-card" onClick={() => navigate('/billing')} style={{ cursor: 'pointer' }}>
           <div className="stat-header">
             <div className={`stat-icon ${overdueInvoices.length > 0 ? 'warning' : 'sage'}`}>
@@ -254,15 +283,6 @@ export default function DashboardPage() {
           </div>
           <div className="stat-value">{overdueInvoices.length}</div>
           <div className="stat-label">Overdue Invoices</div>
-        </div>
-
-        <div className="stat-card" onClick={() => navigate('/families')} style={{ cursor: 'pointer' }}>
-          <div className="stat-header">
-            <div className="stat-icon accent"><Users /></div>
-            <span className="stat-change neutral">Active</span>
-          </div>
-          <div className="stat-value">{families.filter(f => f.enrollment_status === 'active').length}</div>
-          <div className="stat-label">Active Families</div>
         </div>
       </div>
 
@@ -297,9 +317,23 @@ export default function DashboardPage() {
                 {familiesOwing.map(({ family, outstanding }) => (
                   <li key={family.id}>
                     <div className="receipt-item" onClick={() => navigate('/billing')} style={{ cursor: 'pointer' }}>
-                      <div className="receipt-thumb misc">👨‍👩‍👧</div>
+                      <div className="receipt-thumb misc">
+                        {family.autopay_enabled ? '⚡' : '👨‍👩‍👧'}
+                      </div>
                       <div className="receipt-info">
-                        <div className="receipt-merchant">{family.family_name}</div>
+                        <div className="receipt-merchant">
+                          {family.family_name}
+                          {family.autopay_enabled && (
+                            <span style={{
+                              fontSize: '0.625rem', marginLeft: 8, padding: '2px 6px',
+                              background: 'var(--clr-success-pale)', color: 'var(--clr-success)',
+                              borderRadius: 'var(--radius-full)', fontWeight: 600,
+                              textTransform: 'uppercase', letterSpacing: '0.04em',
+                            }}>
+                              Autopay
+                            </span>
+                          )}
+                        </div>
                         <div className="receipt-meta">
                           <span>{family.billing_type === 'weekly' ? 'Weekly' : 'Hourly'}</span>
                           {family.weekly_rate && <span className="receipt-category">{formatCurrency(family.weekly_rate)}/wk</span>}
