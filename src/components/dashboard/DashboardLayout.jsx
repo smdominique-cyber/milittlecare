@@ -15,6 +15,7 @@ const PAGE_TITLES = {
   '/reports': 'Reports',
   '/settings': 'Settings',
   '/subscription': 'Subscription',
+  '/how-money-works': 'How Money Works',
 }
 
 const CURRENT_TAX_YEAR = new Date().getFullYear()
