@@ -738,3 +738,174 @@
   color: var(--clr-ink-mid);
   margin-bottom: 12px;
 }
+
+/* ============================================================
+   Parent — Business Info Section (collapsible)
+   ============================================================ */
+
+.parent-info-section {
+  padding: 0;
+  overflow: hidden;
+}
+
+.parent-info-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-body);
+  text-align: left;
+}
+
+.parent-info-toggle:hover {
+  background: var(--clr-cream);
+}
+
+.parent-info-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--clr-ink);
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.parent-info-today-badge {
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 3px 8px;
+  background: var(--clr-success-pale);
+  color: var(--clr-success);
+  border-radius: var(--radius-full);
+  margin-left: 4px;
+}
+
+.parent-info-body {
+  border-top: 1px solid var(--clr-warm-mid);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.parent-info-block-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78125rem;
+  font-weight: 600;
+  color: var(--clr-ink-mid);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+
+.parent-info-hours {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.parent-info-day {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+}
+
+.parent-info-day.today {
+  background: var(--clr-sage-pale);
+  font-weight: 500;
+}
+
+.parent-info-day.closed {
+  color: var(--clr-ink-soft);
+}
+
+.parent-info-day-name {
+  color: var(--clr-ink);
+}
+
+.parent-info-day.closed .parent-info-day-name {
+  color: var(--clr-ink-soft);
+}
+
+.parent-info-day-hours {
+  color: var(--clr-ink-mid);
+}
+
+.parent-info-closures {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.parent-info-closure {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: var(--clr-cream);
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+}
+
+.parent-info-closure-date {
+  font-weight: 500;
+  color: var(--clr-ink);
+}
+
+.parent-info-closure-reason {
+  color: var(--clr-ink-mid);
+  text-align: right;
+}
+
+.parent-info-policies {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.parent-info-policy {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 0.875rem;
+}
+
+.parent-info-policy-label {
+  color: var(--clr-ink-soft);
+  min-width: 110px;
+}
+
+.parent-info-note {
+  background: var(--clr-cream);
+  border-left: 3px solid var(--clr-sage);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  color: var(--clr-ink-mid);
+  line-height: 1.5;
+  margin-top: 8px;
+}
+
+.parent-info-block.emergency {
+  background: var(--clr-error-pale);
+  border: 1px solid rgba(192,57,43,0.2);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+
+.parent-info-emergency {
+  font-size: 0.875rem;
+  color: var(--clr-ink);
+  line-height: 1.6;
+  white-space: pre-line;
+}
