@@ -14,6 +14,7 @@ import FamiliesPage from '@/pages/FamiliesPage'
 import BillingPage from '@/pages/BillingPage'
 import SubscriptionPage from '@/pages/SubscriptionPage'
 import HowMoneyWorksPage from '@/pages/HowMoneyWorksPage'
+import BusinessInfoPage from '@/pages/BusinessInfoPage'
 import InviteAcceptPage from '@/pages/InviteAcceptPage'
 import ParentDashboardPage from '@/pages/ParentDashboardPage'
 import {
@@ -58,6 +59,7 @@ export default function App() {
             <Route path="settings" element={<SettingsPage />} />
             <Route path="subscription" element={<SubscriptionPage />} />
             <Route path="how-money-works" element={<HowMoneyWorksPage />} />
+            <Route path="business-info" element={<BusinessInfoPage />} />
           </Route>
 
           {/* 404 fallback */}
