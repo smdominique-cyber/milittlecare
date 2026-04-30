@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import {
   Plus, X, Users, Phone, Mail, AlertCircle, Save, Trash2,
   ChevronLeft, ChevronRight, Pencil, UserPlus, Shield, Baby,
+  Send, Copy, ExternalLink,
 } from 'lucide-react'
 import '@/styles/families.css'
 
@@ -340,6 +341,9 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
             <button className={`detail-tab${tab === 'overview' ? ' active' : ''}`} onClick={() => setTab('overview')}>
               Overview
             </button>
+            <button className={`detail-tab${tab === 'invitations' ? ' active' : ''}`} onClick={() => setTab('invitations')}>
+              Access
+            </button>
             <button className={`detail-tab${tab === 'children' ? ' active' : ''}`} onClick={() => setTab('children')}>
               Children ({initialChildren.length})
             </button>
@@ -358,6 +362,9 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
         <div className="detail-tab-content">
           {(isNew || tab === 'overview') && (
             <OverviewTab form={form} update={update} />
+          )}
+          {!isNew && tab === 'invitations' && (
+            <InvitationsTab userId={userId} familyId={family.id} familyName={family.family_name} guardians={initialGuardians} />
           )}
           {!isNew && tab === 'children' && (
             <ChildrenTab userId={userId} familyId={family.id} children={initialChildren} onChange={onChange} />
@@ -923,5 +930,229 @@ function AttendanceTab({ userId, children }) {
         )
       })}
     </>
+  )
+}
+
+// ─── Invitations tab ──────────────────────────────────────
+function InvitationsTab({ userId, familyId, familyName, guardians }) {
+  const [invitations, setInvitations] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [sending, setSending] = useState(false)
+  const [showForm, setShowForm] = useState(false)
+  const [form, setForm] = useState({ recipient_name: '', recipient_email: '' })
+  const [message, setMessage] = useState(null)
+  const [previewing, setPreviewing] = useState(false)
+
+  useEffect(() => { loadInvitations() }, [familyId])
+
+  async function loadInvitations() {
+    setLoading(true)
+    const { data } = await supabase
+      .from('family_invitations')
+      .select('*')
+      .eq('family_id', familyId)
+      .order('created_at', { ascending: false })
+    setInvitations(data || [])
+    setLoading(false)
+  }
+
+  const sendInvitation = async () => {
+    if (!form.recipient_email) return
+    setSending(true)
+    setMessage(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch('/api/send-invitation', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          family_id: familyId,
+          recipient_name: form.recipient_name || null,
+          recipient_email: form.recipient_email,
+          delivery_method: 'email',
+        }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || 'Failed to send invitation')
+      const sentMsg = data.email_sent
+        ? `Invitation sent to ${form.recipient_email}`
+        : `Invitation created. Email could not be sent automatically — share the link directly: ${data.invitation.url}`
+      setMessage({ type: data.email_sent ? 'success' : 'info', text: sentMsg })
+      setForm({ recipient_name: '', recipient_email: '' })
+      setShowForm(false)
+      await loadInvitations()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+    setSending(false)
+  }
+
+  const resendInvitation = async (invitation) => {
+    setSending(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch('/api/send-invitation', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          family_id: familyId,
+          recipient_name: invitation.recipient_name,
+          recipient_email: invitation.recipient_email,
+          delivery_method: 'email',
+        }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || 'Failed to resend')
+      setMessage({ type: 'success', text: `Resent to ${invitation.recipient_email}` })
+      await loadInvitations()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+    setSending(false)
+  }
+
+  const revokeInvitation = async (id) => {
+    if (!window.confirm('Revoke this invitation? The link will stop working immediately.')) return
+    await supabase.from('family_invitations').update({ status: 'revoked', revoked_at: new Date().toISOString() }).eq('id', id)
+    await loadInvitations()
+  }
+
+  const copyLink = async (token) => {
+    const link = `${window.location.origin}/invite/${token}`
+    try {
+      await navigator.clipboard.writeText(link)
+      setMessage({ type: 'success', text: 'Link copied to clipboard' })
+    } catch {
+      setMessage({ type: 'info', text: link })
+    }
+  }
+
+  const previewAsParent = () => {
+    setPreviewing(true)
+    // Open a preview by signing in as anonymous parent OR using a preview parameter
+    // For now: open the parent dashboard route in a new tab so provider can see what parents see
+    window.open('/parent', '_blank', 'noopener')
+    setTimeout(() => setPreviewing(false), 500)
+  }
+
+  return (
+    <div className="subsection">
+      {message && (
+        <div className={`auth-message ${message.type === 'error' ? 'error' : 'success'}`} style={{ marginBottom: 'var(--space-3)', wordBreak: 'break-all' }}>
+          <span>{message.type === 'error' ? '⚠' : '✓'}</span>
+          <span>{message.text}</span>
+        </div>
+      )}
+
+      <div className="subsection-header">
+        <span className="subsection-title">Family Access</span>
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <button className="btn-add-inline" onClick={previewAsParent} title="Open the parent view in a new tab">
+            <ExternalLink size={13} /> Preview as Parent
+          </button>
+          {!showForm && (
+            <button className="btn-add-inline" onClick={() => setShowForm(true)}>
+              <Plus size={13} /> Send invitation
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', marginBottom: 'var(--space-4)', lineHeight: 1.5 }}>
+        Invite a parent or guardian to view invoices, pay online, and manage their family info.
+        Each guardian can be invited separately. Invitations expire after 7 days.
+      </div>
+
+      {showForm && (
+        <div className="person-card" style={{ flexDirection: 'column', gap: 'var(--space-3)' }}>
+          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+            <div className="form-row">
+              <div className="form-field-group">
+                <label className="field-label">Parent name (optional)</label>
+                <input className="field-input" value={form.recipient_name} onChange={(e) => setForm(f => ({ ...f, recipient_name: e.target.value }))} placeholder="e.g. Mike Smith" />
+              </div>
+              <div className="form-field-group">
+                <label className="field-label">Parent email *</label>
+                <input className="field-input" type="email" value={form.recipient_email} onChange={(e) => setForm(f => ({ ...f, recipient_email: e.target.value }))} placeholder="parent@example.com" />
+              </div>
+            </div>
+            {guardians.length > 0 && (
+              <div style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)' }}>
+                Quick fill from guardians:&nbsp;
+                {guardians.filter(g => g.email).map(g => (
+                  <button
+                    key={g.id}
+                    onClick={() => setForm({ recipient_name: `${g.first_name} ${g.last_name || ''}`.trim(), recipient_email: g.email })}
+                    style={{ background: 'none', border: 'none', color: 'var(--clr-sage-dark)', cursor: 'pointer', textDecoration: 'underline', padding: 0, fontSize: '0.78125rem', marginRight: 'var(--space-2)' }}
+                  >
+                    {g.first_name} {g.last_name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end' }}>
+              <button className="btn-discard" onClick={() => { setShowForm(false); setForm({ recipient_name: '', recipient_email: '' }) }}>Cancel</button>
+              <button className="btn-save" onClick={sendInvitation} disabled={sending || !form.recipient_email} style={{ flex: 'initial', padding: '0.5rem var(--space-4)' }}>
+                <Send size={14} /> {sending ? 'Sending…' : 'Send invitation'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="empty-mini">Loading…</div>
+      ) : invitations.length === 0 ? (
+        <div className="empty-mini">No invitations sent yet. Click "Send invitation" above.</div>
+      ) : (
+        invitations.map(inv => {
+          const expired = new Date(inv.expires_at) < new Date()
+          const status = expired && inv.status === 'pending' ? 'expired' : inv.status
+          return (
+            <div key={inv.id} className="person-card">
+              <div className={`person-avatar ${status === 'accepted' ? '' : 'emergency'}`}>
+                {status === 'accepted' ? '✓' : status === 'pending' ? '⏳' : status === 'revoked' ? '✕' : '⌛'}
+              </div>
+              <div className="person-info">
+                <div className="person-name">
+                  {inv.recipient_name || inv.recipient_email}
+                  <span style={{
+                    fontSize: '0.65rem', fontWeight: 600, padding: '2px 7px',
+                    background: status === 'accepted' ? 'var(--clr-success-pale)' : status === 'pending' ? 'var(--clr-warning-pale)' : 'var(--clr-warm-mid)',
+                    color: status === 'accepted' ? 'var(--clr-success)' : status === 'pending' ? 'var(--clr-warning)' : 'var(--clr-ink-soft)',
+                    borderRadius: 'var(--radius-full)', textTransform: 'uppercase', letterSpacing: '0.04em',
+                  }}>
+                    {status}
+                  </span>
+                </div>
+                <div className="person-meta">
+                  <span>{inv.recipient_email}</span>
+                  {status === 'pending' && <span>· Expires {new Date(inv.expires_at).toLocaleDateString()}</span>}
+                  {inv.accepted_at && <span>· Accepted {new Date(inv.accepted_at).toLocaleDateString()}</span>}
+                </div>
+              </div>
+              <div className="person-actions">
+                {status === 'pending' && (
+                  <>
+                    <button className="icon-btn" title="Copy link" onClick={() => copyLink(inv.token)}><Copy /></button>
+                    <button className="icon-btn" title="Resend" onClick={() => resendInvitation(inv)}><Send /></button>
+                    <button className="icon-btn danger" title="Revoke" onClick={() => revokeInvitation(inv.id)}><X /></button>
+                  </>
+                )}
+                {status === 'expired' && (
+                  <button className="icon-btn" title="Resend" onClick={() => resendInvitation(inv)}><Send /></button>
+                )}
+              </div>
+            </div>
+          )
+        })
+      )}
+    </div>
   )
 }
