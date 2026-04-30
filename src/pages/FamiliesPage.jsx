@@ -364,7 +364,7 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
             <OverviewTab form={form} update={update} />
           )}
           {!isNew && tab === 'invitations' && (
-            <InvitationsTab userId={userId} familyId={family.id} familyName={family.family_name} guardians={initialGuardians} />
+            <InvitationsTab userId={userId} family={family} guardians={initialGuardians} onChange={onChange} />
           )}
           {!isNew && tab === 'children' && (
             <ChildrenTab userId={userId} familyId={family.id} children={initialChildren} onChange={onChange} />
@@ -934,26 +934,53 @@ function AttendanceTab({ userId, children }) {
 }
 
 // ─── Invitations tab ──────────────────────────────────────
-function InvitationsTab({ userId, familyId, familyName, guardians }) {
+function InvitationsTab({ userId, family, guardians, onChange }) {
+  const familyId = family.id
+  const familyName = family.family_name
   const [invitations, setInvitations] = useState([])
+  const [parentLinks, setParentLinks] = useState([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ recipient_name: '', recipient_email: '' })
   const [message, setMessage] = useState(null)
   const [previewing, setPreviewing] = useState(false)
+  const [disablingAutopay, setDisablingAutopay] = useState(false)
 
-  useEffect(() => { loadInvitations() }, [familyId])
+  useEffect(() => { loadAll() }, [familyId])
 
-  async function loadInvitations() {
+  async function loadAll() {
     setLoading(true)
-    const { data } = await supabase
-      .from('family_invitations')
-      .select('*')
-      .eq('family_id', familyId)
-      .order('created_at', { ascending: false })
-    setInvitations(data || [])
+    const [invsResp, linksResp] = await Promise.all([
+      supabase.from('family_invitations').select('*').eq('family_id', familyId).order('created_at', { ascending: false }),
+      supabase.from('parent_family_links').select('*, parent_profiles(email, full_name)').eq('family_id', familyId).eq('status', 'active'),
+    ])
+    setInvitations(invsResp.data || [])
+    setParentLinks(linksResp.data || [])
     setLoading(false)
+  }
+
+  const disableAutopayProvider = async () => {
+    if (!window.confirm(`Disable autopay for ${familyName}? The parent's saved card will be removed and they'll need to pay manually until they re-enroll.`)) return
+    setDisablingAutopay(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch('/api/disable-autopay', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ family_id: familyId }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || 'Failed to disable')
+      setMessage({ type: 'success', text: 'Autopay disabled for this family' })
+      if (onChange) await onChange()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+    setDisablingAutopay(false)
   }
 
   const sendInvitation = async () => {
@@ -983,7 +1010,7 @@ function InvitationsTab({ userId, familyId, familyName, guardians }) {
       setMessage({ type: data.email_sent ? 'success' : 'info', text: sentMsg })
       setForm({ recipient_name: '', recipient_email: '' })
       setShowForm(false)
-      await loadInvitations()
+      await loadAll()
     } catch (err) {
       setMessage({ type: 'error', text: err.message })
     }
@@ -1010,7 +1037,7 @@ function InvitationsTab({ userId, familyId, familyName, guardians }) {
       const data = await resp.json()
       if (!resp.ok) throw new Error(data.error || 'Failed to resend')
       setMessage({ type: 'success', text: `Resent to ${invitation.recipient_email}` })
-      await loadInvitations()
+      await loadAll()
     } catch (err) {
       setMessage({ type: 'error', text: err.message })
     }
@@ -1020,7 +1047,7 @@ function InvitationsTab({ userId, familyId, familyName, guardians }) {
   const revokeInvitation = async (id) => {
     if (!window.confirm('Revoke this invitation? The link will stop working immediately.')) return
     await supabase.from('family_invitations').update({ status: 'revoked', revoked_at: new Date().toISOString() }).eq('id', id)
-    await loadInvitations()
+    await loadAll()
   }
 
   const copyLink = async (token) => {
@@ -1047,6 +1074,56 @@ function InvitationsTab({ userId, familyId, familyName, guardians }) {
         <div className={`auth-message ${message.type === 'error' ? 'error' : 'success'}`} style={{ marginBottom: 'var(--space-3)', wordBreak: 'break-all' }}>
           <span>{message.type === 'error' ? '⚠' : '✓'}</span>
           <span>{message.text}</span>
+        </div>
+      )}
+
+      {/* Autopay status */}
+      {family.autopay_enabled && (
+        <div style={{
+          background: 'linear-gradient(135deg, #faf6ec 0%, #f4eee2 100%)',
+          border: '1px solid #d4763b',
+          borderRadius: 'var(--radius-lg)',
+          padding: 'var(--space-4)',
+          marginBottom: 'var(--space-4)',
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 'var(--space-3)',
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+              <span style={{ fontSize: '1.125rem' }}>⚡</span>
+              <span style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', fontWeight: 500, color: 'var(--clr-ink)' }}>
+                Autopay enabled
+              </span>
+            </div>
+            <div style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-mid)', lineHeight: 1.5 }}>
+              Charged automatically every Monday at 9 AM.
+              {family.autopay_last_charged_at && (
+                <> Last charged {new Date(family.autopay_last_charged_at).toLocaleDateString()}.</>
+              )}
+              {family.autopay_failure_count > 0 && (
+                <> <span style={{ color: 'var(--clr-error)' }}>⚠ {family.autopay_failure_count} recent failure(s).</span></>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={disableAutopayProvider}
+            disabled={disablingAutopay}
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--clr-warm-mid)',
+              color: 'var(--clr-ink-mid)',
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-md)',
+              fontSize: '0.78125rem',
+              cursor: 'pointer',
+              fontWeight: 500,
+              flexShrink: 0,
+            }}
+          >
+            {disablingAutopay ? 'Disabling…' : 'Disable autopay'}
+          </button>
         </div>
       )}
 
