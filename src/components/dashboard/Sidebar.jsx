@@ -12,6 +12,7 @@ import {
   DollarSign,
   CreditCard,
   Shield,
+  Building2,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -37,11 +38,11 @@ const NAV_ITEMS = [
     ],
   },
   {
-    section: 'Account',
+    section: 'Settings',
     items: [
+      { label: 'Business Info', icon: Building2, path: '/business-info' },
       { label: 'Subscription', icon: CreditCard, path: '/subscription' },
       { label: 'How Money Works', icon: Shield, path: '/how-money-works' },
-      { label: 'Settings', icon: Settings, path: '/settings' },
     ],
   },
 ]
