@@ -224,6 +224,56 @@ export default async function handler(req, res) {
         break
       }
 
+      // ─── Payment Intent Succeeded (covers autopay charges) ──────────
+      case 'payment_intent.succeeded': {
+        const pi = event.data.object
+        // Autopay charges have metadata.autopay='true' and metadata.invoice_id
+        // The cron handles DB updates directly, but this webhook is a backup
+        // in case the cron's API call to Stripe times out before completing
+        if (pi.metadata?.autopay === 'true' && pi.metadata?.invoice_id) {
+          const invoiceId = pi.metadata.invoice_id
+
+          // Check if invoice is already marked paid (cron may have done it)
+          const invResp = await supabaseRequest(
+            `invoices?id=eq.${invoiceId}&select=*`,
+            'GET'
+          )
+          const invoices = await invResp.json()
+          if (!invoices || invoices.length === 0) break
+          const invoice = invoices[0]
+
+          if (invoice.status === 'paid') break  // Already handled by cron
+
+          const amountPaid = (pi.amount || 0) / 100
+          const newAmountPaid = parseFloat(invoice.amount_paid || 0) + amountPaid
+          const totalDue = parseFloat(invoice.total || 0)
+          let newStatus = invoice.status
+          if (newAmountPaid >= totalDue) newStatus = 'paid'
+          else if (newAmountPaid > 0) newStatus = 'partial'
+
+          await supabaseRequest(`invoices?id=eq.${invoiceId}`, 'PATCH', {
+            amount_paid: newAmountPaid,
+            status: newStatus,
+            paid_at: newStatus === 'paid' ? new Date().toISOString() : invoice.paid_at,
+            payment_method: 'stripe',
+          })
+        }
+        break
+      }
+
+      // ─── Payment Intent Failed (covers autopay failures) ──────────
+      case 'payment_intent.payment_failed': {
+        const pi = event.data.object
+        if (pi.metadata?.autopay === 'true' && pi.metadata?.invoice_id) {
+          const invoiceId = pi.metadata.invoice_id
+          await supabaseRequest(`invoices?id=eq.${invoiceId}`, 'PATCH', {
+            autopay_attempted_at: new Date().toISOString(),
+            autopay_failure_reason: pi.last_payment_error?.message || 'Charge failed',
+          })
+        }
+        break
+      }
+
       default:
         // Other events ignored
         break
