@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '@/hooks/useAuth'
+import { useRole } from '@/hooks/useRole'
 import { supabase } from '@/lib/supabase'
 import { Home, Clock, Sparkles, Plus, Trash2, Save, Info, Calendar } from 'lucide-react'
 import '@/styles/ts-ratio.css'
@@ -22,6 +23,7 @@ function getDayName(dateStr) {
 
 export default function TSRatioPage() {
   const { user } = useAuth()
+  const { licenseeId } = useRole()
   const [year, setYear] = useState(new Date().getFullYear())
 
   // Space inputs
@@ -50,8 +52,8 @@ export default function TSRatioPage() {
 
   // ─── Load data ──────────────────────────────────
   useEffect(() => {
-    loadAll()
-  }, [year])
+    if (licenseeId) loadAll()
+  }, [year, licenseeId])
 
   async function loadAll() {
     setLoading(true)
@@ -60,7 +62,7 @@ export default function TSRatioPage() {
     const { data: ratio } = await supabase
       .from('ts_ratios')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', licenseeId)
       .eq('year', year)
       .maybeSingle()
 
@@ -80,7 +82,7 @@ export default function TSRatioPage() {
     const { data: logs } = await supabase
       .from('hour_logs')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', licenseeId)
       .gte('date', `${year}-01-01`)
       .lte('date', `${year}-12-31`)
       .order('date', { ascending: false })
@@ -91,7 +93,7 @@ export default function TSRatioPage() {
     const { data: receipts } = await supabase
       .from('receipts')
       .select('id, merchant, date, total, amount, category')
-      .eq('user_id', user.id)
+      .eq('user_id', licenseeId)
       .in('category', SHARED_EXPENSE_CATEGORIES)
       .gte('date', `${year}-01-01`)
       .lte('date', `${year}-12-31`)
@@ -141,7 +143,7 @@ export default function TSRatioPage() {
   const handleSave = async () => {
     setSaving(true)
     const { error } = await supabase.from('ts_ratios').upsert({
-      user_id: user.id,
+      user_id: licenseeId,
       year,
       total_sqft: parseFloat(totalSqft) || null,
       regular_use_sqft: parseFloat(regularUseSqft) || null,
@@ -166,7 +168,7 @@ export default function TSRatioPage() {
   const handleAddLog = async () => {
     if (!newLogDate || !newLogHours) return
     const { error } = await supabase.from('hour_logs').upsert({
-      user_id: user.id,
+      user_id: licenseeId,
       date: newLogDate,
       hours: parseFloat(newLogHours),
       notes: newLogNotes || null,
