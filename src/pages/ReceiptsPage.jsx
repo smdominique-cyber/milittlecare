@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { useAuth } from '@/hooks/useAuth'
+import { useRole } from '@/hooks/useRole'
 import { supabase } from '@/lib/supabase'
 import { ScanLine, Trash2, Save, RefreshCw } from 'lucide-react'
 import '@/styles/receipts.css'
@@ -99,8 +100,11 @@ Return this exact structure:
   "description": "brief description of what was purchased",
   "payment_method": "Cash or Credit Card or Debit Card or Check or Other",
   "notes": "any other relevant details from the receipt",
+  "deduction_type": "full or shared",
   "confidence": "high or medium or low"
 }
+
+For "deduction_type": use "full" (100% business) when items appear to be specifically for the daycare business (toys, kid art supplies, childproofing, educational materials, business office supplies, daycare-specific equipment). Use "shared" (T/S% applied) when items are clearly for both home and business (utilities, general cleaning supplies, toilet paper, general household items, mixed groceries, home insurance). When uncertain, prefer "full" for obviously kid/business-specific items and "shared" for general household goods.
 
 If a field is not visible or unclear, use null. For amounts use numbers only, no $ signs.`,
           },
@@ -126,6 +130,7 @@ If a field is not visible or unclear, use null. For amounts use numbers only, no
 
 export default function ReceiptsPage() {
   const { user } = useAuth()
+  const { licenseeId } = useRole()
   const fileInputRef = useRef(null)
 
   const [stage, setStage] = useState('upload')
@@ -149,7 +154,7 @@ export default function ReceiptsPage() {
     const { data, error } = await supabase
       .from('receipts')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', licenseeId)
       .order('created_at', { ascending: false })
     if (!error) setReceipts(data || [])
     setLoadingReceipts(false)
@@ -219,7 +224,7 @@ export default function ReceiptsPage() {
       }
 
       const { error: insertError } = await supabase.from('receipts').insert({
-        user_id: user.id,
+        user_id: licenseeId,
         merchant: form.merchant || null,
         amount: form.amount ? parseFloat(form.amount) : null,
         tax: form.tax ? parseFloat(form.tax) : null,
