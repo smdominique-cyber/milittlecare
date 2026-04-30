@@ -1064,8 +1064,20 @@ function InvitationsTab({ userId, family, guardians, onChange }) {
 
   const previewAsParent = () => {
     setPreviewing(true)
-    // Open a preview by signing in as anonymous parent OR using a preview parameter
-    // For now: open the parent dashboard route in a new tab so provider can see what parents see
+    // Honest preview: opens the parent dashboard route. The provider's session
+    // means they won't see real parent data — they see what the LAYOUT looks like.
+    // For full parent testing, we recommend they invite themselves with an alt
+    // email and accept the invitation.
+    if (!window.confirm(
+      'Preview opens the parent dashboard layout in a new tab.\n\n' +
+      'Note: You\'re still signed in as the provider, so you won\'t see real ' +
+      'parent data (no children, no balance). To fully test, invite yourself ' +
+      'using a different email and accept the invitation.\n\n' +
+      'Continue?'
+    )) {
+      setPreviewing(false)
+      return
+    }
     window.open('/parent', '_blank', 'noopener')
     setTimeout(() => setPreviewing(false), 500)
   }
