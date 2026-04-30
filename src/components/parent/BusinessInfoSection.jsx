@@ -1,162 +1,227 @@
--- ============================================================
--- MI Little Care — Week 3: Business Information System
--- ============================================================
+import { useState, useEffect } from 'react'
+import { supabase } from '@/lib/supabase'
+import { Clock, Calendar, DollarSign, AlertTriangle, ChevronDown, Info } from 'lucide-react'
 
--- -------------------------------------------------------
--- 1. Business hours per day of week
--- -------------------------------------------------------
-create table if not exists public.business_hours (
-  id uuid default gen_random_uuid() primary key,
-  user_id uuid references auth.users(id) on delete cascade not null,
-  day_of_week smallint not null,  -- 0=Sunday, 1=Monday, ..., 6=Saturday
-  is_open boolean default true,
-  open_time time,
-  close_time time,
-  notes text,  -- e.g., "Pickup window 5:30-6:00 PM"
-  created_at timestamptz default now() not null,
-  updated_at timestamptz default now() not null,
-  unique(user_id, day_of_week)
-);
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const FULL_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-create index if not exists idx_business_hours_user on public.business_hours(user_id);
+function formatTime(t) {
+  if (!t) return ''
+  const [hh, mm] = t.split(':')
+  const hour = parseInt(hh)
+  const period = hour >= 12 ? 'PM' : 'AM'
+  const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour
+  return mm === '00' ? `${displayHour} ${period}` : `${displayHour}:${mm} ${period}`
+}
 
-alter table public.business_hours enable row level security;
+function formatDate(d) {
+  if (!d) return ''
+  return new Date(d + 'T12:00:00').toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+  })
+}
 
-create policy "Users can view their own hours"
-  on public.business_hours for select using (auth.uid() = user_id);
-create policy "Users can insert their own hours"
-  on public.business_hours for insert with check (auth.uid() = user_id);
-create policy "Users can update their own hours"
-  on public.business_hours for update using (auth.uid() = user_id);
-create policy "Users can delete their own hours"
-  on public.business_hours for delete using (auth.uid() = user_id);
+function shortDate(d) {
+  if (!d) return ''
+  return new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
 
--- Parents can see business hours of their linked providers
-create policy "Parents can view their providers' hours"
-  on public.business_hours for select
-  using (
-    user_id in (
-      select provider_user_id from public.parent_family_links
-      where parent_id = auth.uid() and status = 'active'
-    )
-  );
+export default function BusinessInfoSection({ providerId, providerName }) {
+  const [hours, setHours] = useState([])
+  const [closures, setClosures] = useState([])
+  const [policies, setPolicies] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(false)
 
-create trigger set_business_hours_updated_at
-  before update on public.business_hours
-  for each row execute procedure public.set_updated_at();
+  useEffect(() => {
+    if (!providerId) return
+    loadAll()
+  }, [providerId])
 
+  async function loadAll() {
+    setLoading(true)
+    const [h, c, p] = await Promise.all([
+      supabase.from('business_hours').select('*').eq('user_id', providerId).order('day_of_week'),
+      supabase.from('closures').select('*').eq('user_id', providerId),
+      supabase.from('business_policies').select('*').eq('user_id', providerId).maybeSingle(),
+    ])
+    setHours(h.data || [])
+    setClosures(c.data || [])
+    setPolicies(p.data)
+    setLoading(false)
+  }
 
--- -------------------------------------------------------
--- 2. Closures (holidays + one-off)
--- -------------------------------------------------------
-create table if not exists public.closures (
-  id uuid default gen_random_uuid() primary key,
-  user_id uuid references auth.users(id) on delete cascade not null,
+  // Don't show anything if provider hasn't set up any info
+  const hasAnyInfo = hours.length > 0 || closures.length > 0 || policies?.emergency_procedures || policies?.payment_due_day
 
-  -- Type: holiday (recurring annual) | vacation | sick | personal | other
-  closure_type text default 'holiday' not null,
-  is_recurring boolean default false,  -- if true, applies every year on this month/day
+  if (loading || !hasAnyInfo) return null
 
-  -- Date range (single-day closures have start_date = end_date)
-  start_date date not null,
-  end_date date not null,
+  // Today's hours
+  const today = new Date().getDay()
+  const todayHours = hours.find(h => h.day_of_week === today)
+  const todayLabel = todayHours
+    ? todayHours.is_open
+      ? `Open today ${formatTime(todayHours.open_time)}–${formatTime(todayHours.close_time)}`
+      : 'Closed today'
+    : null
 
-  -- For recurring holidays: just the month/day matters (year is ignored)
-  -- We still store full start_date/end_date for the first occurrence
+  // Upcoming closures (next 60 days)
+  const todayStr = new Date().toISOString().split('T')[0]
+  const futureDate = new Date()
+  futureDate.setDate(futureDate.getDate() + 60)
+  const futureStr = futureDate.toISOString().split('T')[0]
 
-  reason text,  -- "Independence Day", "Provider vacation", etc.
-  notify_parents boolean default true,
+  const upcomingClosures = closures
+    .filter(c => {
+      // For recurring holidays, compute this year's instance
+      if (c.is_recurring) {
+        const month = c.start_date.split('-')[1]
+        const day = c.start_date.split('-')[2]
+        const thisYear = new Date().getFullYear()
+        const thisYearStart = `${thisYear}-${month}-${day}`
+        const thisYearEnd = c.end_date.split('-')[0] === c.start_date.split('-')[0]
+          ? `${thisYear}-${c.end_date.split('-')[1]}-${c.end_date.split('-')[2]}`
+          : `${thisYear + 1}-${c.end_date.split('-')[1]}-${c.end_date.split('-')[2]}`
+        return thisYearEnd >= todayStr && thisYearStart <= futureStr
+      }
+      return c.end_date >= todayStr && c.start_date <= futureStr
+    })
+    .map(c => {
+      // Normalize to this year's date for sort/display
+      if (c.is_recurring) {
+        const month = c.start_date.split('-')[1]
+        const day = c.start_date.split('-')[2]
+        const thisYear = new Date().getFullYear()
+        return { ...c, _displayStart: `${thisYear}-${month}-${day}`, _displayEnd: `${thisYear}-${c.end_date.split('-')[1]}-${c.end_date.split('-')[2]}` }
+      }
+      return { ...c, _displayStart: c.start_date, _displayEnd: c.end_date }
+    })
+    .sort((a, b) => a._displayStart.localeCompare(b._displayStart))
+    .slice(0, 5)
 
-  created_at timestamptz default now() not null,
-  updated_at timestamptz default now() not null,
-  created_by_user_id uuid references auth.users(id)
-);
+  return (
+    <section className="parent-section parent-info-section">
+      <button
+        className="parent-info-toggle"
+        onClick={() => setExpanded(e => !e)}
+      >
+        <div className="parent-info-toggle-left">
+          <Info size={14} style={{ color: 'var(--clr-sage-dark)' }} />
+          <span>About {providerName}</span>
+          {todayLabel && <span className="parent-info-today-badge">{todayLabel}</span>}
+        </div>
+        <ChevronDown
+          size={16}
+          style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}
+        />
+      </button>
 
-create index if not exists idx_closures_user on public.closures(user_id);
-create index if not exists idx_closures_dates on public.closures(start_date, end_date);
+      {expanded && (
+        <div className="parent-info-body">
+          {/* Hours */}
+          {hours.length > 0 && (
+            <div className="parent-info-block">
+              <div className="parent-info-block-title">
+                <Clock size={14} /> Hours
+              </div>
+              <div className="parent-info-hours">
+                {hours.map(h => (
+                  <div
+                    key={h.day_of_week}
+                    className={`parent-info-day ${h.day_of_week === today ? 'today' : ''} ${!h.is_open ? 'closed' : ''}`}
+                  >
+                    <span className="parent-info-day-name">{FULL_DAY_NAMES[h.day_of_week]}</span>
+                    <span className="parent-info-day-hours">
+                      {h.is_open
+                        ? `${formatTime(h.open_time)} – ${formatTime(h.close_time)}`
+                        : 'Closed'
+                      }
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
-alter table public.closures enable row level security;
+          {/* Upcoming closures */}
+          {upcomingClosures.length > 0 && (
+            <div className="parent-info-block">
+              <div className="parent-info-block-title">
+                <Calendar size={14} /> Upcoming closures
+              </div>
+              <div className="parent-info-closures">
+                {upcomingClosures.map((c, idx) => {
+                  const isRange = c._displayStart !== c._displayEnd
+                  return (
+                    <div key={c.id || idx} className="parent-info-closure">
+                      <span className="parent-info-closure-date">
+                        {isRange
+                          ? `${shortDate(c._displayStart)} – ${shortDate(c._displayEnd)}`
+                          : formatDate(c._displayStart)
+                        }
+                      </span>
+                      <span className="parent-info-closure-reason">
+                        {c.reason || 'Closed'}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
 
-create policy "Users can view their own closures"
-  on public.closures for select using (auth.uid() = user_id);
-create policy "Users can insert their own closures"
-  on public.closures for insert with check (auth.uid() = user_id);
-create policy "Users can update their own closures"
-  on public.closures for update using (auth.uid() = user_id);
-create policy "Users can delete their own closures"
-  on public.closures for delete using (auth.uid() = user_id);
+          {/* Payment policies */}
+          {(policies?.payment_due_day || policies?.late_fee_enabled || policies?.late_pickup_fee_enabled) && (
+            <div className="parent-info-block">
+              <div className="parent-info-block-title">
+                <DollarSign size={14} /> Payment policies
+              </div>
+              <div className="parent-info-policies">
+                {policies.payment_due_day && (
+                  <div className="parent-info-policy">
+                    <span className="parent-info-policy-label">Payment due:</span>
+                    <span>{policies.payment_due_day.charAt(0).toUpperCase() + policies.payment_due_day.slice(1)}s</span>
+                  </div>
+                )}
+                {policies.late_fee_enabled && policies.late_fee_amount && (
+                  <div className="parent-info-policy">
+                    <span className="parent-info-policy-label">Late fee:</span>
+                    <span>${parseFloat(policies.late_fee_amount).toFixed(2)} after {policies.late_fee_after_days || 7} days</span>
+                  </div>
+                )}
+                {policies.late_pickup_fee_enabled && policies.late_pickup_fee_per_minute && (
+                  <div className="parent-info-policy">
+                    <span className="parent-info-policy-label">Late pickup:</span>
+                    <span>${parseFloat(policies.late_pickup_fee_per_minute).toFixed(2)}/min after {policies.late_pickup_grace_minutes || 5} min grace</span>
+                  </div>
+                )}
+              </div>
+              {policies.drop_off_notes && (
+                <div className="parent-info-note">
+                  <strong>Drop-off:</strong> {policies.drop_off_notes}
+                </div>
+              )}
+              {policies.pickup_notes && (
+                <div className="parent-info-note">
+                  <strong>Pickup:</strong> {policies.pickup_notes}
+                </div>
+              )}
+            </div>
+          )}
 
--- Parents can see closures of their linked providers
-create policy "Parents can view their providers' closures"
-  on public.closures for select
-  using (
-    user_id in (
-      select provider_user_id from public.parent_family_links
-      where parent_id = auth.uid() and status = 'active'
-    )
-  );
-
-create trigger set_closures_updated_at
-  before update on public.closures
-  for each row execute procedure public.set_updated_at();
-
-
--- -------------------------------------------------------
--- 3. Business policies (one row per provider)
--- -------------------------------------------------------
-create table if not exists public.business_policies (
-  user_id uuid primary key references auth.users(id) on delete cascade,
-
-  -- Payment policies
-  payment_due_day text default 'monday',  -- 'monday', 'friday', etc.
-  payment_methods_accepted text[],  -- ['stripe', 'venmo', 'check', 'cash']
-
-  -- Late fees
-  late_fee_enabled boolean default false,
-  late_fee_amount numeric(10,2),
-  late_fee_after_days integer default 7,
-
-  -- Late pickup fees
-  late_pickup_fee_enabled boolean default false,
-  late_pickup_fee_per_minute numeric(10,2),
-  late_pickup_grace_minutes integer default 5,
-
-  -- Emergency procedures (free text)
-  emergency_procedures text,
-
-  -- Drop-off & pickup notes
-  drop_off_notes text,
-  pickup_notes text,
-
-  -- Setup progress flags (for dashboard widget)
-  hours_set boolean default false,
-  closures_set boolean default false,
-  policies_set boolean default false,
-  emergency_set boolean default false,
-
-  created_at timestamptz default now() not null,
-  updated_at timestamptz default now() not null
-);
-
-alter table public.business_policies enable row level security;
-
-create policy "Users can view their own policies"
-  on public.business_policies for select using (auth.uid() = user_id);
-create policy "Users can insert their own policies"
-  on public.business_policies for insert with check (auth.uid() = user_id);
-create policy "Users can update their own policies"
-  on public.business_policies for update using (auth.uid() = user_id);
-
--- Parents can see policies of their linked providers
-create policy "Parents can view their providers' policies"
-  on public.business_policies for select
-  using (
-    user_id in (
-      select provider_user_id from public.parent_family_links
-      where parent_id = auth.uid() and status = 'active'
-    )
-  );
-
-create trigger set_business_policies_updated_at
-  before update on public.business_policies
-  for each row execute procedure public.set_updated_at();
+          {/* Emergency procedures */}
+          {policies?.emergency_procedures && (
+            <div className="parent-info-block emergency">
+              <div className="parent-info-block-title" style={{ color: 'var(--clr-error)' }}>
+                <AlertTriangle size={14} /> Emergency procedures
+              </div>
+              <div className="parent-info-emergency">
+                {policies.emergency_procedures}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
