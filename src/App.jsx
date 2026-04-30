@@ -13,6 +13,7 @@ import TSRatioPage from '@/pages/TSRatioPage'
 import FamiliesPage from '@/pages/FamiliesPage'
 import BillingPage from '@/pages/BillingPage'
 import SubscriptionPage from '@/pages/SubscriptionPage'
+import HowMoneyWorksPage from '@/pages/HowMoneyWorksPage'
 import {
   ReportsPage,
   SettingsPage,
@@ -50,6 +51,7 @@ export default function App() {
             <Route path="reports" element={<ReportsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="subscription" element={<SubscriptionPage />} />
+            <Route path="how-money-works" element={<HowMoneyWorksPage />} />
           </Route>
 
           {/* 404 fallback */}
