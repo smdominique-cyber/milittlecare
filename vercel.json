@@ -15,5 +15,15 @@
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
       ]
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron-generate-autopay-invoices",
+      "schedule": "0 3 * * 1"
+    },
+    {
+      "path": "/api/cron-charge-autopay",
+      "schedule": "0 14 * * 1"
+    }
   ]
 }
