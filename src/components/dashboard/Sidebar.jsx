@@ -1,5 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
+import { useRole } from '@/hooks/useRole'
 import {
   LayoutDashboard,
   Receipt,
@@ -13,8 +14,11 @@ import {
   CreditCard,
   Shield,
   Building2,
+  UserCog,
 } from 'lucide-react'
 
+// Each item has an optional `roles` array of which roles see it.
+// Items without `roles` are visible to everyone.
 const NAV_ITEMS = [
   {
     section: 'Overview',
@@ -26,22 +30,23 @@ const NAV_ITEMS = [
     section: 'Revenue',
     items: [
       { label: 'Families', icon: Users, path: '/families' },
-      { label: 'Billing', icon: DollarSign, path: '/billing' },
+      { label: 'Billing', icon: DollarSign, path: '/billing', roles: ['licensee', 'adult_staff'] },
     ],
   },
   {
     section: 'Tax Tools',
     items: [
-      { label: 'Receipts', icon: Receipt, path: '/receipts' },
-      { label: 'Deductions', icon: Calculator, path: '/deductions' },
-      { label: 'T/S Ratio', icon: BarChart2, path: '/ts-ratio' },
+      { label: 'Receipts', icon: Receipt, path: '/receipts', roles: ['licensee', 'adult_staff'] },
+      { label: 'Deductions', icon: Calculator, path: '/deductions', roles: ['licensee', 'adult_staff', 'view_only'] },
+      { label: 'T/S Ratio', icon: BarChart2, path: '/ts-ratio', roles: ['licensee', 'adult_staff', 'view_only'] },
     ],
   },
   {
     section: 'Settings',
     items: [
-      { label: 'Business Info', icon: Building2, path: '/business-info' },
-      { label: 'Subscription', icon: CreditCard, path: '/subscription' },
+      { label: 'Business Info', icon: Building2, path: '/business-info', roles: ['licensee'] },
+      { label: 'Team', icon: UserCog, path: '/staff', roles: ['licensee'] },
+      { label: 'Subscription', icon: CreditCard, path: '/subscription', roles: ['licensee'] },
       { label: 'How Money Works', icon: Shield, path: '/how-money-works' },
     ],
   },
@@ -59,6 +64,7 @@ function getInitials(name) {
 
 export default function Sidebar({ isOpen = false }) {
   const { user, signOut } = useAuth()
+  const { role, isLicensee } = useRole()
   const navigate = useNavigate()
 
   const fullName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'You'
@@ -70,20 +76,33 @@ export default function Sidebar({ isOpen = false }) {
     navigate('/login', { replace: true })
   }
 
+  // Filter nav by role
+  const visibleSections = NAV_ITEMS.map(section => ({
+    ...section,
+    items: section.items.filter(item => !item.roles || item.roles.includes(role)),
+  })).filter(s => s.items.length > 0)
+
+  const ROLE_LABELS = {
+    licensee: 'Licensee',
+    adult_staff: 'Staff',
+    assistant: 'Assistant',
+    view_only: 'View-only',
+  }
+
   return (
     <aside className={`sidebar${isOpen ? ' open' : ''}`}>
       <div className="sidebar-header">
         <div className="sidebar-logo">
           <div className="logo-mark">🏡</div>
           <div>
-            <div className="logo-text">Mi Little Care</div>
-            <div className="logo-sub">Provider Portal</div>
+            <div className="logo-text">MI Little Care</div>
+            <div className="logo-sub">{isLicensee ? 'Provider Portal' : `${ROLE_LABELS[role]} Access`}</div>
           </div>
         </div>
       </div>
 
       <nav className="sidebar-nav">
-        {NAV_ITEMS.map((section) => (
+        {visibleSections.map((section) => (
           <div key={section.section}>
             <div className="nav-section-label">{section.section}</div>
             {section.items.map((item) => (
@@ -106,7 +125,22 @@ export default function Sidebar({ isOpen = false }) {
         <div className="sidebar-user">
           <div className="user-avatar">{initials}</div>
           <div className="user-info">
-            <div className="user-name">{fullName}</div>
+            <div className="user-name">
+              {fullName}
+              {!isLicensee && (
+                <span style={{
+                  fontSize: '0.625rem',
+                  marginLeft: 6,
+                  padding: '1px 6px',
+                  background: 'var(--clr-sage-pale)',
+                  color: 'var(--clr-sage-dark)',
+                  borderRadius: 'var(--radius-full)',
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                }}>{ROLE_LABELS[role]}</span>
+              )}
+            </div>
             <div className="user-email">{email}</div>
           </div>
           <button
