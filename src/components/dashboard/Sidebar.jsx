@@ -15,6 +15,7 @@ import {
   Shield,
   Building2,
   UserCog,
+  MessageSquare,
 } from 'lucide-react'
 
 // Each item has an optional `roles` array of which roles see it.
@@ -48,6 +49,7 @@ const NAV_ITEMS = [
       { label: 'Team', icon: UserCog, path: '/staff', roles: ['licensee'] },
       { label: 'Subscription', icon: CreditCard, path: '/subscription', roles: ['licensee'] },
       { label: 'How Money Works', icon: Shield, path: '/how-money-works' },
+      { label: 'Contact / Support', icon: MessageSquare, path: '/contact' },
     ],
   },
 ]
