@@ -14,6 +14,8 @@ import FamiliesPage from '@/pages/FamiliesPage'
 import BillingPage from '@/pages/BillingPage'
 import SubscriptionPage from '@/pages/SubscriptionPage'
 import HowMoneyWorksPage from '@/pages/HowMoneyWorksPage'
+import InviteAcceptPage from '@/pages/InviteAcceptPage'
+import ParentDashboardPage from '@/pages/ParentDashboardPage'
 import {
   ReportsPage,
   SettingsPage,
@@ -27,6 +29,10 @@ export default function App() {
           {/* Public routes */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
+
+          {/* Parent-facing routes — no provider auth, no paywall */}
+          <Route path="/invite/:token" element={<InviteAcceptPage />} />
+          <Route path="/parent" element={<ParentDashboardPage />} />
 
           {/* Redirect root to dashboard */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
