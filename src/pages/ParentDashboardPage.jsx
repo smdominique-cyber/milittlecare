@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, CreditCard, X, Clock, Phone, ChevronDown, ChevronUp, Info, Settings, ChevronRight } from 'lucide-react'
 import AutopayEnrollment from '@/components/parent/AutopayEnrollment'
 import BusinessInfoSection from '@/components/parent/BusinessInfoSection'
+import InstallBanner from '@/components/ui/InstallBanner'
 import '@/styles/parent.css'
 
 function formatCurrency(n) {
@@ -232,6 +233,8 @@ export default function ParentDashboardPage() {
             <span>{message.text}</span>
           </div>
         )}
+
+        <InstallBanner />
 
         {/* Hero balance */}
         <div className="parent-hero">
