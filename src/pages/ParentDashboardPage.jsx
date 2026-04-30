@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, CreditCard, X } from 'lucide-react'
+import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, CreditCard, X, Clock, Phone, ChevronDown, ChevronUp, Info } from 'lucide-react'
 import AutopayEnrollment from '@/components/parent/AutopayEnrollment'
+import BusinessInfoSection from '@/components/parent/BusinessInfoSection'
 import '@/styles/parent.css'
 
 function formatCurrency(n) {
@@ -369,6 +370,9 @@ export default function ParentDashboardPage() {
             </div>
           </section>
         )}
+
+        {/* Business info from provider */}
+        <BusinessInfoSection providerId={primaryFamily.user_id} providerName={primaryProviderName} />
 
         <div className="parent-trust-row">
           <Shield size={14} />
