@@ -424,3 +424,317 @@
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+
+/* ============================================================
+   Autopay Enrollment Modal
+   ============================================================ */
+
+.autopay-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(30, 38, 32, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.autopay-modal {
+  background: var(--clr-white);
+  border-radius: var(--radius-xl);
+  padding: 28px 24px;
+  max-width: 480px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  position: relative;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  animation: fadeUp 0.3s var(--ease-out);
+}
+
+.autopay-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: var(--clr-warm);
+  color: var(--clr-ink-soft);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.autopay-close:hover {
+  background: var(--clr-warm-mid);
+  color: var(--clr-ink);
+}
+
+.autopay-hero {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.autopay-hero-icon {
+  width: 64px;
+  height: 64px;
+  background: linear-gradient(135deg, var(--clr-sage-dark) 0%, var(--clr-sage) 100%);
+  border-radius: var(--radius-xl);
+  display: grid;
+  place-items: center;
+  margin: 0 auto 16px;
+  color: white;
+}
+
+.autopay-hero h2 {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 400;
+  color: var(--clr-ink);
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+}
+
+.autopay-hero p {
+  color: var(--clr-ink-mid);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.autopay-benefits {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+  background: var(--clr-cream);
+  border-radius: var(--radius-md);
+  padding: 16px;
+}
+
+.autopay-benefit {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.autopay-benefit-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  background: white;
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+}
+
+.autopay-benefit > div:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.autopay-benefit strong {
+  font-size: 0.875rem;
+  color: var(--clr-ink);
+  font-weight: 500;
+}
+
+.autopay-benefit span {
+  font-size: 0.78125rem;
+  color: var(--clr-ink-soft);
+}
+
+.autopay-trust-section {
+  background: white;
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+.autopay-trust-section.subtle {
+  background: var(--clr-cream);
+  border-color: var(--clr-warm-mid);
+}
+
+.autopay-trust-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--clr-ink);
+  margin-bottom: 8px;
+}
+
+.autopay-trust-section ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.autopay-trust-section ul li {
+  position: relative;
+  padding-left: 18px;
+  font-size: 0.8125rem;
+  color: var(--clr-ink-mid);
+  line-height: 1.5;
+}
+
+.autopay-trust-section ul li::before {
+  content: '✓';
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--clr-sage-dark);
+  font-weight: 600;
+}
+
+.autopay-trust-section p {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--clr-ink-mid);
+  line-height: 1.55;
+}
+
+.autopay-card-element {
+  margin: 16px 0 8px;
+  padding: 8px 0;
+  min-height: 80px;
+}
+
+.autopay-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 24px;
+  background: var(--clr-sage-dark);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--duration-fast);
+  margin-top: 16px;
+}
+
+.autopay-cta:hover:not(:disabled) {
+  background: var(--clr-sage);
+  box-shadow: 0 6px 16px rgba(62,88,73,0.3);
+}
+
+.autopay-cta:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.autopay-stripe-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--clr-ink-soft);
+  margin-top: 14px;
+}
+
+.autopay-stripe-row svg {
+  color: var(--clr-sage-dark);
+}
+
+.autopay-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--clr-error-pale);
+  color: var(--clr-error);
+  border-radius: var(--radius-md);
+  font-size: 0.8125rem;
+  margin-top: 12px;
+}
+
+.autopay-icon-success {
+  width: 80px;
+  height: 80px;
+  background: var(--clr-success-pale);
+  color: var(--clr-success);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  margin: 0 auto;
+}
+
+.autopay-icon-error {
+  width: 80px;
+  height: 80px;
+  background: var(--clr-error-pale);
+  color: var(--clr-error);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  margin: 0 auto;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ---- Autopay status badge on parent dashboard ---- */
+.parent-autopay-badge {
+  background: var(--clr-success-pale);
+  color: var(--clr-success);
+  border: 1px solid rgba(74,155,111,0.25);
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.parent-autopay-card {
+  background: linear-gradient(135deg, #faf6ec 0%, #f4eee2 100%);
+  border: 1px solid var(--clr-accent-light);
+  border-radius: var(--radius-lg);
+  padding: 18px 16px;
+  margin-bottom: 12px;
+}
+
+.parent-autopay-cta-card {
+  background: white;
+  border: 1.5px dashed var(--clr-sage);
+  border-radius: var(--radius-lg);
+  padding: 18px 16px;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.parent-autopay-cta-card-title {
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  color: var(--clr-ink);
+  margin-bottom: 6px;
+}
+
+.parent-autopay-cta-card-text {
+  font-size: 0.875rem;
+  color: var(--clr-ink-mid);
+  margin-bottom: 12px;
+}
