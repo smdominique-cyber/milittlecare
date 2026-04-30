@@ -34,6 +34,7 @@ import {
 } from '@/pages/PlaceholderPages'
 
 import '@/styles/toast.css'
+import '@/styles/install-banner.css'
 
 export default function App() {
   return (
