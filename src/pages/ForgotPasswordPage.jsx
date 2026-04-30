@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Mail, ArrowLeft, CheckCircle, Loader, AlertCircle } from 'lucide-react'
+import '@/styles/auth.css'
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('')
@@ -21,85 +22,131 @@ export default function ForgotPasswordPage() {
       setPhase('sent')
     } catch (err) {
       setError(err.message || 'Failed to send reset email')
-      setPhase('error')
+      setPhase('form')
     }
   }
 
   return (
-    <div className="auth-shell">
-      <div className="auth-card" style={{ maxWidth: 440 }}>
-        <div className="auth-brand">
-          <span className="auth-brand-mark">🏡</span>
-          <span className="auth-brand-name">MI Little Care</span>
+    <div className="auth-layout">
+      {/* Brand panel */}
+      <div className="auth-brand-panel">
+        <div className="auth-brand-logo">
+          <div className="logo-mark">🏡</div>
+          <span className="logo-text">MI Little Care</span>
         </div>
 
-        {phase === 'sent' ? (
-          <>
-            <div className="parent-icon" style={{ background: 'var(--clr-success-pale)', color: 'var(--clr-success)' }}>
-              <CheckCircle size={32} />
-            </div>
-            <h2 style={{ fontFamily: 'var(--font-display)', fontSize: '1.5rem', fontWeight: 400, marginTop: 16, marginBottom: 8 }}>
-              Check your email
-            </h2>
-            <p style={{ color: 'var(--clr-ink-mid)', textAlign: 'center', lineHeight: 1.55 }}>
-              We sent a password reset link to <strong>{email}</strong>. Click the link in the email to set a new password.
-            </p>
-            <p style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', marginTop: 16, textAlign: 'center' }}>
-              Didn't get it? Check your spam folder. If still nothing, the email may not be associated with an MI Little Care account.
-            </p>
-            <Link to="/login" className="auth-secondary" style={{ marginTop: 20 }}>
-              <ArrowLeft size={14} /> Back to sign in
-            </Link>
-          </>
-        ) : (
-          <>
-            <h2 style={{ fontFamily: 'var(--font-display)', fontSize: '1.5rem', fontWeight: 400, marginBottom: 6 }}>
-              Reset your password
-            </h2>
-            <p style={{ color: 'var(--clr-ink-mid)', fontSize: '0.9375rem', lineHeight: 1.5, marginBottom: 24, textAlign: 'center' }}>
-              Enter your email and we'll send you a link to set a new password.
-            </p>
+        <div className="auth-brand-headline">
+          <h1>
+            Trouble<br />
+            <em>signing in?</em>
+          </h1>
+          <p>
+            We'll email you a secure link to reset your password.
+          </p>
+        </div>
+      </div>
 
-            <form onSubmit={submit} style={{ width: '100%' }}>
-              <div className="form-field">
-                <label className="form-label" htmlFor="reset-email">Email</label>
-                <input
-                  id="reset-email"
-                  type="email"
-                  className="form-input"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  required
-                  autoFocus
-                />
+      {/* Form panel */}
+      <div className="auth-form-panel">
+        <div className="auth-form-container">
+          {phase === 'sent' ? (
+            <>
+              <div className="auth-form-header" style={{ textAlign: 'center' }}>
+                <div style={{
+                  width: 64, height: 64, margin: '0 auto 16px',
+                  background: 'rgba(74,155,111,0.12)', color: 'var(--clr-success, #4a9b6f)',
+                  borderRadius: '50%', display: 'grid', placeItems: 'center',
+                }}>
+                  <CheckCircle size={32} />
+                </div>
+                <h2>Check your email</h2>
+                <p>
+                  We sent a password reset link to <strong>{email}</strong>. Click the link in the email to set a new password.
+                </p>
               </div>
 
-              {error && (
-                <div className="auth-message error" style={{ marginTop: 12 }}>
-                  <AlertCircle size={14} /> {error}
+              <div style={{
+                background: 'var(--clr-cream, #faf6ec)',
+                border: '1px solid var(--clr-warm-mid, #e5d9c4)',
+                borderRadius: 8,
+                padding: '12px 14px',
+                fontSize: '0.8125rem',
+                color: 'var(--clr-ink-soft, #8a9281)',
+                margin: '20px 0',
+                lineHeight: 1.5,
+              }}>
+                <strong>Didn't get it?</strong> Check your spam folder. If still nothing, the email may not be associated with an MI Little Care account.
+              </div>
+
+              <Link to="/login" className="btn-primary" style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                textDecoration: 'none',
+              }}>
+                <ArrowLeft size={14} /> Back to sign in
+              </Link>
+            </>
+          ) : (
+            <>
+              <div className="auth-form-header">
+                <h2>Reset your password</h2>
+                <p>
+                  Enter your email and we'll send you a link to set a new password.
+                </p>
+              </div>
+
+              <form onSubmit={submit}>
+                <div className="form-field">
+                  <label className="form-label" htmlFor="reset-email">Email address</label>
+                  <input
+                    id="reset-email"
+                    type="email"
+                    className="form-input"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    required
+                    autoFocus
+                  />
                 </div>
-              )}
 
-              <button
-                type="submit"
-                className="auth-cta"
-                disabled={phase === 'sending' || !email}
-                style={{ width: '100%', marginTop: 16 }}
-              >
-                {phase === 'sending' ? (
-                  <><Loader size={14} className="spin" /> Sending…</>
-                ) : (
-                  <><Mail size={14} /> Send reset link</>
+                {error && (
+                  <div className="auth-message error" style={{ marginBottom: 12 }}>
+                    <span>⚠</span>
+                    <span>{error}</span>
+                  </div>
                 )}
-              </button>
-            </form>
 
-            <Link to="/login" className="auth-secondary" style={{ marginTop: 20 }}>
-              <ArrowLeft size={14} /> Back to sign in
-            </Link>
-          </>
-        )}
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={phase === 'sending' || !email}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                  }}
+                >
+                  {phase === 'sending' ? (
+                    <><Loader size={14} className="spin" /> Sending…</>
+                  ) : (
+                    <><Mail size={14} /> Send reset link</>
+                  )}
+                </button>
+              </form>
+
+              <div className="auth-footer-link" style={{ marginTop: 20 }}>
+                Remember your password?{' '}
+                <Link to="/login" style={{ color: 'var(--clr-sage-dark, #3e5849)', textDecoration: 'none' }}>
+                  Sign in
+                </Link>
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
