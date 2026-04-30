@@ -179,6 +179,11 @@ export default function LoginPage() {
                   onChange={set('password')}
                 />
               </div>
+              <div style={{ textAlign: 'right', marginTop: -8, marginBottom: 8 }}>
+                <a href="/forgot-password" style={{ fontSize: '0.8125rem', color: 'var(--clr-sage-dark)', textDecoration: 'none' }}>
+                  Forgot password?
+                </a>
+              </div>
               <button className="btn-primary" type="submit" disabled={loading}>
                 {loading ? 'Signing in…' : 'Sign in'}
               </button>
@@ -279,7 +284,7 @@ export default function LoginPage() {
           <div className="auth-footer-link">
             {tab === 'login' ? (
               <>
-                New to Mi Little Care?{' '}
+                New to MI Little Care?{' '}
                 <button onClick={() => { setTab('signup'); setMessage(null) }}>
                   Create a free account
                 </button>
@@ -292,6 +297,17 @@ export default function LoginPage() {
                 </button>
               </>
             )}
+          </div>
+
+          <div style={{
+            textAlign: 'center',
+            marginTop: 16,
+            fontSize: '0.75rem',
+            color: 'var(--clr-ink-soft)',
+          }}>
+            <a href="/privacy" style={{ color: 'var(--clr-ink-soft)', textDecoration: 'none' }}>Privacy Policy</a>
+            <span style={{ margin: '0 8px' }}>·</span>
+            <a href="/terms" style={{ color: 'var(--clr-ink-soft)', textDecoration: 'none' }}>Terms of Service</a>
           </div>
         </div>
       </div>
