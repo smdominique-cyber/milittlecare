@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/hooks/useAuth'
+import { useRole } from '@/hooks/useRole'
 import { supabase } from '@/lib/supabase'
 import {
   Plus, X, Users, Phone, Mail, AlertCircle, Save, Trash2,
@@ -60,6 +61,7 @@ function calcHours(inTime, outTime) {
 // ════════════════════════════════════════════════════════════
 export default function FamiliesPage() {
   const { user } = useAuth()
+  const { licenseeId } = useRole()
 
   const [families, setFamilies] = useState([])
   const [children, setChildren] = useState([])
@@ -71,15 +73,15 @@ export default function FamiliesPage() {
   const [selectedFamily, setSelectedFamily] = useState(null)
   const [creating, setCreating] = useState(false)
 
-  useEffect(() => { loadAll() }, [])
+  useEffect(() => { if (licenseeId) loadAll() }, [licenseeId])
 
   async function loadAll() {
     setLoading(true)
     const [f, c, g, e] = await Promise.all([
-      supabase.from('families').select('*').eq('user_id', user.id).order('family_name'),
-      supabase.from('children').select('*').eq('user_id', user.id),
-      supabase.from('guardians').select('*').eq('user_id', user.id),
-      supabase.from('emergency_contacts').select('*').eq('user_id', user.id),
+      supabase.from('families').select('*').eq('user_id', licenseeId).order('family_name'),
+      supabase.from('children').select('*').eq('user_id', licenseeId),
+      supabase.from('guardians').select('*').eq('user_id', licenseeId),
+      supabase.from('emergency_contacts').select('*').eq('user_id', licenseeId),
     ])
     setFamilies(f.data || [])
     setChildren(c.data || [])
