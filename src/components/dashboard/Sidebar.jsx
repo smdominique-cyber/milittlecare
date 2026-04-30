@@ -121,4 +121,4 @@ export default function Sidebar({ isOpen = false }) {
       </div>
     </aside>
   )
-}
+} 
