@@ -11,6 +11,7 @@ import {
   Megaphone,
   DollarSign,
   CreditCard,
+  Shield,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -24,7 +25,7 @@ const NAV_ITEMS = [
     section: 'Revenue',
     items: [
       { label: 'Families', icon: Users, path: '/families' },
-      { label: 'Billing', icon: DollarSign, path: '/billing', badge: 'New' },
+      { label: 'Billing', icon: DollarSign, path: '/billing' },
     ],
   },
   {
@@ -36,15 +37,10 @@ const NAV_ITEMS = [
     ],
   },
   {
-    section: 'Reports',
-    items: [
-      { label: 'Reports', icon: Megaphone, path: '/reports' },
-    ],
-  },
-  {
     section: 'Account',
     items: [
       { label: 'Subscription', icon: CreditCard, path: '/subscription' },
+      { label: 'How Money Works', icon: Shield, path: '/how-money-works' },
       { label: 'Settings', icon: Settings, path: '/settings' },
     ],
   },
