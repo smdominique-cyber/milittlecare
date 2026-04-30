@@ -674,6 +674,22 @@ function InvoiceDetailModal({ invoice, family, items: initialItems, payments: in
             </button>
           )}
 
+          {/* Tax disclaimer - shown on non-editable invoices */}
+          {!isEditable && (
+            <div style={{
+              marginTop: 'var(--space-4)',
+              padding: '12px 14px',
+              background: 'var(--clr-cream)',
+              borderLeft: '3px solid var(--clr-warm-mid)',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: '0.78125rem',
+              color: 'var(--clr-ink-soft)',
+              lineHeight: 1.5,
+            }}>
+              <strong>Tax note:</strong> MI Little Care provides invoice and record-keeping tools, not tax advice. For deductible amounts, FSA reimbursement, or filing decisions, consult a qualified tax professional.
+            </div>
+          )}
+
           {/* Notes */}
           {(isEditable || notes) && (
             <div className="form-field-group" style={{ marginTop: 'var(--space-4)' }}>
