@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, CreditCard, X, Clock, Phone, ChevronDown, ChevronUp, Info } from 'lucide-react'
+import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, CreditCard, X, Clock, Phone, ChevronDown, ChevronUp, Info, Settings, ChevronRight } from 'lucide-react'
 import AutopayEnrollment from '@/components/parent/AutopayEnrollment'
 import BusinessInfoSection from '@/components/parent/BusinessInfoSection'
 import '@/styles/parent.css'
@@ -373,6 +373,33 @@ export default function ParentDashboardPage() {
 
         {/* Business info from provider */}
         <BusinessInfoSection providerId={primaryFamily.user_id} providerName={primaryProviderName} />
+
+        {/* My Family quick link */}
+        <button
+          onClick={() => navigate('/parent/family')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            width: '100%',
+            padding: '14px 16px',
+            background: 'white',
+            border: '1px solid var(--clr-warm-mid)',
+            borderRadius: 'var(--radius-lg)',
+            cursor: 'pointer',
+            textAlign: 'left',
+            fontFamily: 'var(--font-body)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Settings size={16} style={{ color: 'var(--clr-sage-dark)' }} />
+            <div>
+              <div style={{ fontSize: '0.9375rem', fontWeight: 500, color: 'var(--clr-ink)' }}>My Family</div>
+              <div style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)' }}>Update contact info, allergies, emergency contacts</div>
+            </div>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--clr-ink-soft)' }} />
+        </button>
 
         <div className="parent-trust-row">
           <Shield size={14} />
