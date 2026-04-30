@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/hooks/useAuth'
+import { useRole } from '@/hooks/useRole'
 import { supabase } from '@/lib/supabase'
 import {
   Plus, X, Save, Trash2, Send, Mail, MessageSquare, CreditCard,
@@ -38,6 +39,7 @@ function dateStr(d) {
 // ════════════════════════════════════════════════════════════
 export default function BillingPage() {
   const { user } = useAuth()
+  const { licenseeId } = useRole()
 
   const [families, setFamilies] = useState([])
   const [invoices, setInvoices] = useState([])
@@ -52,17 +54,17 @@ export default function BillingPage() {
   const [generating, setGenerating] = useState(false)
   const [genMessage, setGenMessage] = useState(null)
 
-  useEffect(() => { loadAll() }, [])
+  useEffect(() => { if (licenseeId) loadAll() }, [licenseeId])
 
   async function loadAll() {
     setLoading(true)
     const [f, i, it, p, a, c] = await Promise.all([
-      supabase.from('families').select('*').eq('user_id', user.id).order('family_name'),
-      supabase.from('invoices').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
-      supabase.from('invoice_items').select('*').eq('user_id', user.id),
-      supabase.from('payments').select('*').eq('user_id', user.id).order('payment_date', { ascending: false }),
-      supabase.from('attendance').select('*').eq('user_id', user.id),
-      supabase.from('children').select('*').eq('user_id', user.id),
+      supabase.from('families').select('*').eq('user_id', licenseeId).order('family_name'),
+      supabase.from('invoices').select('*').eq('user_id', licenseeId).order('created_at', { ascending: false }),
+      supabase.from('invoice_items').select('*').eq('user_id', licenseeId),
+      supabase.from('payments').select('*').eq('user_id', licenseeId).order('payment_date', { ascending: false }),
+      supabase.from('attendance').select('*').eq('user_id', licenseeId),
+      supabase.from('children').select('*').eq('user_id', licenseeId),
     ])
     setFamilies(f.data || [])
     setInvoices(i.data || [])
@@ -185,7 +187,7 @@ export default function BillingPage() {
 
       // Insert invoice
       const { data: invoice, error: invErr } = await supabase.from('invoices').insert({
-        user_id: user.id,
+        user_id: licenseeId,
         family_id: family.id,
         invoice_number: invoiceNumber,
         period_start: periodStart,
@@ -209,7 +211,7 @@ export default function BillingPage() {
         await supabase.from('invoice_items').insert({
           ...li,
           invoice_id: invoice.id,
-          user_id: user.id,
+          user_id: licenseeId,
           sort_order: idx,
         })
       }
