@@ -428,6 +428,19 @@ export default function ReceiptsPage() {
               <Trash2 size={15} /> Discard
             </button>
           </div>
+
+          <div style={{
+            marginTop: 'var(--space-3)',
+            padding: '10px 12px',
+            background: 'var(--clr-cream)',
+            borderLeft: '3px solid var(--clr-warm-mid)',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '0.75rem',
+            color: 'var(--clr-ink-soft)',
+            lineHeight: 1.5,
+          }}>
+            <strong>Tax note:</strong> AI categorization assists with record-keeping but is not tax advice. Verify deductible status with a tax professional before filing. T/S ratios applied at year-end.
+          </div>
         </div>
       )}
 
