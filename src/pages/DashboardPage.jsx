@@ -8,6 +8,7 @@ import {
   Users, Send, Plus, Calculator, Zap,
 } from 'lucide-react'
 import SetupWidget from '@/components/dashboard/SetupWidget'
+import InstallBanner from '@/components/ui/InstallBanner'
 
 function getGreeting() {
   const h = new Date().getHours()
@@ -83,7 +84,7 @@ export default function DashboardPage() {
     const [f, i, r, t, inv, p] = await Promise.all([
       supabase.from('families').select('*').eq('user_id', licenseeId),
       supabase.from('invoices').select('*').eq('user_id', licenseeId).order('created_at', { ascending: false }),
-      supabase.from('receipts').select('*').eq('user_id', licenseeId).order('purchase_date', { ascending: false }).limit(10),
+      supabase.from('receipts').select('*').eq('user_id', licenseeId).order('date', { ascending: false }).limit(10),
       supabase.from('ts_ratios').select('*').eq('user_id', licenseeId).eq('tax_year', currentYear).maybeSingle(),
       supabase.from('family_invitations').select('id').eq('user_id', licenseeId).limit(1),
       supabase.from('business_policies').select('*').eq('user_id', licenseeId).maybeSingle(),
@@ -124,7 +125,7 @@ export default function DashboardPage() {
   const autopayFamilies = families.filter(f => f.autopay_enabled)
 
   const currentYear = new Date().getFullYear()
-  const yearReceipts = receipts.filter(r => r.purchase_date && new Date(r.purchase_date).getFullYear() === currentYear)
+  const yearReceipts = receipts.filter(r => r.date && new Date(r.date).getFullYear() === currentYear)
   const totalDeductions = yearReceipts.reduce((s, r) => s + parseFloat(r.total || 0), 0)
   const monthStart = new Date()
   monthStart.setDate(1)
@@ -154,6 +155,7 @@ export default function DashboardPage() {
   if (families.length === 0 && receipts.length === 0) {
     return (
       <>
+        <InstallBanner />
         <div className="welcome-banner">
           <div className="welcome-text">
             <h2>{greeting}, <em>{firstName}</em> 👋</h2>
@@ -214,6 +216,7 @@ export default function DashboardPage() {
 
   return (
     <>
+      <InstallBanner />
       <div className="welcome-banner">
         <div className="welcome-text">
           <h2>{greeting}, <em>{firstName}</em> 👋</h2>
@@ -442,7 +445,7 @@ export default function DashboardPage() {
                     <div className="receipt-info">
                       <div className="receipt-merchant">{r.merchant || 'Unknown merchant'}</div>
                       <div className="receipt-meta">
-                        <span>{shortDate(r.purchase_date)}</span>
+                        <span>{shortDate(r.date)}</span>
                         {r.category && <span className="receipt-category">{r.category}</span>}
                       </div>
                     </div>
