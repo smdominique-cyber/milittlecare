@@ -525,6 +525,93 @@ textarea.field-input {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* ---- Deduction type toggle ---- */
+.deduction-type-card {
+  padding: var(--space-4);
+  background: var(--clr-cream);
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-md);
+  margin-top: var(--space-2);
+}
+
+.deduction-type-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--clr-ink-mid);
+  margin-bottom: var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.deduction-type-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.deduction-type-btn {
+  padding: var(--space-3);
+  background: var(--clr-white);
+  border: 1.5px solid var(--clr-warm-mid);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: center;
+  transition: all var(--duration-fast) var(--ease-out);
+  font-family: var(--font-body);
+}
+
+.deduction-type-btn:hover {
+  border-color: var(--clr-sage);
+  background: var(--clr-sage-pale);
+}
+
+.deduction-type-btn.active {
+  border-color: var(--clr-sage-dark);
+  background: var(--clr-sage-pale);
+  box-shadow: 0 0 0 3px rgba(92,124,106,0.12);
+}
+
+.deduction-type-title {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--clr-ink);
+  letter-spacing: -0.01em;
+  margin-bottom: 2px;
+}
+
+.deduction-type-desc {
+  font-size: 0.75rem;
+  color: var(--clr-ink-soft);
+  line-height: 1.4;
+}
+
+.deduction-type-btn.active .deduction-type-title {
+  color: var(--clr-sage-dark);
+}
+
+/* Row-level indicator (small pill) */
+.row-type-pill {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.row-type-pill.full {
+  background: var(--clr-success-pale);
+  color: var(--clr-success);
+}
+
+.row-type-pill.shared {
+  background: var(--clr-accent-pale);
+  color: var(--clr-accent);
+}
+
 /* ---- Mobile optimizations ---- */
 @media (max-width: 640px) {
   .upload-zone {
