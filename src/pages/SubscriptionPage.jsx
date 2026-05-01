@@ -161,7 +161,7 @@ export default function SubscriptionPage() {
             <>
               <h2>Your trial has <em>ended</em></h2>
               <p className="sub-hero-desc">
-                Subscribe for $10/month to keep using MI Little Care and never lose your data.
+                Subscribe for $14.99/month to keep using MI Little Care and never lose your data.
                 Cancel anytime.
               </p>
               <button className="sub-hero-button" onClick={startCheckout} disabled={busy}>
@@ -203,7 +203,7 @@ export default function SubscriptionPage() {
           <div className="plan-name">MI Little Care · Provider Plan</div>
 
           <div className="plan-price-row">
-            <span className="plan-price">$10</span>
+            <span className="plan-price">$14.99</span>
             <span className="plan-price-unit">/ month</span>
           </div>
 
