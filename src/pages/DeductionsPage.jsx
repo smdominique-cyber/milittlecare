@@ -56,19 +56,19 @@ export default function DeductionsPage() {
       .from('receipts')
       .select('*')
       .eq('user_id', licenseeId)
-      .order('purchase_date', { ascending: false })
+      .order('date', { ascending: false })
     if (!error) setReceipts(data || [])
     setLoading(false)
   }
 
   // Filter by year
   const yearReceipts = receipts.filter(r => {
-    if (!r.purchase_date) return false
-    return new Date(r.purchase_date).getFullYear() === year
+    if (!r.date) return false
+    return new Date(r.date).getFullYear() === year
   })
 
   // Available years
-  const years = [...new Set(receipts.map(r => r.purchase_date ? new Date(r.purchase_date).getFullYear() : null).filter(Boolean))]
+  const years = [...new Set(receipts.map(r => r.date ? new Date(r.date).getFullYear() : null).filter(Boolean))]
   if (!years.includes(new Date().getFullYear())) years.unshift(new Date().getFullYear())
 
   // Totals
@@ -91,7 +91,7 @@ export default function DeductionsPage() {
     })
   } else {
     yearReceipts.forEach(r => {
-      const m = new Date(r.purchase_date).getMonth()
+      const m = new Date(r.date).getMonth()
       const key = `${m}`
       if (!groups[key]) groups[key] = { items: [], total: 0, label: MONTHS[m], emoji: '📅', month: m }
       groups[key].items.push(r)
@@ -262,7 +262,7 @@ export default function DeductionsPage() {
                     <div className="deduction-info">
                       <div className="deduction-merchant">{r.merchant || 'Unknown merchant'}</div>
                       <div className="deduction-meta">
-                        <span>{r.purchase_date ? new Date(r.purchase_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</span>
+                        <span>{r.date ? new Date(r.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</span>
                         {view === 'month' && r.category && <span>· {r.category}</span>}
                         {r.description && <span>· {r.description.slice(0, 30)}{r.description.length > 30 ? '…' : ''}</span>}
                       </div>
