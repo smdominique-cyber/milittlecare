@@ -176,7 +176,7 @@ export default function HowMoneyWorksPage() {
       </Section>
 
       {/* Section: Your subscription to MI Little Care */}
-      <Section icon={<CreditCard size={22} />} iconClass="sage" title="Your $10/month subscription">
+      <Section icon={<CreditCard size={22} />} iconClass="sage" title="Your $14.99/month subscription">
         <p>
           Your subscription to MI Little Care is also processed through Stripe. We use the
           same secure infrastructure for our own billing.
