@@ -31,7 +31,7 @@ export default function PaywallGate({ children }) {
           </h2>
           <p>
             {sub.isTrialExpired
-              ? 'Subscribe for $10/month to keep using MI Little Care. Your data is safe and waiting for you.'
+              ? 'Subscribe for $14.99/month to keep using MI Little Care. Your data is safe and waiting for you.'
               : 'Re-subscribe to access your account and pick up right where you left off.'}
           </p>
           <button className="plan-cta" onClick={() => navigate('/subscription')} style={{ marginBottom: 'var(--space-3)' }}>
