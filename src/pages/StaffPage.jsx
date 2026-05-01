@@ -324,7 +324,7 @@ export default function StaffPage() {
 
       {/* Pricing notice */}
       <div className="staff-pricing-notice">
-        <strong>Pricing:</strong> Your subscription includes you + 1 staff member. Additional staff add 20% to your subscription. (Not enforced during trial period.)
+        <strong>Pricing:</strong> Your subscription includes you + unlimited staff members during the alpha period. Additional pricing for staff seats may be introduced later — early users will be grandfathered.
       </div>
     </>
   )
