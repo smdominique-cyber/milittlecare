@@ -62,7 +62,7 @@ export default function TermsPage() {
 
         <h3>4. Subscription and Billing</h3>
         <ul>
-          <li>Subscription cost: $10/month</li>
+          <li>Subscription cost: $14.99/month</li>
           <li>Free trial: 30 days (90 days for early users, if applicable)</li>
           <li>Billing is recurring unless canceled</li>
           <li>No refunds for unused time</li>
