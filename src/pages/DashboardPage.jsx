@@ -85,7 +85,7 @@ export default function DashboardPage() {
       supabase.from('families').select('*').eq('user_id', licenseeId),
       supabase.from('invoices').select('*').eq('user_id', licenseeId).order('created_at', { ascending: false }),
       supabase.from('receipts').select('*').eq('user_id', licenseeId).order('date', { ascending: false }).limit(10),
-      supabase.from('ts_ratios').select('*').eq('user_id', licenseeId).eq('tax_year', currentYear).maybeSingle(),
+      supabase.from('ts_ratios').select('*').eq('user_id', licenseeId).eq('year', currentYear).maybeSingle(),
       supabase.from('family_invitations').select('id').eq('user_id', licenseeId).limit(1),
       supabase.from('business_policies').select('*').eq('user_id', licenseeId).maybeSingle(),
     ])
