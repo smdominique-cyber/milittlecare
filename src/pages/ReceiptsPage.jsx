@@ -25,9 +25,15 @@ function categoryEmoji(cat) {
   return map[cat] || '📄'
 }
 
-// Converts any image (including iPhone HEIC) to a JPEG base64 string
-// that Claude's vision API can read
-function fileToBase64(file) {
+// Converts any image (including iPhone HEIC) to a JPEG and returns:
+//   - base64: for Claude's vision API
+//   - mimeType: 'image/jpeg'
+//   - jpegFile: a File object suitable for uploading to storage
+//
+// Uploading the JPEG (not the original) is critical: Chrome/Firefox on desktop
+// can't render HEIC, so the thumbnail would appear broken to anyone viewing
+// the receipts on a laptop even though it looks fine on iOS Safari.
+function fileToJpegPayload(file) {
   return new Promise((resolve, reject) => {
     const img = new Image()
     const reader = new FileReader()
@@ -35,7 +41,6 @@ function fileToBase64(file) {
     reader.onload = (e) => {
       img.onload = () => {
         try {
-          // Draw to canvas, which auto-converts to a readable format
           const canvas = document.createElement('canvas')
           // Cap at 1600px on longest side to keep file size reasonable
           const maxSize = 1600
@@ -52,10 +57,27 @@ function fileToBase64(file) {
           const ctx = canvas.getContext('2d')
           ctx.drawImage(img, 0, 0, width, height)
 
-          // Export as JPEG, which Claude reads reliably
-          const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.85)
-          const base64 = jpegDataUrl.split(',')[1]
-          resolve({ base64, mimeType: 'image/jpeg' })
+          // Produce a JPEG Blob, then read it back as base64 for the AI call.
+          // Using one source of truth (the Blob) means base64 and the uploaded
+          // file are guaranteed to be identical bytes.
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                reject(new Error('Could not convert image. Try a different photo.'))
+                return
+              }
+              const blobReader = new FileReader()
+              blobReader.onload = () => {
+                const base64 = blobReader.result.split(',')[1]
+                const jpegFile = new File([blob], 'receipt.jpg', { type: 'image/jpeg' })
+                resolve({ base64, mimeType: 'image/jpeg', jpegFile })
+              }
+              blobReader.onerror = () => reject(new Error('Could not encode image.'))
+              blobReader.readAsDataURL(blob)
+            },
+            'image/jpeg',
+            0.85
+          )
         } catch (err) {
           reject(err)
         }
@@ -128,6 +150,28 @@ If a field is not visible or unclear, use null. For amounts use numbers only, no
   }
 }
 
+// Receipt thumbnail with graceful fallback. If the stored image_url fails to
+// load (e.g. legacy HEIC files saved before the fix, or any other issue),
+// we hide the broken <img> and show the category emoji instead of letting
+// the browser render the alt text as garbled boxes.
+function ReceiptThumb({ receipt }) {
+  const [errored, setErrored] = useState(false)
+  const showImage = receipt.image_url && !errored
+  return (
+    <div className="receipt-row-thumb">
+      {showImage ? (
+        <img
+          src={receipt.image_url}
+          alt=""
+          onError={() => setErrored(true)}
+        />
+      ) : (
+        categoryEmoji(receipt.category)
+      )}
+    </div>
+  )
+}
+
 export default function ReceiptsPage() {
   const { user } = useAuth()
   const { licenseeId } = useRole()
@@ -166,12 +210,18 @@ export default function ReceiptsPage() {
       return
     }
     setError(null)
-    setImageFile(file)
+    // Show original immediately for snappy UX during the brief conversion.
+    // The preview is replaced with the JPEG version below.
     setImagePreview(URL.createObjectURL(file))
     setStage('scanning')
 
     try {
-      const { base64, mimeType } = await fileToBase64(file)
+      const { base64, mimeType, jpegFile } = await fileToJpegPayload(file)
+      // Store the converted JPEG (not the original). This is what gets
+      // uploaded to Supabase, which means thumbnails render in every browser.
+      setImageFile(jpegFile)
+      setImagePreview(URL.createObjectURL(jpegFile))
+
       const result = await scanReceiptWithAI(base64, mimeType)
       setForm({
         merchant: result.merchant || '',
@@ -212,6 +262,9 @@ export default function ReceiptsPage() {
       let image_path = null
 
       if (imageFile) {
+        // imageFile is always a JPEG now (set in handleFile after conversion),
+        // so the stored extension is always .jpg and the uploaded bytes
+        // render in every browser.
         const ext = imageFile.name.split('.').pop()
         const path = `${user.id}/${Date.now()}.${ext}`
         const { error: uploadError } = await supabase.storage
@@ -497,9 +550,7 @@ export default function ReceiptsPage() {
           ) : (
             filteredReceipts.map(r => (
               <div key={r.id} className="receipt-row">
-                <div className="receipt-row-thumb">
-                  {r.image_url ? <img src={r.image_url} alt={r.merchant} /> : categoryEmoji(r.category)}
-                </div>
+                <ReceiptThumb receipt={r} />
                 <div className="receipt-row-info">
                   <div className="receipt-row-merchant">{r.merchant || 'Unknown merchant'}</div>
                   <div className="receipt-row-meta">
