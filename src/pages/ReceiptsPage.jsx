@@ -269,6 +269,27 @@ export default function ReceiptsPage() {
     setError(null)
   }
 
+  const handleDelete = async (receipt) => {
+    const merchant = receipt.merchant || 'this receipt'
+    const amount = receipt.total || receipt.amount || 0
+    const confirmText = `Delete ${merchant} ($${parseFloat(amount).toFixed(2)})?\n\nThis cannot be undone. The receipt will be removed from your records and any deduction calculations.`
+    if (!window.confirm(confirmText)) return
+
+    const { error } = await supabase
+      .from('receipts')
+      .delete()
+      .eq('id', receipt.id)
+      .eq('user_id', licenseeId)
+
+    if (error) {
+      setError('Failed to delete: ' + error.message)
+      return
+    }
+
+    // Optimistic UI update
+    setReceipts(prev => prev.filter(r => r.id !== receipt.id))
+  }
+
   const filteredReceipts = filter === 'All'
     ? receipts
     : receipts.filter(r => r.category === filter)
@@ -491,6 +512,31 @@ export default function ReceiptsPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
                   <span className="receipt-row-amount">${parseFloat(r.total || r.amount || 0).toFixed(2)}</span>
                   <div className={`receipt-status-dot ${r.status}`} title={r.status} />
+                  <button
+                    onClick={() => handleDelete(r)}
+                    title="Delete this receipt"
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '6px',
+                      borderRadius: 'var(--radius-sm)',
+                      color: 'var(--clr-ink-soft)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      transition: 'all 0.15s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'var(--clr-error-pale, rgba(192,57,43,0.1))'
+                      e.currentTarget.style.color = 'var(--clr-error, #c0392b)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent'
+                      e.currentTarget.style.color = 'var(--clr-ink-soft)'
+                    }}
+                  >
+                    <Trash2 size={15} />
+                  </button>
                 </div>
               </div>
             ))
