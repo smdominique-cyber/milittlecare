@@ -5,7 +5,7 @@ import { notifyStateChange } from '@/lib/notifications'
 import {
   Clock, Calendar, DollarSign, Phone, AlertTriangle,
   Plus, X, Save, Trash2, ChevronDown, ChevronRight, Check,
-  MessageCircle,
+  MessageCircle, Info,
 } from 'lucide-react'
 import '@/styles/business-info.css'
 
@@ -20,20 +20,7 @@ const DAYS = [
 ]
 
 // ─── Floating holiday calculation ──────────────────────────
-//
-// Some holidays move every year (Memorial Day, Labor Day, Thanksgiving).
-// We compute them based on rules instead of hardcoded dates.
-//
-// Each holiday is defined as either:
-//   { type: 'fixed', month, day }                          → e.g. Christmas = Dec 25
-//   { type: 'nth-weekday', month, weekday, n }             → e.g. Labor Day = 1st Monday of Sept
-//   { type: 'last-weekday', month, weekday }               → e.g. Memorial Day = last Monday of May
-//
-// weekday: 0=Sun, 1=Mon, ..., 6=Sat
-
 function nthWeekdayOfMonth(year, month, weekday, n) {
-  // month is 1-indexed (1=Jan, 12=Dec)
-  // Returns Date for the nth occurrence of weekday in that month
   const firstOfMonth = new Date(year, month - 1, 1)
   const firstWeekday = firstOfMonth.getDay()
   const offset = (weekday - firstWeekday + 7) % 7
@@ -42,28 +29,20 @@ function nthWeekdayOfMonth(year, month, weekday, n) {
 }
 
 function lastWeekdayOfMonth(year, month, weekday) {
-  // Last occurrence of weekday in the given month
-  const lastOfMonth = new Date(year, month, 0)  // day 0 of next month = last day of this month
+  const lastOfMonth = new Date(year, month, 0)
   const lastWeekday = lastOfMonth.getDay()
   const offset = (lastWeekday - weekday + 7) % 7
   return new Date(year, month - 1, lastOfMonth.getDate() - offset)
 }
 
 function getHolidayDate(holiday, year) {
-  if (holiday.type === 'fixed') {
-    return new Date(year, holiday.month - 1, holiday.day)
-  }
-  if (holiday.type === 'nth-weekday') {
-    return nthWeekdayOfMonth(year, holiday.month, holiday.weekday, holiday.n)
-  }
-  if (holiday.type === 'last-weekday') {
-    return lastWeekdayOfMonth(year, holiday.month, holiday.weekday)
-  }
+  if (holiday.type === 'fixed') return new Date(year, holiday.month - 1, holiday.day)
+  if (holiday.type === 'nth-weekday') return nthWeekdayOfMonth(year, holiday.month, holiday.weekday, holiday.n)
+  if (holiday.type === 'last-weekday') return lastWeekdayOfMonth(year, holiday.month, holiday.weekday)
   return null
 }
 
 function getNextHolidayDate(holiday) {
-  // Returns the next occurrence (this year if upcoming, otherwise next year)
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const thisYear = today.getFullYear()
@@ -73,7 +52,6 @@ function getNextHolidayDate(holiday) {
 }
 
 function dateToYMD(d) {
-  // Format as YYYY-MM-DD without timezone gymnastics
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
@@ -82,13 +60,61 @@ function dateToYMD(d) {
 
 const COMMON_HOLIDAYS = [
   { name: "New Year's Day",   type: 'fixed',         month: 1,  day: 1 },
-  { name: 'Memorial Day',     type: 'last-weekday',  month: 5,  weekday: 1 },             // last Monday of May
+  { name: 'Memorial Day',     type: 'last-weekday',  month: 5,  weekday: 1 },
   { name: 'Independence Day', type: 'fixed',         month: 7,  day: 4 },
-  { name: 'Labor Day',        type: 'nth-weekday',   month: 9,  weekday: 1, n: 1 },        // 1st Monday of September
-  { name: 'Thanksgiving',     type: 'nth-weekday',   month: 11, weekday: 4, n: 4 },        // 4th Thursday of November
+  { name: 'Labor Day',        type: 'nth-weekday',   month: 9,  weekday: 1, n: 1 },
+  { name: 'Thanksgiving',     type: 'nth-weekday',   month: 11, weekday: 4, n: 4 },
   { name: 'Christmas Eve',    type: 'fixed',         month: 12, day: 24 },
   { name: 'Christmas Day',    type: 'fixed',         month: 12, day: 25 },
   { name: "New Year's Eve",   type: 'fixed',         month: 12, day: 31 },
+]
+
+// ─── Payment method definitions ─────────────────────────────
+const PAYMENT_METHODS_CONFIG = [
+  {
+    key: 'stripe',
+    label: 'Stripe (online card)',
+    emoji: '💳',
+    tracked: true,
+    needsDetails: false,
+    helpText: 'Parents pay invoices through this app. Charges are automatic for autopay families. Counts toward FSA tax statements automatically.',
+  },
+  {
+    key: 'venmo',
+    label: 'Venmo',
+    emoji: '💚',
+    tracked: false,
+    needsDetails: true,
+    placeholder: '@your-venmo-handle',
+    helpText: 'Parents see your Venmo handle and pay you outside this app.',
+  },
+  {
+    key: 'zelle',
+    label: 'Zelle',
+    emoji: '🏦',
+    tracked: false,
+    needsDetails: true,
+    placeholder: 'Email or phone number',
+    helpText: 'Parents see your Zelle contact and send through their bank.',
+  },
+  {
+    key: 'cash',
+    label: 'Cash',
+    emoji: '💵',
+    tracked: false,
+    needsDetails: true,
+    placeholder: 'e.g., Drop off at pickup',
+    helpText: 'Parents see your instructions for cash payments.',
+  },
+  {
+    key: 'check',
+    label: 'Check',
+    emoji: '✉️',
+    tracked: false,
+    needsDetails: true,
+    placeholder: 'e.g., Make out to "Your Name", give at pickup',
+    helpText: 'Parents see who to make the check out to and how to deliver it.',
+  },
 ]
 
 function formatDate(d) {
@@ -137,16 +163,12 @@ export default function BusinessInfoPage() {
     })
     setHours(hoursMap)
     setClosures(closuresResp.data || [])
-    setPolicies(policyResp.data || { user_id: user.id })
+    setPolicies(policyResp.data || { user_id: user.id, payment_methods: {} })
     setLoading(false)
   }
 
-  // ─── Hours ─────────────────
   const updateHour = (day, field, value) => {
-    setHours(h => ({
-      ...h,
-      [day]: { ...h[day], [field]: value },
-    }))
+    setHours(h => ({ ...h, [day]: { ...h[day], [field]: value } }))
   }
 
   const saveHours = async () => {
@@ -179,10 +201,7 @@ export default function BusinessInfoPage() {
         })
         .join(' · ')
       for (const f of families || []) {
-        notifyStateChange('hours_changed', f.id, {
-          providerName: provider,
-          summary,
-        })
+        notifyStateChange('hours_changed', f.id, { providerName: provider, summary })
       }
 
       await loadAll()
@@ -192,7 +211,6 @@ export default function BusinessInfoPage() {
     setSaving(false)
   }
 
-  // ─── Closures ──────────────
   const addClosure = async (closure) => {
     setSaving(true)
     setMessage(null)
@@ -216,11 +234,7 @@ export default function BusinessInfoPage() {
           ? formatD(closure.start_date)
           : `${formatD(closure.start_date)} – ${formatD(closure.end_date)}`
         for (const f of families || []) {
-          notifyStateChange('closure_added', f.id, {
-            providerName: provider,
-            dateRange,
-            reason: closure.reason || '',
-          })
+          notifyStateChange('closure_added', f.id, { providerName: provider, dateRange, reason: closure.reason || '' })
         }
       }
 
@@ -237,9 +251,18 @@ export default function BusinessInfoPage() {
     await loadAll()
   }
 
-  // ─── Policies ──────────────
   const updatePolicy = (field, value) => {
     setPolicies(p => ({ ...p, [field]: value }))
+  }
+
+  const updatePaymentMethod = (key, patch) => {
+    setPolicies(p => ({
+      ...p,
+      payment_methods: {
+        ...(p.payment_methods || {}),
+        [key]: { ...((p.payment_methods || {})[key] || {}), ...patch },
+      },
+    }))
   }
 
   const savePolicies = async () => {
@@ -278,7 +301,6 @@ export default function BusinessInfoPage() {
     setSaving(false)
   }
 
-  // ─── Messaging ──────────────
   const toggleMessaging = async (enabled) => {
     setSaving(true)
     setMessage(null)
@@ -317,6 +339,8 @@ export default function BusinessInfoPage() {
     { id: 'emergency', label: 'Emergency Info', icon: AlertTriangle, done: policies.emergency_set },
     { id: 'messaging', label: 'Parent Messages', icon: MessageCircle, done: !!policies.messaging_enabled },
   ]
+
+  const paymentMethods = policies.payment_methods || {}
 
   return (
     <>
@@ -448,28 +472,98 @@ export default function BusinessInfoPage() {
               </select>
             </div>
 
-            <div className="bi-field">
-              <label>Payment methods accepted</label>
-              <div className="bi-checkbox-row">
-                {['Stripe (online)', 'Venmo', 'Cash', 'Check'].map(method => {
-                  const value = method.toLowerCase().split(' ')[0]
-                  const checked = (policies.payment_methods_accepted || []).includes(value)
+            <div className="bi-fieldset">
+              <label style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', fontWeight: 500, color: 'var(--clr-ink)', display: 'block', marginBottom: 8 }}>
+                Payment methods you accept
+              </label>
+
+              <div style={{
+                background: 'var(--clr-cream)',
+                border: '1px solid var(--clr-warm-mid)',
+                borderRadius: 'var(--radius-md)',
+                padding: 'var(--space-3) var(--space-4)',
+                marginBottom: 'var(--space-4)',
+                fontSize: '0.8125rem',
+                color: 'var(--clr-ink-mid)',
+                lineHeight: 1.55,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <Info size={14} style={{ color: 'var(--clr-sage-dark)', marginTop: 2, flexShrink: 0 }} />
+                  <div>
+                    <strong style={{ color: 'var(--clr-ink)' }}>About off-app payments (Venmo, Zelle, Cash, Check):</strong>
+                    <ul style={{ margin: '6px 0 0', paddingLeft: '1.1rem' }}>
+                      <li>You'll need to <strong>manually mark invoices as paid</strong> when you receive these payments.</li>
+                      <li>They <strong>won't appear on parents' year-end FSA statements automatically</strong> — only Stripe payments do.</li>
+                      <li>Autopay only works with Stripe — parents will need to remember to send payment each week.</li>
+                    </ul>
+                    <p style={{ margin: '8px 0 0' }}>
+                      Stripe handles all of this automatically and gives parents downloadable receipts for FSA, taxes, and reimbursement.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                {PAYMENT_METHODS_CONFIG.map(method => {
+                  const config = paymentMethods[method.key] || { enabled: false, details: '' }
+                  const enabled = !!config.enabled
                   return (
-                    <label key={value} className="bi-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(e) => {
-                          const current = policies.payment_methods_accepted || []
-                          updatePolicy('payment_methods_accepted',
-                            e.target.checked
-                              ? [...current, value]
-                              : current.filter(v => v !== value)
-                          )
-                        }}
-                      />
-                      <span>{method}</span>
-                    </label>
+                    <div
+                      key={method.key}
+                      style={{
+                        border: enabled ? '1px solid var(--clr-sage)' : '1px solid var(--clr-warm-mid)',
+                        background: enabled ? 'white' : 'var(--clr-cream)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: 'var(--space-3) var(--space-4)',
+                        transition: 'border-color 0.15s, background 0.15s',
+                      }}
+                    >
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={enabled}
+                          onChange={(e) => updatePaymentMethod(method.key, { enabled: e.target.checked })}
+                        />
+                        <span style={{ fontSize: '1.125rem' }}>{method.emoji}</span>
+                        <span style={{ fontWeight: 500, color: 'var(--clr-ink)' }}>{method.label}</span>
+                        {method.tracked && (
+                          <span style={{
+                            fontSize: '0.6875rem',
+                            background: 'var(--clr-sage-pale)',
+                            color: 'var(--clr-sage-dark)',
+                            padding: '2px 8px',
+                            borderRadius: 'var(--radius-full)',
+                            fontWeight: 600,
+                            letterSpacing: '0.04em',
+                            textTransform: 'uppercase',
+                          }}>
+                            Auto-tracked
+                          </span>
+                        )}
+                      </label>
+
+                      {enabled && method.needsDetails && (
+                        <div style={{ marginTop: 10, marginLeft: 26 }}>
+                          <input
+                            type="text"
+                            value={config.details || ''}
+                            onChange={(e) => updatePaymentMethod(method.key, { details: e.target.value })}
+                            placeholder={method.placeholder}
+                            className="bi-input"
+                            style={{ marginBottom: 4 }}
+                          />
+                          <p style={{ fontSize: '0.75rem', color: 'var(--clr-ink-soft)', margin: 0, lineHeight: 1.45 }}>
+                            {method.helpText}
+                          </p>
+                        </div>
+                      )}
+
+                      {enabled && !method.needsDetails && (
+                        <p style={{ fontSize: '0.75rem', color: 'var(--clr-ink-soft)', margin: '8px 0 0 26px', lineHeight: 1.45 }}>
+                          {method.helpText}
+                        </p>
+                      )}
+                    </div>
                   )
                 })}
               </div>
@@ -669,16 +763,12 @@ function ClosuresSection({ closures, onAdd, onDelete, saving }) {
 
   const submit = async () => {
     if (!form.start_date) return
-    await onAdd({
-      ...form,
-      end_date: form.end_date || form.start_date,
-    })
+    await onAdd({ ...form, end_date: form.end_date || form.start_date })
     setForm({ closure_type: 'holiday', is_recurring: true, start_date: '', end_date: '', reason: '' })
     setShowForm(false)
   }
 
   const addCommonHoliday = async (h) => {
-    // Use the smart date calculation: next occurrence (this year if upcoming, else next year)
     const nextDate = getNextHolidayDate(h)
     const dateStr = dateToYMD(nextDate)
     await onAdd({
@@ -696,7 +786,6 @@ function ClosuresSection({ closures, onAdd, onDelete, saving }) {
   const recurring = closures.filter(c => c.is_recurring)
   const past = closures.filter(c => c.end_date < today && !c.is_recurring)
 
-  // Helper to check if a holiday already exists in closures (by name match)
   const isHolidayAdded = (holiday) => {
     return closures.some(c => c.is_recurring && c.reason === holiday.name)
   }
@@ -731,10 +820,7 @@ function ClosuresSection({ closures, onAdd, onDelete, saving }) {
         </div>
       </div>
 
-      <button
-        className="bi-add-btn"
-        onClick={() => setShowForm(!showForm)}
-      >
+      <button className="bi-add-btn" onClick={() => setShowForm(!showForm)}>
         <Plus size={14} /> Add custom closure
       </button>
 
@@ -809,27 +895,21 @@ function ClosuresSection({ closures, onAdd, onDelete, saving }) {
       {recurring.length > 0 && (
         <div className="bi-closures-group">
           <div className="bi-closures-group-title">🔁 Recurring annually ({recurring.length})</div>
-          {recurring.map(c => (
-            <ClosureItem key={c.id} closure={c} onDelete={onDelete} recurring />
-          ))}
+          {recurring.map(c => <ClosureItem key={c.id} closure={c} onDelete={onDelete} recurring />)}
         </div>
       )}
 
       {upcoming.length > 0 && (
         <div className="bi-closures-group">
           <div className="bi-closures-group-title">📅 Upcoming closures ({upcoming.length})</div>
-          {upcoming.map(c => (
-            <ClosureItem key={c.id} closure={c} onDelete={onDelete} />
-          ))}
+          {upcoming.map(c => <ClosureItem key={c.id} closure={c} onDelete={onDelete} />)}
         </div>
       )}
 
       {past.length > 0 && (
         <div className="bi-closures-group">
           <div className="bi-closures-group-title">📜 Past closures ({past.length})</div>
-          {past.slice(0, 5).map(c => (
-            <ClosureItem key={c.id} closure={c} onDelete={onDelete} muted />
-          ))}
+          {past.slice(0, 5).map(c => <ClosureItem key={c.id} closure={c} onDelete={onDelete} muted />)}
         </div>
       )}
 
