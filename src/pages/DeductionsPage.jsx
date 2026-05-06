@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useRole } from '@/hooks/useRole'
 import { supabase } from '@/lib/supabase'
-import { ChevronRight, Pencil, Trash2, X, Save, LayoutGrid, Calendar, ScanLine, Download, Loader } from 'lucide-react'
+import { ChevronRight, Pencil, Trash2, X, Save, LayoutGrid, Calendar, ScanLine } from 'lucide-react'
 import TaxExportButton from '@/components/ui/TaxExportButton'
 import '@/styles/deductions.css'
 
@@ -246,39 +246,11 @@ export default function DeductionsPage() {
             <Calendar size={14} /> By Month
           </button>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <button
-            onClick={handleExport}
-            disabled={exporting || count === 0}
-            title={count === 0 ? 'Add some receipts first' : `Download tax data for ${year} as Excel`}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '8px 14px',
-              background: count === 0 ? 'var(--clr-warm-mid)' : 'var(--clr-sage-dark)',
-              color: 'white',
-              border: 'none',
-              borderRadius: 'var(--radius-md)',
-              fontSize: '0.8125rem',
-              fontWeight: 500,
-              cursor: count === 0 ? 'not-allowed' : 'pointer',
-              opacity: exporting ? 0.7 : 1,
-              fontFamily: 'inherit',
-            }}
-          >
-            {exporting ? (
-              <><Loader size={13} className="spin" /> Exporting…</>
-            ) : (
-              <><Download size={13} /> Export {year} tax data</>
-            )}
-          </button>
-          <div className="year-selector">
-            <span>Tax year</span>
-            <select value={year} onChange={(e) => setYear(parseInt(e.target.value))}>
-              {years.sort((a, b) => b - a).map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
-          </div>
+        <div className="year-selector">
+          <span>Tax year</span>
+          <select value={year} onChange={(e) => setYear(parseInt(e.target.value))}>
+            {years.sort((a, b) => b - a).map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
         </div>
       </div>
 
