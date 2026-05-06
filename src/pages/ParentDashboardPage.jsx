@@ -21,6 +21,9 @@ function shortDate(d) {
   return new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+// Local storage key for the password banner dismissal
+const PWBANNER_DISMISSED_KEY = 'mlc_pw_banner_dismissed_v1'
+
 export default function ParentDashboardPage() {
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
@@ -32,8 +35,16 @@ export default function ParentDashboardPage() {
   const [providers, setProviders] = useState({})
   const [paying, setPaying] = useState(null)
   const [message, setMessage] = useState(null)
-  const [enrollingFamily, setEnrollingFamily] = useState(null)  // family object when modal open
+  const [enrollingFamily, setEnrollingFamily] = useState(null)
   const [disabling, setDisabling] = useState(false)
+
+  // Password setup state
+  const [hasPassword, setHasPassword] = useState(null)  // null = unknown
+  const [bannerDismissed, setBannerDismissed] = useState(false)
+  const [showPasswordModal, setShowPasswordModal] = useState(false)
+  const [pwFields, setPwFields] = useState({ password: '', confirm: '' })
+  const [pwSaving, setPwSaving] = useState(false)
+  const [pwMessage, setPwMessage] = useState(null)
 
   useEffect(() => {
     if (params.get('paid') === '1') {
@@ -48,21 +59,41 @@ export default function ParentDashboardPage() {
       setMessage({ type: 'info', text: 'Payment was canceled. You can try again anytime.' })
     }
 
+    setBannerDismissed(localStorage.getItem(PWBANNER_DISMISSED_KEY) === '1')
+
     const getSession = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       setSession(session)
       if (!session) { setLoading(false); return }
       await loadData(session.user.id)
+      await checkHasPassword(session.user.id)
     }
     getSession()
 
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
-      if (session) loadData(session.user.id)
+      if (session) {
+        loadData(session.user.id)
+        checkHasPassword(session.user.id)
+      }
     })
     return () => authListener?.subscription?.unsubscribe()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  async function checkHasPassword(userId) {
+    // Check identities — if there's an identity with provider='email' and the
+    // user has a password, identity_data.email_verified will exist. Simpler:
+    // we use a stored flag on parent_profiles. If you don't have one, we
+    // fall back to: the user can always SET a password; we just won't show the
+    // banner if they've explicitly dismissed it OR the profile flag is true.
+    const { data } = await supabase
+      .from('parent_profiles')
+      .select('has_password')
+      .eq('id', userId)
+      .maybeSingle()
+    setHasPassword(!!data?.has_password)
+  }
 
   async function loadData(parentId) {
     setLoading(true)
@@ -155,6 +186,48 @@ export default function ParentDashboardPage() {
     setDisabling(false)
   }
 
+  // ─── Password handling ─────────────────
+  const dismissBanner = () => {
+    localStorage.setItem(PWBANNER_DISMISSED_KEY, '1')
+    setBannerDismissed(true)
+  }
+
+  const openPasswordModal = () => {
+    setPwFields({ password: '', confirm: '' })
+    setPwMessage(null)
+    setShowPasswordModal(true)
+  }
+
+  const savePassword = async () => {
+    setPwMessage(null)
+    if (pwFields.password.length < 8) {
+      setPwMessage({ type: 'error', text: 'Password must be at least 8 characters.' })
+      return
+    }
+    if (pwFields.password !== pwFields.confirm) {
+      setPwMessage({ type: 'error', text: "Passwords don't match." })
+      return
+    }
+    setPwSaving(true)
+    const { error } = await supabase.auth.updateUser({ password: pwFields.password })
+    if (error) {
+      setPwMessage({ type: 'error', text: error.message })
+      setPwSaving(false)
+      return
+    }
+    // Mark password as set on profile (best-effort; fails silently if column missing)
+    if (session?.user?.id) {
+      await supabase
+        .from('parent_profiles')
+        .update({ has_password: true })
+        .eq('id', session.user.id)
+    }
+    setHasPassword(true)
+    setPwSaving(false)
+    setShowPasswordModal(false)
+    setMessage({ type: 'success', text: '✓ Password saved. You can now sign in with email + password.' })
+  }
+
   // ─── Not authenticated ─────────────────
   if (!session && !loading) {
     return (
@@ -162,7 +235,14 @@ export default function ParentDashboardPage() {
         <div className="parent-card">
           <div className="parent-icon error"><Lock size={28} /></div>
           <h2>Sign in required</h2>
-          <p>Please use the magic link from your provider's invitation email to access your family portal.</p>
+          <p>Please sign in with your password or use a magic link from your provider's invitation email.</p>
+          <button
+            className="parent-cta"
+            onClick={() => navigate('/login')}
+            style={{ marginTop: 16 }}
+          >
+            Go to sign in
+          </button>
           <p style={{ marginTop: 16, fontSize: 14, color: 'var(--clr-ink-soft)' }}>
             Lost your invitation? Contact your child care provider to send a new one.
           </p>
@@ -212,6 +292,9 @@ export default function ParentDashboardPage() {
   const primaryProvider = providers[primaryFamily.user_id]
   const primaryProviderName = primaryProvider?.daycare_name || primaryProvider?.full_name || 'Your provider'
 
+  // Show password banner if: we know they don't have one AND they haven't dismissed it
+  const showPasswordBanner = hasPassword === false && !bannerDismissed
+
   return (
     <div className="parent-shell">
       <div className="parent-container">
@@ -231,6 +314,62 @@ export default function ParentDashboardPage() {
         {message && (
           <div className={`parent-message ${message.type}`}>
             <span>{message.text}</span>
+          </div>
+        )}
+
+        {/* Password setup banner */}
+        {showPasswordBanner && (
+          <div style={{
+            background: 'linear-gradient(135deg, #faf6ec 0%, #f4eee2 100%)',
+            border: '1px solid var(--clr-warm-mid)',
+            borderRadius: 'var(--radius-lg)',
+            padding: 14,
+            marginBottom: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+          }}>
+            <Lock size={20} style={{ color: 'var(--clr-sage-dark)', flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--font-display)', fontSize: '0.9375rem', color: 'var(--clr-ink)', marginBottom: 2 }}>
+                Skip the email — set a password
+              </div>
+              <div style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-mid)', lineHeight: 1.4 }}>
+                Sign in faster next time without waiting for a magic link.
+              </div>
+            </div>
+            <button
+              onClick={openPasswordModal}
+              style={{
+                background: 'var(--clr-sage-dark)',
+                border: 'none',
+                color: 'white',
+                padding: '8px 14px',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.8125rem',
+                fontWeight: 500,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
+            >
+              Set password
+            </button>
+            <button
+              onClick={dismissBanner}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--clr-ink-soft)',
+                padding: 4,
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+              aria-label="Dismiss"
+              title="Dismiss"
+            >
+              <X size={16} />
+            </button>
           </div>
         )}
 
@@ -377,32 +516,69 @@ export default function ParentDashboardPage() {
         {/* Business info from provider */}
         <BusinessInfoSection providerId={primaryFamily.user_id} providerName={primaryProviderName} />
 
-        {/* My Family quick link */}
-        <button
-          onClick={() => navigate('/parent/family')}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            width: '100%',
-            padding: '14px 16px',
-            background: 'white',
-            border: '1px solid var(--clr-warm-mid)',
-            borderRadius: 'var(--radius-lg)',
-            cursor: 'pointer',
-            textAlign: 'left',
-            fontFamily: 'var(--font-body)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Settings size={16} style={{ color: 'var(--clr-sage-dark)' }} />
-            <div>
-              <div style={{ fontSize: '0.9375rem', fontWeight: 500, color: 'var(--clr-ink)' }}>My Family</div>
-              <div style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)' }}>Update contact info, allergies, emergency contacts</div>
+        {/* Account & security */}
+        <section className="parent-section">
+          <h3 className="parent-section-title">Account</h3>
+          <button
+            onClick={openPasswordModal}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: '100%',
+              padding: '14px 16px',
+              background: 'white',
+              border: '1px solid var(--clr-warm-mid)',
+              borderRadius: 'var(--radius-lg)',
+              cursor: 'pointer',
+              textAlign: 'left',
+              fontFamily: 'var(--font-body)',
+              marginBottom: 8,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Lock size={16} style={{ color: 'var(--clr-sage-dark)' }} />
+              <div>
+                <div style={{ fontSize: '0.9375rem', fontWeight: 500, color: 'var(--clr-ink)' }}>
+                  {hasPassword ? 'Change password' : 'Set a password'}
+                </div>
+                <div style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)' }}>
+                  {hasPassword
+                    ? 'Update your sign-in password'
+                    : 'Sign in faster without waiting for a magic link'}
+                </div>
+              </div>
             </div>
-          </div>
-          <ChevronRight size={16} style={{ color: 'var(--clr-ink-soft)' }} />
-        </button>
+            <ChevronRight size={16} style={{ color: 'var(--clr-ink-soft)' }} />
+          </button>
+
+          {/* My Family quick link */}
+          <button
+            onClick={() => navigate('/parent/family')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: '100%',
+              padding: '14px 16px',
+              background: 'white',
+              border: '1px solid var(--clr-warm-mid)',
+              borderRadius: 'var(--radius-lg)',
+              cursor: 'pointer',
+              textAlign: 'left',
+              fontFamily: 'var(--font-body)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Settings size={16} style={{ color: 'var(--clr-sage-dark)' }} />
+              <div>
+                <div style={{ fontSize: '0.9375rem', fontWeight: 500, color: 'var(--clr-ink)' }}>My Family</div>
+                <div style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)' }}>Update contact info, allergies, emergency contacts</div>
+              </div>
+            </div>
+            <ChevronRight size={16} style={{ color: 'var(--clr-ink-soft)' }} />
+          </button>
+        </section>
 
         <div className="parent-trust-row">
           <Shield size={14} />
@@ -418,6 +594,103 @@ export default function ParentDashboardPage() {
           onClose={() => setEnrollingFamily(null)}
           onEnrolled={handleAutopayEnrolled}
         />
+      )}
+
+      {/* Password modal */}
+      {showPasswordModal && (
+        <div
+          onClick={() => !pwSaving && setShowPasswordModal(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 20, 17, 0.55)',
+            zIndex: 100,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'white',
+              borderRadius: 'var(--radius-lg)',
+              padding: 24,
+              width: '100%',
+              maxWidth: 420,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.125rem', margin: 0, color: 'var(--clr-ink)' }}>
+                {hasPassword ? 'Change password' : 'Set a password'}
+              </h3>
+              <button
+                onClick={() => !pwSaving && setShowPasswordModal(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--clr-ink-soft)', cursor: 'pointer', padding: 4 }}
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p style={{ fontSize: '0.875rem', color: 'var(--clr-ink-mid)', marginTop: 0, marginBottom: 16, lineHeight: 1.5 }}>
+              {hasPassword
+                ? 'Enter a new password. You can still use a magic link anytime.'
+                : 'Set a password so you can sign in without waiting for a magic link. You can still use a magic link if you forget it.'}
+            </p>
+            <label className="parent-label">New password</label>
+            <input
+              className="parent-input"
+              type="password"
+              autoComplete="new-password"
+              value={pwFields.password}
+              onChange={(e) => setPwFields(f => ({ ...f, password: e.target.value }))}
+              placeholder="At least 8 characters"
+              disabled={pwSaving}
+            />
+            <label className="parent-label" style={{ marginTop: 12 }}>Confirm password</label>
+            <input
+              className="parent-input"
+              type="password"
+              autoComplete="new-password"
+              value={pwFields.confirm}
+              onChange={(e) => setPwFields(f => ({ ...f, confirm: e.target.value }))}
+              placeholder="Type it again"
+              disabled={pwSaving}
+            />
+            {pwMessage && (
+              <div className={pwMessage.type === 'error' ? 'parent-error' : 'parent-message'} style={{ marginTop: 12 }}>
+                <AlertCircle size={14} /> {pwMessage.text}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
+              <button
+                onClick={() => setShowPasswordModal(false)}
+                disabled={pwSaving}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid var(--clr-warm-mid)',
+                  color: 'var(--clr-ink-mid)',
+                  padding: '10px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  cursor: 'pointer',
+                  fontFamily: 'var(--font-body)',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={savePassword}
+                disabled={pwSaving || !pwFields.password || !pwFields.confirm}
+                className="parent-cta"
+                style={{ flex: '0 0 auto', width: 'auto', padding: '10px 20px' }}
+              >
+                {pwSaving ? 'Saving…' : 'Save password'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
