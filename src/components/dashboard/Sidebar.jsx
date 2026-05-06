@@ -1,6 +1,8 @@
+import { useState, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useRole } from '@/hooks/useRole'
+import { supabase } from '@/lib/supabase'
 import { InstallLink } from '@/components/ui/InstallBanner'
 import {
   LayoutDashboard,
@@ -17,43 +19,8 @@ import {
   Building2,
   UserCog,
   MessageSquare,
+  MessageCircle,
 } from 'lucide-react'
-
-// Each item has an optional `roles` array of which roles see it.
-// Items without `roles` are visible to everyone.
-const NAV_ITEMS = [
-  {
-    section: 'Overview',
-    items: [
-      { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
-    ],
-  },
-  {
-    section: 'Revenue',
-    items: [
-      { label: 'Families', icon: Users, path: '/families' },
-      { label: 'Billing', icon: DollarSign, path: '/billing', roles: ['licensee', 'adult_staff'] },
-    ],
-  },
-  {
-    section: 'Tax Tools',
-    items: [
-      { label: 'Receipts', icon: Receipt, path: '/receipts', roles: ['licensee', 'adult_staff'] },
-      { label: 'Deductions', icon: Calculator, path: '/deductions', roles: ['licensee', 'adult_staff', 'view_only'] },
-      { label: 'T/S Ratio', icon: BarChart2, path: '/ts-ratio', roles: ['licensee', 'adult_staff', 'view_only'] },
-    ],
-  },
-  {
-    section: 'Settings',
-    items: [
-      { label: 'Business Info', icon: Building2, path: '/business-info', roles: ['licensee'] },
-      { label: 'Team', icon: UserCog, path: '/staff', roles: ['licensee'] },
-      { label: 'Subscription', icon: CreditCard, path: '/subscription', roles: ['licensee'] },
-      { label: 'How Money Works', icon: Shield, path: '/how-money-works' },
-      { label: 'Contact / Support', icon: MessageSquare, path: '/contact' },
-    ],
-  },
-]
 
 function getInitials(name) {
   if (!name) return '?'
@@ -67,12 +34,67 @@ function getInitials(name) {
 
 export default function Sidebar({ isOpen = false }) {
   const { user, signOut } = useAuth()
-  const { role, isLicensee } = useRole()
+  const { role, isLicensee, licenseeId } = useRole()
   const navigate = useNavigate()
+  const [messagingEnabled, setMessagingEnabled] = useState(false)
 
   const fullName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'You'
   const email = user?.email || ''
   const initials = getInitials(fullName)
+
+  // Check whether messaging is enabled for this provider
+  useEffect(() => {
+    if (!licenseeId) return
+    let cancelled = false
+    async function check() {
+      const { data } = await supabase
+        .from('business_policies')
+        .select('messaging_enabled')
+        .eq('user_id', licenseeId)
+        .maybeSingle()
+      if (!cancelled) setMessagingEnabled(!!data?.messaging_enabled)
+    }
+    check()
+    return () => { cancelled = true }
+  }, [licenseeId])
+
+  // Build nav items dynamically so we can conditionally include Messages
+  const NAV_ITEMS = [
+    {
+      section: 'Overview',
+      items: [
+        { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
+      ],
+    },
+    {
+      section: 'Revenue',
+      items: [
+        { label: 'Families', icon: Users, path: '/families' },
+        { label: 'Billing', icon: DollarSign, path: '/billing', roles: ['licensee', 'adult_staff'] },
+        ...(messagingEnabled
+          ? [{ label: 'Messages', icon: MessageCircle, path: '/messages', roles: ['licensee', 'adult_staff'] }]
+          : []),
+      ],
+    },
+    {
+      section: 'Tax Tools',
+      items: [
+        { label: 'Receipts', icon: Receipt, path: '/receipts', roles: ['licensee', 'adult_staff'] },
+        { label: 'Deductions', icon: Calculator, path: '/deductions', roles: ['licensee', 'adult_staff', 'view_only'] },
+        { label: 'T/S Ratio', icon: BarChart2, path: '/ts-ratio', roles: ['licensee', 'adult_staff', 'view_only'] },
+      ],
+    },
+    {
+      section: 'Settings',
+      items: [
+        { label: 'Business Info', icon: Building2, path: '/business-info', roles: ['licensee'] },
+        { label: 'Team', icon: UserCog, path: '/staff', roles: ['licensee'] },
+        { label: 'Subscription', icon: CreditCard, path: '/subscription', roles: ['licensee'] },
+        { label: 'How Money Works', icon: Shield, path: '/how-money-works' },
+        { label: 'Contact / Support', icon: MessageSquare, path: '/contact' },
+      ],
+    },
+  ]
 
   const handleSignOut = async () => {
     await signOut()
