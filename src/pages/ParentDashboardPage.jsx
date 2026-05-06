@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, CreditCard, X, Clock, Phone, ChevronDown, ChevronUp, Info, Settings, ChevronRight } from 'lucide-react'
+import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, CreditCard, X, Clock, Phone, ChevronDown, ChevronUp, Info, Settings, ChevronRight, MessageCircle } from 'lucide-react'
 import AutopayEnrollment from '@/components/parent/AutopayEnrollment'
 import BusinessInfoSection from '@/components/parent/BusinessInfoSection'
 import InstallBanner from '@/components/ui/InstallBanner'
@@ -82,11 +82,6 @@ export default function ParentDashboardPage() {
   }, [])
 
   async function checkHasPassword(userId) {
-    // Check identities — if there's an identity with provider='email' and the
-    // user has a password, identity_data.email_verified will exist. Simpler:
-    // we use a stored flag on parent_profiles. If you don't have one, we
-    // fall back to: the user can always SET a password; we just won't show the
-    // banner if they've explicitly dismissed it OR the profile flag is true.
     const { data } = await supabase
       .from('parent_profiles')
       .select('has_password')
@@ -215,7 +210,6 @@ export default function ParentDashboardPage() {
       setPwSaving(false)
       return
     }
-    // Mark password as set on profile (best-effort; fails silently if column missing)
     if (session?.user?.id) {
       await supabase
         .from('parent_profiles')
@@ -519,6 +513,35 @@ export default function ParentDashboardPage() {
         {/* Account & security */}
         <section className="parent-section">
           <h3 className="parent-section-title">Account</h3>
+
+          {/* Messages link */}
+          <button
+            onClick={() => navigate('/parent/messages')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: '100%',
+              padding: '14px 16px',
+              background: 'white',
+              border: '1px solid var(--clr-warm-mid)',
+              borderRadius: 'var(--radius-lg)',
+              cursor: 'pointer',
+              textAlign: 'left',
+              fontFamily: 'var(--font-body)',
+              marginBottom: 8,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <MessageCircle size={16} style={{ color: 'var(--clr-sage-dark)' }} />
+              <div>
+                <div style={{ fontSize: '0.9375rem', fontWeight: 500, color: 'var(--clr-ink)' }}>Messages</div>
+                <div style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)' }}>View updates and photos from {primaryProviderName}</div>
+              </div>
+            </div>
+            <ChevronRight size={16} style={{ color: 'var(--clr-ink-soft)' }} />
+          </button>
+
           <button
             onClick={openPasswordModal}
             style={{
