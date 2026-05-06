@@ -350,7 +350,7 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
         await onChange()
         onClose()
       }
-} else {
+  } else {
       await supabase.from('families').update(payload).eq('id', family.id)
       setSaving(false)
       await onChange()
