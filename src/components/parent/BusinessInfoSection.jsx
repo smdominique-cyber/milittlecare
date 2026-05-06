@@ -1,9 +1,19 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { Clock, Calendar, DollarSign, AlertTriangle, ChevronDown, Info } from 'lucide-react'
+import { Clock, Calendar, DollarSign, AlertTriangle, ChevronDown, Info, CreditCard } from 'lucide-react'
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const FULL_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+// Display config for payment methods (mirrors PAYMENT_METHODS_CONFIG in BusinessInfoPage)
+const PAYMENT_METHOD_DISPLAY = {
+  stripe: { label: 'Stripe (online card)', emoji: '💳', tracked: true,
+            description: 'Pay invoices directly in this app — counts toward FSA & tax statements.' },
+  venmo:  { label: 'Venmo',                emoji: '💚', tracked: false },
+  zelle:  { label: 'Zelle',                emoji: '🏦', tracked: false },
+  cash:   { label: 'Cash',                 emoji: '💵', tracked: false },
+  check:  { label: 'Check',                emoji: '✉️', tracked: false },
+}
 
 function formatTime(t) {
   if (!t) return ''
@@ -51,8 +61,42 @@ export default function BusinessInfoSection({ providerId, providerName }) {
     setLoading(false)
   }
 
+  // Normalize payment methods from new JSONB or fall back to legacy text[] array
+  const paymentMethods = (() => {
+    if (!policies) return []
+    const result = []
+
+    // New format: payment_methods JSONB { stripe: { enabled, details }, ... }
+    if (policies.payment_methods && typeof policies.payment_methods === 'object' && Object.keys(policies.payment_methods).length > 0) {
+      Object.entries(policies.payment_methods).forEach(([key, config]) => {
+        if (config?.enabled && PAYMENT_METHOD_DISPLAY[key]) {
+          result.push({
+            key,
+            ...PAYMENT_METHOD_DISPLAY[key],
+            details: config.details || '',
+          })
+        }
+      })
+      return result
+    }
+
+    // Legacy fallback: payment_methods_accepted text[]
+    if (Array.isArray(policies.payment_methods_accepted)) {
+      policies.payment_methods_accepted.forEach(key => {
+        if (PAYMENT_METHOD_DISPLAY[key]) {
+          result.push({
+            key,
+            ...PAYMENT_METHOD_DISPLAY[key],
+            details: '',
+          })
+        }
+      })
+    }
+    return result
+  })()
+
   // Don't show anything if provider hasn't set up any info
-  const hasAnyInfo = hours.length > 0 || closures.length > 0 || policies?.emergency_procedures || policies?.payment_due_day
+  const hasAnyInfo = hours.length > 0 || closures.length > 0 || policies?.emergency_procedures || policies?.payment_due_day || paymentMethods.length > 0
 
   if (loading || !hasAnyInfo) return null
 
@@ -73,7 +117,6 @@ export default function BusinessInfoSection({ providerId, providerName }) {
 
   const upcomingClosures = closures
     .filter(c => {
-      // For recurring holidays, compute this year's instance
       if (c.is_recurring) {
         const month = c.start_date.split('-')[1]
         const day = c.start_date.split('-')[2]
@@ -87,7 +130,6 @@ export default function BusinessInfoSection({ providerId, providerName }) {
       return c.end_date >= todayStr && c.start_date <= futureStr
     })
     .map(c => {
-      // Normalize to this year's date for sort/display
       if (c.is_recurring) {
         const month = c.start_date.split('-')[1]
         const day = c.start_date.split('-')[2]
@@ -170,7 +212,86 @@ export default function BusinessInfoSection({ providerId, providerName }) {
             </div>
           )}
 
-          {/* Payment policies */}
+          {/* Payment methods (NEW) */}
+          {paymentMethods.length > 0 && (
+            <div className="parent-info-block">
+              <div className="parent-info-block-title">
+                <CreditCard size={14} /> How to pay {providerName}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                {paymentMethods.map(method => (
+                  <div
+                    key={method.key}
+                    style={{
+                      background: 'white',
+                      border: '1px solid var(--clr-warm-mid)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '10px 12px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '1.0625rem' }}>{method.emoji}</span>
+                      <span style={{ fontWeight: 500, color: 'var(--clr-ink)', fontSize: '0.9375rem' }}>
+                        {method.label}
+                      </span>
+                      {method.tracked && (
+                        <span style={{
+                          fontSize: '0.6875rem',
+                          background: 'var(--clr-sage-pale)',
+                          color: 'var(--clr-sage-dark)',
+                          padding: '2px 8px',
+                          borderRadius: 'var(--radius-full)',
+                          fontWeight: 600,
+                          letterSpacing: '0.04em',
+                          textTransform: 'uppercase',
+                        }}>
+                          Auto-tracked
+                        </span>
+                      )}
+                    </div>
+                    {method.details && (
+                      <div style={{
+                        marginTop: 6,
+                        marginLeft: 26,
+                        fontSize: '0.875rem',
+                        color: 'var(--clr-ink-mid)',
+                        wordBreak: 'break-word',
+                      }}>
+                        {method.details}
+                      </div>
+                    )}
+                    {method.key === 'stripe' && method.description && (
+                      <div style={{
+                        marginTop: 6,
+                        marginLeft: 26,
+                        fontSize: '0.78125rem',
+                        color: 'var(--clr-ink-soft)',
+                        lineHeight: 1.5,
+                      }}>
+                        {method.description}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {/* Educational footnote — only show if any non-Stripe methods are enabled */}
+              {paymentMethods.some(m => !m.tracked) && (
+                <div style={{
+                  marginTop: 10,
+                  padding: '10px 12px',
+                  background: 'var(--clr-cream)',
+                  borderRadius: 'var(--radius-md)',
+                  fontSize: '0.78125rem',
+                  color: 'var(--clr-ink-mid)',
+                  lineHeight: 1.55,
+                }}>
+                  <strong style={{ color: 'var(--clr-ink)' }}>Note:</strong> Payments made via Venmo, Zelle, cash, or check are tracked manually by your provider. They <strong>won't appear automatically on your year-end FSA statement</strong> — only Stripe payments do. Ask your provider for a written receipt if you need one for FSA reimbursement.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Payment policies (existing) */}
           {(policies?.payment_due_day || policies?.late_fee_enabled || policies?.late_pickup_fee_enabled) && (
             <div className="parent-info-block">
               <div className="parent-info-block-title">
