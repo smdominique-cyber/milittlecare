@@ -28,6 +28,8 @@ import InviteAcceptPage from '@/pages/InviteAcceptPage'
 import StaffInviteAcceptPage from '@/pages/StaffInviteAcceptPage'
 import ParentDashboardPage from '@/pages/ParentDashboardPage'
 import ParentMyFamilyPage from '@/pages/ParentMyFamilyPage'
+import MessagesPage from '@/pages/MessagesPage'
+import MessageThreadPage from '@/pages/MessageThreadPage'
 import {
   ReportsPage,
   SettingsPage,
@@ -80,6 +82,8 @@ export default function App() {
                   <Route path="ts-ratio" element={<TSRatioPage />} />
                   <Route path="families" element={<FamiliesPage />} />
                   <Route path="billing" element={<BillingPage />} />
+                  <Route path="messages" element={<MessagesPage />} />
+                  <Route path="messages/:childId" element={<MessageThreadPage />} />
                   <Route path="reports" element={<ReportsPage />} />
                   <Route path="settings" element={<SettingsPage />} />
                   <Route path="subscription" element={<SubscriptionPage />} />
