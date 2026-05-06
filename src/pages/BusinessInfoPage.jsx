@@ -19,15 +19,76 @@ const DAYS = [
   { value: 6, label: 'Saturday', short: 'Sat' },
 ]
 
+// ─── Floating holiday calculation ──────────────────────────
+//
+// Some holidays move every year (Memorial Day, Labor Day, Thanksgiving).
+// We compute them based on rules instead of hardcoded dates.
+//
+// Each holiday is defined as either:
+//   { type: 'fixed', month, day }                          → e.g. Christmas = Dec 25
+//   { type: 'nth-weekday', month, weekday, n }             → e.g. Labor Day = 1st Monday of Sept
+//   { type: 'last-weekday', month, weekday }               → e.g. Memorial Day = last Monday of May
+//
+// weekday: 0=Sun, 1=Mon, ..., 6=Sat
+
+function nthWeekdayOfMonth(year, month, weekday, n) {
+  // month is 1-indexed (1=Jan, 12=Dec)
+  // Returns Date for the nth occurrence of weekday in that month
+  const firstOfMonth = new Date(year, month - 1, 1)
+  const firstWeekday = firstOfMonth.getDay()
+  const offset = (weekday - firstWeekday + 7) % 7
+  const day = 1 + offset + (n - 1) * 7
+  return new Date(year, month - 1, day)
+}
+
+function lastWeekdayOfMonth(year, month, weekday) {
+  // Last occurrence of weekday in the given month
+  const lastOfMonth = new Date(year, month, 0)  // day 0 of next month = last day of this month
+  const lastWeekday = lastOfMonth.getDay()
+  const offset = (lastWeekday - weekday + 7) % 7
+  return new Date(year, month - 1, lastOfMonth.getDate() - offset)
+}
+
+function getHolidayDate(holiday, year) {
+  if (holiday.type === 'fixed') {
+    return new Date(year, holiday.month - 1, holiday.day)
+  }
+  if (holiday.type === 'nth-weekday') {
+    return nthWeekdayOfMonth(year, holiday.month, holiday.weekday, holiday.n)
+  }
+  if (holiday.type === 'last-weekday') {
+    return lastWeekdayOfMonth(year, holiday.month, holiday.weekday)
+  }
+  return null
+}
+
+function getNextHolidayDate(holiday) {
+  // Returns the next occurrence (this year if upcoming, otherwise next year)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const thisYear = today.getFullYear()
+  const thisYearDate = getHolidayDate(holiday, thisYear)
+  if (thisYearDate >= today) return thisYearDate
+  return getHolidayDate(holiday, thisYear + 1)
+}
+
+function dateToYMD(d) {
+  // Format as YYYY-MM-DD without timezone gymnastics
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 const COMMON_HOLIDAYS = [
-  { name: "New Year's Day", month: 1, day: 1 },
-  { name: 'Memorial Day', month: 5, day: 26, note: '(last Mon of May)' },
-  { name: 'Independence Day', month: 7, day: 4 },
-  { name: 'Labor Day', month: 9, day: 1, note: '(first Mon of Sept)' },
-  { name: 'Thanksgiving', month: 11, day: 27, note: '(4th Thu of Nov)' },
-  { name: 'Christmas Eve', month: 12, day: 24 },
-  { name: 'Christmas Day', month: 12, day: 25 },
-  { name: "New Year's Eve", month: 12, day: 31 },
+  { name: "New Year's Day",   type: 'fixed',         month: 1,  day: 1 },
+  { name: 'Memorial Day',     type: 'last-weekday',  month: 5,  weekday: 1 },             // last Monday of May
+  { name: 'Independence Day', type: 'fixed',         month: 7,  day: 4 },
+  { name: 'Labor Day',        type: 'nth-weekday',   month: 9,  weekday: 1, n: 1 },        // 1st Monday of September
+  { name: 'Thanksgiving',     type: 'nth-weekday',   month: 11, weekday: 4, n: 4 },        // 4th Thursday of November
+  { name: 'Christmas Eve',    type: 'fixed',         month: 12, day: 24 },
+  { name: 'Christmas Day',    type: 'fixed',         month: 12, day: 25 },
+  { name: "New Year's Eve",   type: 'fixed',         month: 12, day: 31 },
 ]
 
 function formatDate(d) {
@@ -617,10 +678,9 @@ function ClosuresSection({ closures, onAdd, onDelete, saving }) {
   }
 
   const addCommonHoliday = async (h) => {
-    const year = new Date().getFullYear()
-    const month = String(h.month).padStart(2, '0')
-    const day = String(h.day).padStart(2, '0')
-    const dateStr = `${year}-${month}-${day}`
+    // Use the smart date calculation: next occurrence (this year if upcoming, else next year)
+    const nextDate = getNextHolidayDate(h)
+    const dateStr = dateToYMD(nextDate)
     await onAdd({
       closure_type: 'holiday',
       is_recurring: true,
@@ -636,6 +696,11 @@ function ClosuresSection({ closures, onAdd, onDelete, saving }) {
   const recurring = closures.filter(c => c.is_recurring)
   const past = closures.filter(c => c.end_date < today && !c.is_recurring)
 
+  // Helper to check if a holiday already exists in closures (by name match)
+  const isHolidayAdded = (holiday) => {
+    return closures.some(c => c.is_recurring && c.reason === holiday.name)
+  }
+
   return (
     <div className="bi-section">
       <div className="bi-section-header">
@@ -647,18 +712,16 @@ function ClosuresSection({ closures, onAdd, onDelete, saving }) {
         <div className="bi-quick-add-label">Common holidays — tap to add as recurring:</div>
         <div className="bi-quick-add-row">
           {COMMON_HOLIDAYS.map(h => {
-            const month = String(h.month).padStart(2, '0')
-            const day = String(h.day).padStart(2, '0')
-            const exists = closures.some(c =>
-              c.is_recurring &&
-              c.start_date.endsWith(`-${month}-${day}`)
-            )
+            const exists = isHolidayAdded(h)
+            const nextDate = getNextHolidayDate(h)
+            const tooltip = `Next: ${nextDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}`
             return (
               <button
                 key={h.name}
                 className={`bi-quick-chip ${exists ? 'added' : ''}`}
                 onClick={() => !exists && addCommonHoliday(h)}
                 disabled={exists || saving}
+                title={tooltip}
               >
                 {exists && <Check size={11} />}
                 {h.name}
