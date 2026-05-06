@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import '@/styles/auth.css'
 
@@ -8,20 +9,42 @@ export default function LoginPage() {
   const location = useLocation()
   const { signIn, signUp, signInWithMagicLink } = useAuth()
 
-  const from = location.state?.from?.pathname || '/dashboard'
+  const from = location.state?.from?.pathname || null
 
-  // Tab: 'login' | 'signup'
   const [tab, setTab] = useState('login')
-  // Mode for login: 'password' | 'magic'
   const [loginMode, setLoginMode] = useState('password')
 
   const [form, setForm] = useState({ email: '', password: '', fullName: '' })
   const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState(null) // { type: 'error'|'success', text }
+  const [message, setMessage] = useState(null)
 
   const set = (field) => (e) => {
     setForm((f) => ({ ...f, [field]: e.target.value }))
     setMessage(null)
+  }
+
+  // After login, route parents to /parent and providers to /dashboard
+  async function routeAfterLogin() {
+    if (from) {
+      navigate(from, { replace: true })
+      return
+    }
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      navigate('/dashboard', { replace: true })
+      return
+    }
+    // Check if this user is a parent (has a parent_profiles row)
+    const { data: parentProfile } = await supabase
+      .from('parent_profiles')
+      .select('id')
+      .eq('id', user.id)
+      .maybeSingle()
+    if (parentProfile) {
+      navigate('/parent', { replace: true })
+    } else {
+      navigate('/dashboard', { replace: true })
+    }
   }
 
   const handleLogin = async (e) => {
@@ -34,7 +57,7 @@ export default function LoginPage() {
       setMessage({ type: 'error', text: error.message })
       setLoading(false)
     } else {
-      navigate(from, { replace: true })
+      await routeAfterLogin()
     }
   }
 
@@ -126,7 +149,6 @@ export default function LoginPage() {
             </p>
           </div>
 
-          {/* Tabs */}
           <div className="auth-tabs">
             <button
               className={`auth-tab${tab === 'login' ? ' active' : ''}`}
@@ -142,7 +164,6 @@ export default function LoginPage() {
             </button>
           </div>
 
-          {/* Messages */}
           {message && (
             <div className={`auth-message ${message.type}`}>
               <span>{message.type === 'error' ? '⚠' : '✓'}</span>
