@@ -7,6 +7,7 @@ import {
   ChevronLeft, ChevronRight, Pencil, UserPlus, Shield, Baby,
   Send, Copy, ExternalLink,
 } from 'lucide-react'
+import { getNextInvoicePeriod, describeFrequency, computeInvoiceAmount } from '@/lib/billing'
 import '@/styles/families.css'
 
 const STATUS_OPTIONS = [
@@ -21,6 +22,16 @@ const ATTENDANCE_STATUSES = [
   { value: 'sick',     label: 'Sick',     emoji: '🤒' },
   { value: 'vacation', label: 'Vacation', emoji: '🏖️' },
   { value: 'holiday',  label: 'Holiday',  emoji: '🎉' },
+]
+
+const DAY_OF_WEEK_OPTIONS = [
+  { value: 0, label: 'Sunday' },
+  { value: 1, label: 'Monday' },
+  { value: 2, label: 'Tuesday' },
+  { value: 3, label: 'Wednesday' },
+  { value: 4, label: 'Thursday' },
+  { value: 5, label: 'Friday' },
+  { value: 6, label: 'Saturday' },
 ]
 
 function getInitials(name) {
@@ -101,10 +112,9 @@ export default function FamiliesPage() {
   )
   const weeklyRevenue = activeFamilies.reduce((sum, f) => {
     if (f.billing_type === 'weekly') return sum + parseFloat(f.weekly_rate || 0)
-    return sum // hourly families calculated separately
+    return sum
   }, 0)
 
-  // ─── Render ─────────────────────────────────────────────
   if (loading) {
     return (
       <div style={{ padding: 'var(--space-12)', textAlign: 'center' }}>
@@ -205,6 +215,19 @@ export default function FamiliesPage() {
                       <span style={{ color: 'var(--clr-ink-soft)' }}>No rate set</span>
                     )}
                   </div>
+                  {family.billing_type === 'weekly' && family.billing_frequency && family.billing_frequency !== 'weekly' && (
+                    <div style={{
+                      fontSize: '0.6875rem',
+                      color: 'var(--clr-ink-soft)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                      marginTop: 4,
+                    }}>
+                      {family.billing_frequency === 'biweekly' && 'Billed every 2 weeks'}
+                      {family.billing_frequency === 'monthly' && 'Billed monthly'}
+                      {family.billing_frequency === 'custom' && `Billed every ${family.billing_frequency_weeks || '?'} weeks`}
+                    </div>
+                  )}
                 </div>
 
                 <div className="family-card-body">
@@ -254,7 +277,6 @@ export default function FamiliesPage() {
         </div>
       )}
 
-      {/* Create / Edit modal */}
       {(creating || selectedFamily) && (
         <FamilyDetailModal
           userId={user.id}
@@ -277,14 +299,21 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
   const isNew = !family
   const [tab, setTab] = useState('overview')
   const [form, setForm] = useState({
-    family_name:       family?.family_name || '',
-    billing_type:      family?.billing_type || 'weekly',
-    weekly_rate:       family?.weekly_rate || '',
-    hourly_rate:       family?.hourly_rate || '',
-    enrollment_status: family?.enrollment_status || 'active',
-    start_date:        family?.start_date || '',
-    end_date:          family?.end_date || '',
-    notes:             family?.notes || '',
+    family_name:                 family?.family_name || '',
+    billing_type:                family?.billing_type || 'weekly',
+    weekly_rate:                 family?.weekly_rate || '',
+    hourly_rate:                 family?.hourly_rate || '',
+    enrollment_status:           family?.enrollment_status || 'active',
+    start_date:                  family?.start_date || '',
+    end_date:                    family?.end_date || '',
+    notes:                       family?.notes || '',
+    // New billing schedule fields:
+    billing_frequency:           family?.billing_frequency || 'weekly',
+    billing_frequency_weeks:     family?.billing_frequency_weeks || '',
+    billing_cycle_start_day:     family?.billing_cycle_start_day ?? 1,
+    billing_cycle_anchor_date:   family?.billing_cycle_anchor_date || '',
+    billing_monthly_mode:        family?.billing_monthly_mode || 'calendar',
+    billing_partial_week_mode:   family?.billing_partial_week_mode || 'full_rate',
   })
   const [saving, setSaving] = useState(false)
 
@@ -292,14 +321,29 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
 
   const handleSaveFamily = async () => {
     setSaving(true)
+    const payload = {
+      family_name:               form.family_name,
+      billing_type:              form.billing_type,
+      weekly_rate:               form.weekly_rate ? parseFloat(form.weekly_rate) : null,
+      hourly_rate:               form.hourly_rate ? parseFloat(form.hourly_rate) : null,
+      enrollment_status:         form.enrollment_status,
+      start_date:                form.start_date || null,
+      end_date:                  form.end_date || null,
+      notes:                     form.notes,
+      billing_frequency:         form.billing_frequency || 'weekly',
+      billing_frequency_weeks:   form.billing_frequency === 'custom' && form.billing_frequency_weeks
+                                   ? parseInt(form.billing_frequency_weeks)
+                                   : null,
+      billing_cycle_start_day:   parseInt(form.billing_cycle_start_day) || 1,
+      billing_cycle_anchor_date: form.billing_cycle_anchor_date || null,
+      billing_monthly_mode:      form.billing_monthly_mode || 'calendar',
+      billing_partial_week_mode: form.billing_partial_week_mode || 'full_rate',
+    }
+
     if (isNew) {
       const { data } = await supabase.from('families').insert({
         user_id: userId,
-        ...form,
-        weekly_rate: form.weekly_rate ? parseFloat(form.weekly_rate) : null,
-        hourly_rate: form.hourly_rate ? parseFloat(form.hourly_rate) : null,
-        start_date: form.start_date || null,
-        end_date:   form.end_date || null,
+        ...payload,
       }).select().single()
       setSaving(false)
       if (data) {
@@ -307,13 +351,7 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
         onClose()
       }
     } else {
-      await supabase.from('families').update({
-        ...form,
-        weekly_rate: form.weekly_rate ? parseFloat(form.weekly_rate) : null,
-        hourly_rate: form.hourly_rate ? parseFloat(form.hourly_rate) : null,
-        start_date: form.start_date || null,
-        end_date:   form.end_date || null,
-      }).eq('id', family.id)
+      await supabase.from('families').update(payload).eq('id', family.id)
       setSaving(false)
       await onChange()
     }
@@ -440,6 +478,11 @@ function OverviewTab({ form, update }) {
         )}
       </div>
 
+      {/* ─── Billing schedule section (only for weekly flat-rate families) ─── */}
+      {form.billing_type === 'weekly' && (
+        <BillingScheduleSection form={form} update={update} />
+      )}
+
       <div className="form-row">
         <div className="form-field-group">
           <label className="field-label">Start date</label>
@@ -459,7 +502,168 @@ function OverviewTab({ form, update }) {
   )
 }
 
-// ─── Children tab ──────────────────────────────────────
+// ─── Billing Schedule Section ──────────────────────────
+function BillingScheduleSection({ form, update }) {
+  const freq = form.billing_frequency || 'weekly'
+  const showStartDay = freq === 'weekly' || freq === 'biweekly' || freq === 'custom'
+  const showAnchor   = freq === 'biweekly' || freq === 'custom' || freq === 'monthly'
+  const showCustomWeeks = freq === 'custom'
+  const showMonthlyMode = freq === 'monthly'
+
+  // Compute preview of next invoice
+  let preview = null
+  if (form.weekly_rate) {
+    try {
+      const previewFamily = {
+        billing_frequency: form.billing_frequency || 'weekly',
+        billing_frequency_weeks: form.billing_frequency === 'custom' && form.billing_frequency_weeks
+          ? parseInt(form.billing_frequency_weeks)
+          : null,
+        billing_cycle_start_day: parseInt(form.billing_cycle_start_day) || 1,
+        billing_cycle_anchor_date: form.billing_cycle_anchor_date || null,
+        billing_monthly_mode: form.billing_monthly_mode || 'calendar',
+        billing_partial_week_mode: form.billing_partial_week_mode || 'full_rate',
+      }
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const period = getNextInvoicePeriod(previewFamily, today, null)
+      const amount = computeInvoiceAmount(form.weekly_rate, period.weeks)
+      preview = { period, amount, description: describeFrequency(previewFamily) }
+    } catch (e) {
+      // Silently skip preview on math errors
+    }
+  }
+
+  return (
+    <div style={{
+      background: 'var(--clr-cream)',
+      border: '1px solid var(--clr-warm-mid)',
+      borderRadius: 'var(--radius-md)',
+      padding: 'var(--space-4)',
+      marginBottom: 'var(--space-3)',
+    }}>
+      <div style={{
+        fontFamily: 'var(--font-display)',
+        fontSize: '0.9375rem',
+        fontWeight: 500,
+        color: 'var(--clr-ink)',
+        marginBottom: 4,
+      }}>
+        Billing schedule
+      </div>
+      <p style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)', marginTop: 0, marginBottom: 'var(--space-3)', lineHeight: 1.5 }}>
+        How often this family is invoiced. The weekly rate stays the same — frequency just bundles weeks together.
+      </p>
+
+      <div className="form-row">
+        <div className="form-field-group">
+          <label className="field-label">Frequency</label>
+          <select className="field-input" value={form.billing_frequency} onChange={update('billing_frequency')}>
+            <option value="weekly">Weekly</option>
+            <option value="biweekly">Bi-weekly (every 2 weeks)</option>
+            <option value="monthly">Monthly</option>
+            <option value="custom">Custom (every N weeks)</option>
+          </select>
+        </div>
+
+        {showCustomWeeks && (
+          <div className="form-field-group">
+            <label className="field-label">Every N weeks</label>
+            <input
+              className="field-input"
+              type="number"
+              min="1"
+              step="1"
+              value={form.billing_frequency_weeks}
+              onChange={update('billing_frequency_weeks')}
+              placeholder="3"
+            />
+          </div>
+        )}
+      </div>
+
+      {showStartDay && (
+        <div className="form-row">
+          <div className="form-field-group">
+            <label className="field-label">Cycle starts on</label>
+            <select className="field-input" value={form.billing_cycle_start_day} onChange={update('billing_cycle_start_day')}>
+              {DAY_OF_WEEK_OPTIONS.map(d => (
+                <option key={d.value} value={d.value}>{d.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {showMonthlyMode && (
+        <div className="form-row">
+          <div className="form-field-group">
+            <label className="field-label">Monthly billing mode</label>
+            <select className="field-input" value={form.billing_monthly_mode} onChange={update('billing_monthly_mode')}>
+              <option value="calendar">Calendar month (1st – last day)</option>
+              <option value="four_weeks">Every 4 weeks (28-day cycle)</option>
+            </select>
+            <p style={{ fontSize: '0.75rem', color: 'var(--clr-ink-soft)', margin: '4px 0 0', lineHeight: 1.5 }}>
+              {form.billing_monthly_mode === 'calendar'
+                ? 'Bills the actual calendar month — amount varies based on the number of days.'
+                : 'Bills exactly 4 weeks at a time — same amount every cycle.'}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {showAnchor && (
+        <div className="form-row">
+          <div className="form-field-group">
+            <label className="field-label">Anchor date (when their cycle starts)</label>
+            <input
+              className="field-input"
+              type="date"
+              value={form.billing_cycle_anchor_date}
+              onChange={update('billing_cycle_anchor_date')}
+            />
+            <p style={{ fontSize: '0.75rem', color: 'var(--clr-ink-soft)', margin: '4px 0 0', lineHeight: 1.5 }}>
+              Pick a date their first cycle should start. Future invoices count from there.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="form-row">
+        <div className="form-field-group">
+          <label className="field-label">Partial weeks (vacations, mid-week starts)</label>
+          <select className="field-input" value={form.billing_partial_week_mode} onChange={update('billing_partial_week_mode')}>
+            <option value="full_rate">Charge full rate ("paying for the spot")</option>
+            <option value="prorate">Prorate by day</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Preview */}
+      {preview && (
+        <div style={{
+          marginTop: 'var(--space-3)',
+          padding: 'var(--space-3)',
+          background: 'white',
+          border: '1px solid var(--clr-warm-mid)',
+          borderRadius: 'var(--radius-md)',
+        }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--clr-ink-soft)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600, marginBottom: 6 }}>
+            Next invoice preview
+          </div>
+          <div style={{ fontSize: '0.9375rem', color: 'var(--clr-ink)', marginBottom: 4 }}>
+            <strong>${preview.amount.toFixed(2)}</strong> for {preview.period.weeks_label}
+          </div>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-mid)' }}>
+            {preview.period.start_date} → {preview.period.end_date} · {preview.description}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Children tab (UNCHANGED) ──────────────────────────
 function ChildrenTab({ userId, familyId, children, onChange }) {
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -586,7 +790,7 @@ function ChildForm({ userId, familyId, child, onClose, onSaved }) {
   )
 }
 
-// ─── Guardians tab ──────────────────────────────────────
+// ─── Guardians tab (UNCHANGED) ──────────────────────────
 function GuardiansTab({ userId, familyId, guardians, onChange }) {
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -728,7 +932,7 @@ function GuardianForm({ userId, familyId, guardian, onClose, onSaved }) {
   )
 }
 
-// ─── Emergency contacts tab ──────────────────────────────────────
+// ─── Emergency contacts tab (UNCHANGED) ──────────────────
 function EmergencyTab({ userId, familyId, contacts, onChange }) {
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ name: '', relationship: '', phone: '', notes: '' })
@@ -814,7 +1018,7 @@ function EmergencyTab({ userId, familyId, contacts, onChange }) {
   )
 }
 
-// ─── Attendance tab ──────────────────────────────────────
+// ─── Attendance tab (UNCHANGED) ──────────────────────────
 function AttendanceTab({ userId, children }) {
   const [weekStart, setWeekStart] = useState(getMonday(new Date()))
   const [attendance, setAttendance] = useState([])
@@ -935,7 +1139,7 @@ function AttendanceTab({ userId, children }) {
   )
 }
 
-// ─── Invitations tab ──────────────────────────────────────
+// ─── Invitations tab (UNCHANGED) ──────────────────────────
 function InvitationsTab({ userId, family, guardians, onChange }) {
   const familyId = family.id
   const familyName = family.family_name
@@ -1064,10 +1268,6 @@ function InvitationsTab({ userId, family, guardians, onChange }) {
 
   const previewAsParent = () => {
     setPreviewing(true)
-    // Honest preview: opens the parent dashboard route. The provider's session
-    // means they won't see real parent data — they see what the LAYOUT looks like.
-    // For full parent testing, we recommend they invite themselves with an alt
-    // email and accept the invitation.
     if (!window.confirm(
       'Preview opens the parent dashboard layout in a new tab.\n\n' +
       'Note: You\'re still signed in as the provider, so you won\'t see real ' +
@@ -1091,7 +1291,6 @@ function InvitationsTab({ userId, family, guardians, onChange }) {
         </div>
       )}
 
-      {/* Autopay status */}
       {family.autopay_enabled && (
         <div style={{
           background: 'linear-gradient(135deg, #faf6ec 0%, #f4eee2 100%)',
