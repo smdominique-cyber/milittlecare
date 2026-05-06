@@ -5,6 +5,7 @@ import { notifyStateChange } from '@/lib/notifications'
 import {
   Clock, Calendar, DollarSign, Phone, AlertTriangle,
   Plus, X, Save, Trash2, ChevronDown, ChevronRight, Check,
+  MessageCircle,
 } from 'lucide-react'
 import '@/styles/business-info.css'
 
@@ -44,7 +45,7 @@ function shortDate(d) {
 export default function BusinessInfoPage() {
   const { user } = useAuth()
   const [activeSection, setActiveSection] = useState('hours')
-  const [hours, setHours] = useState({})  // {0: {is_open, open_time, close_time}}
+  const [hours, setHours] = useState({})
   const [closures, setClosures] = useState([])
   const [policies, setPolicies] = useState({})
   const [loading, setLoading] = useState(true)
@@ -62,13 +63,12 @@ export default function BusinessInfoPage() {
       supabase.from('business_policies').select('*').eq('user_id', user.id).maybeSingle(),
     ])
 
-    // Build hours map (default closed for missing days)
     const hoursMap = {}
     DAYS.forEach(d => {
       const existing = (hoursResp.data || []).find(h => h.day_of_week === d.value)
       hoursMap[d.value] = existing || {
         day_of_week: d.value,
-        is_open: d.value >= 1 && d.value <= 5,  // Default Mon-Fri open
+        is_open: d.value >= 1 && d.value <= 5,
         open_time: '07:00',
         close_time: '18:00',
         notes: '',
@@ -92,7 +92,6 @@ export default function BusinessInfoPage() {
     setSaving(true)
     setMessage(null)
     try {
-      // Upsert each day
       for (const day of DAYS) {
         const h = hours[day.value]
         await supabase.from('business_hours').upsert({
@@ -104,14 +103,12 @@ export default function BusinessInfoPage() {
           notes: h.notes || null,
         }, { onConflict: 'user_id,day_of_week' })
       }
-      // Mark hours as set
       await supabase.from('business_policies').upsert({
         user_id: user.id,
         hours_set: true,
       }, { onConflict: 'user_id' })
       setMessage({ type: 'success', text: '✓ Business hours saved' })
 
-      // Fire notifications to all linked parents (one per family)
       const { data: families } = await supabase.from('families').select('id, family_name').eq('user_id', user.id)
       const provider = user.user_metadata?.full_name || user.email
       const summary = DAYS
@@ -150,7 +147,6 @@ export default function BusinessInfoPage() {
       }, { onConflict: 'user_id' })
       setMessage({ type: 'success', text: '✓ Closure added' })
 
-      // Notify parents (only if notify_parents is true on the closure, default true)
       if (closure.notify_parents !== false) {
         const { data: families } = await supabase.from('families').select('id').eq('user_id', user.id)
         const provider = user.user_metadata?.full_name || user.email
@@ -221,6 +217,30 @@ export default function BusinessInfoPage() {
     setSaving(false)
   }
 
+  // ─── Messaging ──────────────
+  const toggleMessaging = async (enabled) => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      const { user_id, created_at, updated_at, ...rest } = policies
+      await supabase.from('business_policies').upsert({
+        user_id: user.id,
+        ...rest,
+        messaging_enabled: enabled,
+      }, { onConflict: 'user_id' })
+      setMessage({
+        type: 'success',
+        text: enabled
+          ? '✓ Parent messaging enabled — refresh the page to see the Messages tab in your sidebar'
+          : '✓ Parent messaging disabled',
+      })
+      await loadAll()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+    setSaving(false)
+  }
+
   if (loading) {
     return (
       <div style={{ padding: 'var(--space-12)', textAlign: 'center' }}>
@@ -234,6 +254,7 @@ export default function BusinessInfoPage() {
     { id: 'closures', label: 'Holidays & Closures', icon: Calendar, done: policies.closures_set },
     { id: 'policies', label: 'Payment & Fees', icon: DollarSign, done: policies.policies_set },
     { id: 'emergency', label: 'Emergency Info', icon: AlertTriangle, done: policies.emergency_set },
+    { id: 'messaging', label: 'Parent Messages', icon: MessageCircle, done: !!policies.messaging_enabled },
   ]
 
   return (
@@ -260,7 +281,6 @@ export default function BusinessInfoPage() {
         </p>
       </div>
 
-      {/* Section tabs */}
       <div className="bi-tabs">
         {sections.map(s => (
           <button
@@ -281,7 +301,6 @@ export default function BusinessInfoPage() {
         </div>
       )}
 
-      {/* Hours section */}
       {activeSection === 'hours' && (
         <div className="bi-section">
           <div className="bi-section-header">
@@ -335,7 +354,6 @@ export default function BusinessInfoPage() {
         </div>
       )}
 
-      {/* Closures section */}
       {activeSection === 'closures' && (
         <ClosuresSection
           closures={closures}
@@ -345,7 +363,6 @@ export default function BusinessInfoPage() {
         />
       )}
 
-      {/* Policies section */}
       {activeSection === 'policies' && (
         <div className="bi-section">
           <div className="bi-section-header">
@@ -502,7 +519,6 @@ export default function BusinessInfoPage() {
         </div>
       )}
 
-      {/* Emergency section */}
       {activeSection === 'emergency' && (
         <div className="bi-section">
           <div className="bi-section-header">
@@ -527,6 +543,53 @@ export default function BusinessInfoPage() {
           <button className="bi-save-btn" onClick={saveEmergency} disabled={saving}>
             <Save size={14} /> {saving ? 'Saving…' : 'Save emergency info'}
           </button>
+        </div>
+      )}
+
+      {activeSection === 'messaging' && (
+        <div className="bi-section">
+          <div className="bi-section-header">
+            <h3>Parent Messages</h3>
+            <p>Two-way messaging with parents, including photo sharing. Optional and easy to turn off.</p>
+          </div>
+
+          <div className="bi-fieldset">
+            <label className="bi-toggle">
+              <input
+                type="checkbox"
+                checked={!!policies.messaging_enabled}
+                onChange={(e) => toggleMessaging(e.target.checked)}
+                disabled={saving}
+              />
+              <strong>Enable parent messaging</strong>
+            </label>
+            <p style={{ color: 'var(--clr-ink-mid)', fontSize: '0.875rem', lineHeight: 1.55, marginTop: 'var(--space-2)', marginBottom: 0 }}>
+              When enabled, you'll see a <strong>Messages</strong> tab in your sidebar where you can post text and photos
+              for each child. Parents can post and reply too. Some providers love this — others prefer keeping
+              communication off-app. Turn it on or off anytime, and your existing messages are preserved either way.
+            </p>
+          </div>
+
+          {policies.messaging_enabled && (
+            <div style={{
+              marginTop: 'var(--space-4)',
+              padding: 'var(--space-4)',
+              background: 'var(--clr-cream)',
+              border: '1px solid var(--clr-warm-mid)',
+              borderRadius: 'var(--radius-md)',
+              fontSize: '0.875rem',
+              color: 'var(--clr-ink-mid)',
+              lineHeight: 1.55,
+            }}>
+              <strong style={{ color: 'var(--clr-ink)' }}>A few things to know:</strong>
+              <ul style={{ margin: 'var(--space-2) 0 0', paddingLeft: '1.25rem' }}>
+                <li>Each child gets their own thread, so updates stay organized.</li>
+                <li>Photos are compressed automatically and stored privately — only you and the linked parents can see them.</li>
+                <li>Parents are emailed when you post, with a 10-minute throttle so they don't get flooded.</li>
+                <li>If you turn this off later, the Messages tab disappears but nothing is deleted.</li>
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </>
@@ -568,7 +631,6 @@ function ClosuresSection({ closures, onAdd, onDelete, saving }) {
     })
   }
 
-  // Group closures: upcoming vs recurring vs past
   const today = new Date().toISOString().split('T')[0]
   const upcoming = closures.filter(c => c.end_date >= today && !c.is_recurring)
   const recurring = closures.filter(c => c.is_recurring)
@@ -581,7 +643,6 @@ function ClosuresSection({ closures, onAdd, onDelete, saving }) {
         <p>Recurring holidays auto-renew every year. One-off closures (vacation, sick days) are added as you need them.</p>
       </div>
 
-      {/* Quick add common holidays */}
       <div className="bi-quick-add">
         <div className="bi-quick-add-label">Common holidays — tap to add as recurring:</div>
         <div className="bi-quick-add-row">
