@@ -28,6 +28,8 @@ import InviteAcceptPage from '@/pages/InviteAcceptPage'
 import StaffInviteAcceptPage from '@/pages/StaffInviteAcceptPage'
 import ParentDashboardPage from '@/pages/ParentDashboardPage'
 import ParentMyFamilyPage from '@/pages/ParentMyFamilyPage'
+import ParentMessagesPage from '@/pages/ParentMessagesPage'
+import ParentMessageThreadPage from '@/pages/ParentMessageThreadPage'
 import MessagesPage from '@/pages/MessagesPage'
 import MessageThreadPage from '@/pages/MessageThreadPage'
 import {
@@ -58,6 +60,8 @@ export default function App() {
                 <Route path="/invite/:token" element={<InviteAcceptPage />} />
                 <Route path="/parent" element={<ParentDashboardPage />} />
                 <Route path="/parent/family" element={<ParentMyFamilyPage />} />
+                <Route path="/parent/messages" element={<ParentMessagesPage />} />
+                <Route path="/parent/messages/:childId" element={<ParentMessageThreadPage />} />
 
                 {/* Staff invitation accept */}
                 <Route path="/staff-invite/:token" element={<StaffInviteAcceptPage />} />
