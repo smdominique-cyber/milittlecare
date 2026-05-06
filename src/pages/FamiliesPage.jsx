@@ -350,12 +350,13 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
         await onChange()
         onClose()
       }
-  } else {
+    } else {
       await supabase.from('families').update(payload).eq('id', family.id)
       setSaving(false)
       await onChange()
       onClose()
     }
+  }
 
   const handleDeleteFamily = async () => {
     if (!window.confirm('Delete this family and all associated data? This cannot be undone.')) return
