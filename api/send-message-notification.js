@@ -1,10 +1,12 @@
-// Sends an email notification to parents when a provider posts a new message.
-// Throttled: at most one email per parent per thread per 10 minutes.
+// Sends an email notification to the OTHER party when someone posts a new message.
+// Provider posts → notify all linked parents.
+// Parent posts → notify the provider (the family owner).
+// Throttled: at most one email per recipient per thread per 10 minutes.
 // Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RESEND_API_KEY
 
 export const config = { runtime: 'edge' }
 
-const THROTTLE_MS = 10 * 60 * 1000  // 10 minutes
+const THROTTLE_MS = 10 * 60 * 1000
 
 async function supabaseRequest(path, method, body) {
   const url = `${process.env.SUPABASE_URL}/rest/v1/${path}`
@@ -21,7 +23,7 @@ async function supabaseRequest(path, method, body) {
   return resp
 }
 
-async function verifyProviderAuth(authHeader) {
+async function verifyAuth(authHeader) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null
   const token = authHeader.slice(7)
   const resp = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
@@ -48,8 +50,8 @@ export default async function handler(req) {
   }
 
   try {
-    const provider = await verifyProviderAuth(req.headers.get('authorization'))
-    if (!provider) {
+    const sender = await verifyAuth(req.headers.get('authorization'))
+    if (!sender) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401, headers: { 'Content-Type': 'application/json' },
       })
@@ -63,9 +65,9 @@ export default async function handler(req) {
       })
     }
 
-    // Verify thread belongs to this provider
+    // Load thread with family + child info, and verify sender has access
     const threadResp = await supabaseRequest(
-      `message_threads?id=eq.${thread_id}&provider_user_id=eq.${provider.id}&select=*,families(family_name),children(first_name,last_name)`,
+      `message_threads?id=eq.${thread_id}&select=*,families(family_name),children(first_name,last_name)`,
       'GET'
     )
     const threads = await threadResp.json()
@@ -78,42 +80,60 @@ export default async function handler(req) {
     const childFirstName = thread.children?.first_name || 'your child'
     const familyName = thread.families?.family_name || ''
 
-    // Find recent message in this thread (within throttle window) sent by provider
+    // Determine sender type by checking the message that was just posted
+    const msgResp = await supabaseRequest(
+      `messages?id=eq.${message_id}&select=sender_type,sender_user_id`,
+      'GET'
+    )
+    const msgRows = await msgResp.json()
+    if (!msgRows || msgRows.length === 0) {
+      return new Response(JSON.stringify({ error: 'Message not found' }), {
+        status: 404, headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    const senderType = msgRows[0].sender_type
+    const senderUserId = msgRows[0].sender_user_id
+
+    // Verify the sender of the message is the authed user
+    if (senderUserId !== sender.id) {
+      return new Response(JSON.stringify({ error: 'Sender mismatch' }), {
+        status: 403, headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    // Verify thread access matches sender type
+    if (senderType === 'provider' && thread.provider_user_id !== sender.id) {
+      return new Response(JSON.stringify({ error: 'Not your thread' }), {
+        status: 403, headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    if (senderType === 'parent') {
+      const linkResp = await supabaseRequest(
+        `parent_family_links?parent_id=eq.${sender.id}&family_id=eq.${thread.family_id}&status=eq.active&select=id`,
+        'GET'
+      )
+      const links = await linkResp.json()
+      if (!Array.isArray(links) || links.length === 0) {
+        return new Response(JSON.stringify({ error: 'Not linked to this family' }), {
+          status: 403, headers: { 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // Throttle: skip if a previous SAME-SENDER-TYPE message was posted within the window
     const cutoff = new Date(Date.now() - THROTTLE_MS).toISOString()
     const recentResp = await supabaseRequest(
-      `messages?thread_id=eq.${thread_id}&sender_type=eq.provider&created_at=gte.${cutoff}&id=neq.${message_id}&select=id&limit=1`,
+      `messages?thread_id=eq.${thread_id}&sender_type=eq.${senderType}&created_at=gte.${cutoff}&id=neq.${message_id}&select=id&limit=1`,
       'GET'
     )
     const recent = await recentResp.json()
     if (Array.isArray(recent) && recent.length > 0) {
-      // Throttle: a previous provider message in this thread within the window already triggered an email
       return new Response(JSON.stringify({
         email_sent: false,
         throttled: true,
-        reason: 'A recent message already triggered a notification within 10 minutes',
+        reason: 'A recent message already triggered a notification',
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }
-
-    // Get linked parents for this family
-    const linksResp = await supabaseRequest(
-      `parent_family_links?family_id=eq.${thread.family_id}&status=eq.active&select=parent_id,parent_profiles(email,full_name)`,
-      'GET'
-    )
-    const links = await linksResp.json()
-    if (!Array.isArray(links) || links.length === 0) {
-      return new Response(JSON.stringify({
-        email_sent: false,
-        reason: 'No active parent links for this family',
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
-    }
-
-    // Get provider display name
-    const providerProfileResp = await supabaseRequest(
-      `profiles?id=eq.${provider.id}&select=full_name,daycare_name`,
-      'GET'
-    )
-    const providerProfiles = await providerProfileResp.json()
-    const providerName = (providerProfiles[0]?.daycare_name || providerProfiles[0]?.full_name || 'Your child care provider')
 
     if (!process.env.RESEND_API_KEY) {
       return new Response(JSON.stringify({
@@ -127,10 +147,82 @@ export default async function handler(req) {
     const recipients = []
     const errors = []
 
-    for (const link of links) {
-      const email = link.parent_profiles?.email
-      if (!email) continue
-      const parentFirstName = (link.parent_profiles?.full_name || '').split(' ')[0] || ''
+    // Build recipients list based on direction
+    let toEmails = []  // [{ email, firstName }]
+    let providerName = 'Your child care provider'
+    let parentName = 'A parent'
+
+    // Get provider profile (we'll need it either way)
+    const provProfResp = await supabaseRequest(
+      `profiles?id=eq.${thread.provider_user_id}&select=full_name,daycare_name`,
+      'GET'
+    )
+    const provProfs = await provProfResp.json()
+    providerName = provProfs[0]?.daycare_name || provProfs[0]?.full_name || providerName
+
+    if (senderType === 'provider') {
+      // Provider posted → notify all linked parents
+      const linksResp = await supabaseRequest(
+        `parent_family_links?family_id=eq.${thread.family_id}&status=eq.active&select=parent_id,parent_profiles(email,full_name)`,
+        'GET'
+      )
+      const links = await linksResp.json()
+      ;(links || []).forEach(l => {
+        const email = l.parent_profiles?.email
+        if (email) {
+          const firstName = (l.parent_profiles?.full_name || '').split(' ')[0] || ''
+          toEmails.push({ email, firstName })
+        }
+      })
+    } else {
+      // Parent posted → notify the provider
+      // Get provider email from auth.users
+      const provUserResp = await fetch(
+        `${process.env.SUPABASE_URL}/auth/v1/admin/users/${thread.provider_user_id}`,
+        {
+          headers: {
+            'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+            'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+        }
+      )
+      if (provUserResp.ok) {
+        const provUser = await provUserResp.json()
+        if (provUser?.email) {
+          toEmails.push({
+            email: provUser.email,
+            firstName: (provProfs[0]?.full_name || '').split(' ')[0] || '',
+          })
+        }
+      }
+
+      // Get parent name for display in email
+      const parentProfResp = await supabaseRequest(
+        `parent_profiles?id=eq.${sender.id}&select=full_name`,
+        'GET'
+      )
+      const parentProfs = await parentProfResp.json()
+      parentName = parentProfs[0]?.full_name || 'A parent'
+    }
+
+    if (toEmails.length === 0) {
+      return new Response(JSON.stringify({
+        email_sent: false,
+        reason: 'No recipients found',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+
+    // Build subject + body based on direction
+    let subject, portalUrl
+    if (senderType === 'provider') {
+      subject = `New update about ${childFirstName}`
+      portalUrl = `${origin}/parent/messages`
+    } else {
+      subject = `${parentName} sent a message about ${childFirstName}`
+      portalUrl = `${origin}/messages`
+    }
+
+    for (const recipient of toEmails) {
       try {
         const emailResp = await fetch('https://api.resend.com/emails', {
           method: 'POST',
@@ -140,27 +232,29 @@ export default async function handler(req) {
           },
           body: JSON.stringify({
             from: fromEmail,
-            to: [email],
-            subject: `New update about ${childFirstName}`,
+            to: [recipient.email],
+            subject,
             html: buildMessageEmail({
+              senderType,
               providerName,
+              parentName,
               childFirstName,
               familyName,
-              parentFirstName,
+              recipientFirstName: recipient.firstName,
               hasPhotos: !!has_photos,
               bodyPreview: body_preview || '',
-              portalUrl: `${origin}/parent/messages`,
+              portalUrl,
             }),
           }),
         })
         if (emailResp.ok) {
-          recipients.push(email)
+          recipients.push(recipient.email)
         } else {
           const errData = await emailResp.json().catch(() => ({}))
-          errors.push({ email, error: errData.message || 'Failed to send' })
+          errors.push({ email: recipient.email, error: errData.message || 'Failed to send' })
         }
       } catch (err) {
-        errors.push({ email, error: err.message })
+        errors.push({ email: recipient.email, error: err.message })
       }
     }
 
@@ -176,21 +270,26 @@ export default async function handler(req) {
   }
 }
 
-function buildMessageEmail({ providerName, childFirstName, familyName, parentFirstName, hasPhotos, bodyPreview, portalUrl }) {
-  const greeting = parentFirstName ? `Hi ${parentFirstName},` : 'Hi there,'
+function buildMessageEmail({ senderType, providerName, parentName, childFirstName, familyName, recipientFirstName, hasPhotos, bodyPreview, portalUrl }) {
+  const greeting = recipientFirstName ? `Hi ${recipientFirstName},` : 'Hi there,'
+  const senderDisplayName = senderType === 'provider' ? providerName : parentName
   const truncated = bodyPreview.length > 200 ? bodyPreview.slice(0, 200) + '…' : bodyPreview
   const previewBlock = truncated
     ? `<div style="background:#fbf8f1;border-left:3px solid #7a9e8a;padding:14px 16px;margin:20px 0;border-radius:4px;font-size:15px;line-height:1.5;color:#3e4639;">${escapeHtml(truncated)}</div>`
     : ''
   const photoLine = hasPhotos
-    ? `<p style="margin:0 0 8px;font-size:14px;color:#6b7c6f;">📷 Includes photo${hasPhotos > 1 ? 's' : ''}</p>`
+    ? `<p style="margin:0 0 8px;font-size:14px;color:#6b7c6f;">📷 Includes photo(s)</p>`
     : ''
+
+  const headerText = senderType === 'provider'
+    ? `New update about ${escapeHtml(childFirstName)}`
+    : `New message from ${escapeHtml(parentName)}`
 
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>New update from ${escapeHtml(providerName)}</title>
+  <title>${headerText}</title>
 </head>
 <body style="margin:0;padding:0;background:#fbf8f1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1e2620;">
   <div style="max-width:560px;margin:0 auto;padding:40px 24px;">
@@ -198,13 +297,13 @@ function buildMessageEmail({ providerName, childFirstName, familyName, parentFir
       <div style="background:linear-gradient(135deg,#3e5849 0%,#7a9e8a 100%);padding:32px 32px 28px;color:white;">
         <div style="font-size:13px;text-transform:uppercase;letter-spacing:0.08em;opacity:0.8;margin-bottom:8px;">MI Little Care</div>
         <div style="font-family:Georgia,'Times New Roman',serif;font-size:26px;font-weight:400;letter-spacing:-0.02em;line-height:1.2;">
-          New update about ${escapeHtml(childFirstName)}
+          ${headerText}
         </div>
       </div>
       <div style="padding:32px;">
         <p style="margin:0 0 12px;font-size:16px;line-height:1.6;color:#3e4639;">${greeting}</p>
         <p style="margin:0 0 8px;font-size:16px;line-height:1.6;color:#3e4639;">
-          <strong>${escapeHtml(providerName)}</strong> just sent you a message${familyName ? ` about the ${escapeHtml(familyName)}` : ''}.
+          <strong>${escapeHtml(senderDisplayName)}</strong> just sent a message${senderType === 'parent' ? ` about ${escapeHtml(childFirstName)}` : (familyName ? ` about the ${escapeHtml(familyName)}` : '')}.
         </p>
         ${photoLine}
         ${previewBlock}
@@ -215,9 +314,7 @@ function buildMessageEmail({ providerName, childFirstName, familyName, parentFir
         </div>
         <hr style="border:none;border-top:1px solid #e5d9c4;margin:24px 0;">
         <p style="margin:0;font-size:13px;color:#8a9281;line-height:1.5;">
-          You're getting this because you're linked to a family in MI Little Care.
-          To stop receiving message notifications, ask your provider to turn off messaging,
-          or unlink your account in your parent portal.
+          You're getting this because messaging is enabled in MI Little Care.
         </p>
       </div>
     </div>
