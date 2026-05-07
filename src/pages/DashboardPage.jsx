@@ -8,7 +8,9 @@ import {
   Users, Send, Plus, Calculator, Zap,
 } from 'lucide-react'
 import SetupWidget from '@/components/dashboard/SetupWidget'
+import TodayWidget from '@/components/dashboard/TodayWidget'
 import InstallBanner from '@/components/ui/InstallBanner'
+import '@/styles/today-widget.css'
 
 function getGreeting() {
   const h = new Date().getHours()
@@ -169,6 +171,8 @@ export default function DashboardPage() {
           </button>
         </div>
 
+        <TodayWidget licenseeId={licenseeId} userId={user?.id} />
+
         <div style={{
           background: 'var(--clr-white)',
           border: '1px solid var(--clr-warm-mid)',
@@ -243,6 +247,9 @@ export default function DashboardPage() {
           )}
         </button>
       </div>
+
+      {/* Today widget — daily check-in/out at-a-glance */}
+      <TodayWidget licenseeId={licenseeId} userId={user?.id} />
 
       {/* Setup Progress Widget */}
       <SetupWidget stats={setupStats} />
