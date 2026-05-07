@@ -36,17 +36,38 @@ function formatCurrency(n) {
   return '$' + parseFloat(n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
+// Generate signed URLs for all receipts that have an image_path.
+// Returns { [receipt_id]: signed_url }. Failures are silently skipped — those
+// receipts will fall back to the category emoji thumbnail.
+async function loadReceiptUrls(receipts) {
+  const map = {}
+  await Promise.all(
+    (receipts || []).map(async (r) => {
+      if (!r.image_path) return
+      const { data, error } = await supabase
+        .storage
+        .from('receipts')
+        .createSignedUrl(r.image_path, 3600) // 1 hour
+      if (!error && data?.signedUrl) {
+        map[r.id] = data.signedUrl
+      }
+    })
+  )
+  return map
+}
+
 export default function DeductionsPage() {
   const { user } = useAuth()
   const { licenseeId } = useRole()
   const navigate = useNavigate()
 
   const [receipts, setReceipts] = useState([])
+  const [imageUrls, setImageUrls] = useState({})  // { receiptId: signedUrl }
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState('category') // 'category' | 'month'
   const [year, setYear] = useState(new Date().getFullYear())
   const [expanded, setExpanded] = useState(new Set())
-  const [editing, setEditing] = useState(null) // receipt being edited
+  const [editing, setEditing] = useState(null)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => { if (licenseeId) loadReceipts() }, [licenseeId])
@@ -58,7 +79,13 @@ export default function DeductionsPage() {
       .select('*')
       .eq('user_id', licenseeId)
       .order('date', { ascending: false })
-    if (!error) setReceipts(data || [])
+    if (!error) {
+      const list = data || []
+      setReceipts(list)
+      // Generate signed URLs for thumbnails
+      const urls = await loadReceiptUrls(list)
+      setImageUrls(urls)
+    }
     setLoading(false)
   }
 
@@ -100,7 +127,6 @@ export default function DeductionsPage() {
     })
   }
 
-  // Sort groups: category by total desc, month by month order
   const groupEntries = Object.entries(groups).sort((a, b) => {
     if (view === 'month') return a[1].month - b[1].month
     return b[1].total - a[1].total
@@ -144,11 +170,9 @@ export default function DeductionsPage() {
   const handleDelete = async (id, imagePath) => {
     if (!window.confirm('Delete this receipt? This cannot be undone.')) return
 
-    // Remove from storage
     if (imagePath) {
       await supabase.storage.from('receipts').remove([imagePath])
     }
-    // Remove from db
     await supabase.from('receipts').delete().eq('id', id)
     await loadReceipts()
     setEditing(null)
@@ -157,8 +181,6 @@ export default function DeductionsPage() {
   const updateEditing = (field) => (e) => {
     setEditing(prev => ({ ...prev, [field]: e.target.value }))
   }
-
-  // ─── Render ─────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -188,7 +210,6 @@ export default function DeductionsPage() {
   return (
     <div className="deductions-page">
 
-      {/* Tax export */}
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
@@ -212,7 +233,6 @@ export default function DeductionsPage() {
         <TaxExportButton year={year} />
       </div>
 
-      {/* Summary */}
       <div className="summary-row">
         <div className="summary-card">
           <div className="summary-label">Total Deductions</div>
@@ -236,7 +256,6 @@ export default function DeductionsPage() {
         </div>
       </div>
 
-      {/* Controls */}
       <div className="view-toggle-bar">
         <div className="view-toggle">
           <button className={view === 'category' ? 'active' : ''} onClick={() => setView('category')}>
@@ -254,7 +273,6 @@ export default function DeductionsPage() {
         </div>
       </div>
 
-      {/* Groups */}
       <div>
         {groupEntries.map(([key, group]) => {
           const isOpen = expanded.has(key)
@@ -279,37 +297,51 @@ export default function DeductionsPage() {
               </div>
 
               <div className="group-items">
-                {group.items.map(r => (
-                  <div key={r.id} className="deduction-row" onClick={() => setEditing(r)}>
-                    <div className="deduction-thumb">
-                      {r.image_url ? <img src={r.image_url} alt={r.merchant} /> : categoryEmoji(r.category)}
-                    </div>
-                    <div className="deduction-info">
-                      <div className="deduction-merchant">{r.merchant || 'Unknown merchant'}</div>
-                      <div className="deduction-meta">
-                        <span>{r.date ? new Date(r.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</span>
-                        {view === 'month' && r.category && <span>· {r.category}</span>}
-                        {r.description && <span>· {r.description.slice(0, 30)}{r.description.length > 30 ? '…' : ''}</span>}
+                {group.items.map(r => {
+                  const signedUrl = imageUrls[r.id]
+                  return (
+                    <div key={r.id} className="deduction-row" onClick={() => setEditing(r)}>
+                      <div className="deduction-thumb">
+                        {signedUrl ? (
+                          <img
+                            src={signedUrl}
+                            alt={r.merchant}
+                            onError={(e) => {
+                              // If the signed URL fails (file missing, etc), fall back to emoji
+                              e.target.style.display = 'none'
+                              e.target.parentElement.textContent = categoryEmoji(r.category)
+                            }}
+                          />
+                        ) : (
+                          categoryEmoji(r.category)
+                        )}
+                      </div>
+                      <div className="deduction-info">
+                        <div className="deduction-merchant">{r.merchant || 'Unknown merchant'}</div>
+                        <div className="deduction-meta">
+                          <span>{r.date ? new Date(r.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</span>
+                          {view === 'month' && r.category && <span>· {r.category}</span>}
+                          {r.description && <span>· {r.description.slice(0, 30)}{r.description.length > 30 ? '…' : ''}</span>}
+                        </div>
+                      </div>
+                      <div className="deduction-amount">{formatCurrency(r.total || r.amount)}</div>
+                      <div className="deduction-actions">
+                        <button className="icon-btn" onClick={(e) => { e.stopPropagation(); setEditing(r) }} title="Edit">
+                          <Pencil />
+                        </button>
+                        <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); handleDelete(r.id, r.image_path) }} title="Delete">
+                          <Trash2 />
+                        </button>
                       </div>
                     </div>
-                    <div className="deduction-amount">{formatCurrency(r.total || r.amount)}</div>
-                    <div className="deduction-actions">
-                      <button className="icon-btn" onClick={(e) => { e.stopPropagation(); setEditing(r) }} title="Edit">
-                        <Pencil />
-                      </button>
-                      <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); handleDelete(r.id, r.image_path) }} title="Delete">
-                        <Trash2 />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )
         })}
       </div>
 
-      {/* Edit Modal */}
       {editing && (
         <div className="modal-overlay" onClick={() => setEditing(null)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
@@ -320,8 +352,13 @@ export default function DeductionsPage() {
               </button>
             </div>
             <div className="modal-body">
-              {editing.image_url && (
-                <img src={editing.image_url} alt="Receipt" className="modal-image-preview" />
+              {imageUrls[editing.id] && (
+                <img
+                  src={imageUrls[editing.id]}
+                  alt="Receipt"
+                  className="modal-image-preview"
+                  onError={(e) => { e.target.style.display = 'none' }}
+                />
               )}
 
               <div className="form-row">
