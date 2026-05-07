@@ -190,7 +190,7 @@ export default function BillingPage() {
           invoice_number: invoiceNumber,
           period_start: period.start_date,
           period_end: period.end_date,
-          due_date: dateStr(dueDate),
+          due_date: dueDateStr,
           subtotal,
           total: subtotal,
           billing_type: family.billing_type || 'weekly',
