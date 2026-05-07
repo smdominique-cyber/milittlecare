@@ -4,9 +4,15 @@ import { supabase } from '@/lib/supabase'
 import { Loader, AlertCircle, CheckCircle, Shield, Lock, ArrowRight } from 'lucide-react'
 
 const ROLE_LABELS = {
-  adult_staff: 'Adult Staff',
-  assistant: 'Assistant',
+  adult_staff: 'Co-Provider',
+  assistant: 'Daily Helper',
   view_only: 'View-only',
+}
+
+const ROLE_DESCRIPTIONS = {
+  adult_staff: 'You\'ll have full access to families, billing, attendance, messages, receipts, and reports.',
+  assistant: 'You\'ll have access to attendance, messages, and family info — no access to billing or financial information.',
+  view_only: 'You\'ll be able to view deductions, T/S ratios, and attendance reports — but cannot edit anything.',
 }
 
 export default function StaffInviteAcceptPage() {
@@ -51,7 +57,6 @@ export default function StaffInviteAcceptPage() {
 
       // Sign in via magic link
       if (data.magic_link) {
-        // Extract the token_hash and type from the magic link URL
         const url = new URL(data.magic_link)
         const hashedToken = url.searchParams.get('token') || data.auto_signin_token
         if (hashedToken) {
@@ -114,12 +119,25 @@ export default function StaffInviteAcceptPage() {
     )
   }
 
+  const roleLabel = ROLE_LABELS[info?.role] || info?.role
+  const roleDesc = ROLE_DESCRIPTIONS[info?.role] || ''
+
   return (
     <div className="parent-shell">
       <div className="parent-card" style={{ maxWidth: 480 }}>
         <div className="parent-icon"><Shield size={28} /></div>
         <h2>Join {info?.licensee_name}</h2>
-        <p>You've been invited as <strong>{ROLE_LABELS[info?.role] || info?.role}</strong>.</p>
+        <p>You've been invited as <strong>{roleLabel}</strong>.</p>
+
+        {roleDesc && (
+          <div style={{
+            background: 'var(--clr-cream)', padding: 14, borderRadius: 8, margin: '12px 0 0',
+            fontSize: '0.875rem', color: 'var(--clr-ink-mid)', textAlign: 'left',
+            lineHeight: 1.5,
+          }}>
+            {roleDesc}
+          </div>
+        )}
 
         <div style={{
           background: 'var(--clr-cream)', padding: 16, borderRadius: 8, margin: '20px 0',
