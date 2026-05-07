@@ -1,0 +1,515 @@
+/* ============================================================
+   Landing Page — public marketing site
+   ============================================================ */
+
+/* Reset some defaults so the marketing page doesn't inherit dashboard layout */
+.landing-page {
+  font-family: var(--font-body);
+  color: var(--clr-ink);
+  background: white;
+  min-height: 100vh;
+}
+
+/* ─── Top nav ──────────────────────────────────────────── */
+.landing-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--clr-warm-mid);
+  padding: 12px 24px;
+}
+
+.landing-nav-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.landing-nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  color: var(--clr-ink);
+  text-decoration: none;
+}
+
+.landing-nav-brand-icon {
+  font-size: 1.5rem;
+}
+
+.landing-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.landing-nav-link {
+  color: var(--clr-ink-mid);
+  text-decoration: none;
+  font-size: 0.875rem;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  transition: color 0.15s;
+}
+
+.landing-nav-link:hover {
+  color: var(--clr-sage-dark);
+}
+
+.landing-nav-cta {
+  background: var(--clr-sage-dark);
+  color: white;
+  text-decoration: none;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.landing-nav-cta:hover {
+  background: var(--clr-sage);
+}
+
+/* ─── Hero ────────────────────────────────────────────── */
+.landing-hero {
+  padding: 80px 24px 60px;
+  background: linear-gradient(135deg, #faf6ec 0%, #f4eee2 50%, #e8e0c8 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.landing-hero-inner {
+  max-width: 800px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.landing-hero-eyebrow {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--clr-warm-mid);
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--clr-sage-dark);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 20px;
+}
+
+.landing-hero h1 {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  font-weight: 400;
+  color: var(--clr-ink);
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin: 0 0 20px;
+}
+
+.landing-hero h1 em {
+  font-style: italic;
+  color: var(--clr-sage-dark);
+}
+
+.landing-hero-sub {
+  font-size: clamp(1rem, 2vw, 1.1875rem);
+  color: var(--clr-ink-mid);
+  line-height: 1.55;
+  margin: 0 auto 32px;
+  max-width: 640px;
+}
+
+.landing-hero-ctas {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.landing-cta-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--clr-sage-dark);
+  color: white;
+  text-decoration: none;
+  padding: 14px 28px;
+  border-radius: var(--radius-md);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  font-family: var(--font-body);
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s;
+  box-shadow: 0 2px 8px rgba(74, 105, 87, 0.2);
+}
+
+.landing-cta-primary:hover {
+  background: var(--clr-sage);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(74, 105, 87, 0.25);
+}
+
+.landing-cta-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--clr-ink-mid);
+  text-decoration: none;
+  padding: 14px 24px;
+  border-radius: var(--radius-md);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  border: 1px solid var(--clr-warm-mid);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.landing-cta-secondary:hover {
+  border-color: var(--clr-sage-dark);
+  color: var(--clr-sage-dark);
+}
+
+.landing-hero-footnote {
+  font-size: 0.8125rem;
+  color: var(--clr-ink-soft);
+  margin: 0;
+}
+
+/* ─── Standard section ────────────────────────────────── */
+.landing-section {
+  padding: 80px 24px;
+}
+
+.landing-section-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.landing-section.alt {
+  background: var(--clr-cream);
+}
+
+.landing-section-eyebrow {
+  display: block;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--clr-sage-dark);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+}
+
+.landing-section h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 3.5vw, 2.5rem);
+  font-weight: 400;
+  color: var(--clr-ink);
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  text-align: center;
+  margin: 0 0 24px;
+}
+
+.landing-section-lead {
+  font-size: 1.0625rem;
+  color: var(--clr-ink-mid);
+  line-height: 1.6;
+  text-align: center;
+  max-width: 640px;
+  margin: 0 auto 56px;
+}
+
+/* ─── Three-card row ──────────────────────────────────── */
+.landing-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 24px;
+  margin-top: 32px;
+}
+
+.landing-card {
+  background: white;
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-lg);
+  padding: 28px 24px;
+  transition: all 0.2s;
+}
+
+.landing-card:hover {
+  border-color: var(--clr-sage);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+}
+
+.landing-card-icon {
+  font-size: 2rem;
+  margin-bottom: 16px;
+}
+
+.landing-card h3 {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: var(--clr-ink);
+  margin: 0 0 10px;
+  letter-spacing: -0.01em;
+}
+
+.landing-card p {
+  color: var(--clr-ink-mid);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+/* ─── Feature row ─────────────────────────────────────── */
+.landing-feature {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 60px;
+  align-items: center;
+  margin-bottom: 100px;
+}
+
+.landing-feature:last-child {
+  margin-bottom: 0;
+}
+
+.landing-feature.reverse .landing-feature-text {
+  order: 2;
+}
+
+.landing-feature.reverse .landing-feature-image {
+  order: 1;
+}
+
+.landing-feature-text h3 {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 400;
+  color: var(--clr-ink);
+  letter-spacing: -0.02em;
+  margin: 0 0 16px;
+}
+
+.landing-feature-text p {
+  color: var(--clr-ink-mid);
+  font-size: 1rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.landing-feature-image {
+  background: var(--clr-cream);
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-lg);
+  aspect-ratio: 16 / 10;
+  display: grid;
+  place-items: center;
+  color: var(--clr-ink-soft);
+  font-size: 0.875rem;
+  overflow: hidden;
+}
+
+.landing-feature-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+@media (max-width: 720px) {
+  .landing-feature {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    margin-bottom: 60px;
+  }
+  .landing-feature.reverse .landing-feature-text {
+    order: 1;
+  }
+  .landing-feature.reverse .landing-feature-image {
+    order: 2;
+  }
+}
+
+/* ─── Pricing ─────────────────────────────────────────── */
+.landing-pricing-card {
+  max-width: 480px;
+  margin: 40px auto 0;
+  background: white;
+  border: 2px solid var(--clr-sage-dark);
+  border-radius: var(--radius-lg);
+  padding: 40px 32px;
+  text-align: center;
+  position: relative;
+}
+
+.landing-pricing-price {
+  font-family: var(--font-display);
+  margin: 0 0 24px;
+}
+
+.landing-pricing-price .amount {
+  font-size: 3rem;
+  color: var(--clr-ink);
+  letter-spacing: -0.03em;
+  font-weight: 400;
+}
+
+.landing-pricing-price .period {
+  font-size: 1rem;
+  color: var(--clr-ink-soft);
+  font-family: var(--font-body);
+}
+
+.landing-pricing-tag {
+  font-size: 0.875rem;
+  color: var(--clr-ink-mid);
+  margin: 0 0 24px;
+  line-height: 1.5;
+}
+
+.landing-pricing-features {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 28px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.landing-pricing-features li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.9375rem;
+  color: var(--clr-ink-mid);
+  line-height: 1.5;
+}
+
+.landing-pricing-features li::before {
+  content: '✓';
+  color: var(--clr-sage-dark);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.landing-pricing-footnote {
+  font-size: 0.8125rem;
+  color: var(--clr-ink-soft);
+  margin: 16px 0 0;
+}
+
+/* ─── Founder section ─────────────────────────────────── */
+.landing-founder {
+  max-width: 720px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.landing-founder-photo {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: var(--clr-sage-pale);
+  display: grid;
+  place-items: center;
+  margin: 0 auto 24px;
+  font-family: var(--font-display);
+  font-size: 2rem;
+  color: var(--clr-sage-dark);
+  border: 3px solid white;
+  box-shadow: 0 0 0 2px var(--clr-warm-mid);
+}
+
+.landing-founder-photo img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.landing-founder p {
+  text-align: left;
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--clr-ink-mid);
+  margin: 0 0 16px;
+}
+
+.landing-founder-signoff {
+  text-align: center !important;
+  font-style: italic;
+  color: var(--clr-ink-soft) !important;
+  margin-top: 24px !important;
+}
+
+/* ─── Final CTA ───────────────────────────────────────── */
+.landing-final-cta {
+  background: linear-gradient(135deg, var(--clr-sage-dark) 0%, var(--clr-sage) 100%);
+  color: white;
+  text-align: center;
+  padding: 80px 24px;
+}
+
+.landing-final-cta h2 {
+  font-family: var(--font-display);
+  color: white !important;
+  margin-bottom: 28px;
+}
+
+.landing-final-cta .landing-cta-primary {
+  background: white;
+  color: var(--clr-sage-dark);
+  font-size: 1rem;
+  padding: 16px 32px;
+}
+
+.landing-final-cta .landing-cta-primary:hover {
+  background: var(--clr-cream);
+}
+
+.landing-final-cta-footnote {
+  margin-top: 20px;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.875rem;
+}
+
+.landing-final-cta-footnote a {
+  color: white;
+  text-decoration: underline;
+}
+
+/* ─── Footer ──────────────────────────────────────────── */
+.landing-footer {
+  padding: 32px 24px;
+  background: var(--clr-ink);
+  color: rgba(255, 255, 255, 0.7);
+  text-align: center;
+  font-size: 0.8125rem;
+}
+
+.landing-footer a {
+  color: rgba(255, 255, 255, 0.85);
+  text-decoration: none;
+  margin: 0 12px;
+}
+
+.landing-footer a:hover {
+  color: white;
+}
