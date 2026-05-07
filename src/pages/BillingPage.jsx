@@ -177,9 +177,8 @@ export default function BillingPage() {
         const subtotal = computeInvoiceAmount(family.weekly_rate, period.weeks)
         const description = buildLineItemDescription(family, period)
 
-        // Calculate due date based on family's late_fee_after_days or default 7
-        const dueDate = new Date(today)
-        dueDate.setDate(dueDate.getDate() + (family.late_fee_after_days || 7))
+        // Compute due date based on provider's policy (anchor + offset days)
+        const dueDateStr = computeDueDate(policies, period, today)
 
         // Generate invoice number
         const invoiceNumber = `INV-${today.getFullYear()}-${String(invoices.length + created + 1).padStart(4, '0')}`
