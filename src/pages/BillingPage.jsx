@@ -65,13 +65,14 @@ export default function BillingPage() {
 
   async function loadAll() {
     setLoading(true)
-    const [f, i, it, p, a, c] = await Promise.all([
+    const [f, i, it, p, a, c, pol] = await Promise.all([
       supabase.from('families').select('*').eq('user_id', licenseeId).order('family_name'),
       supabase.from('invoices').select('*').eq('user_id', licenseeId).order('created_at', { ascending: false }),
       supabase.from('invoice_items').select('*').eq('user_id', licenseeId),
       supabase.from('payments').select('*').eq('user_id', licenseeId).order('payment_date', { ascending: false }),
       supabase.from('attendance').select('*').eq('user_id', licenseeId),
       supabase.from('children').select('*').eq('user_id', licenseeId),
+      supabase.from('business_policies').select('*').eq('user_id', licenseeId).maybeSingle(),
     ])
     setFamilies(f.data || [])
     setInvoices(i.data || [])
@@ -79,6 +80,7 @@ export default function BillingPage() {
     setPayments(p.data || [])
     setAttendance(a.data || [])
     setChildren(c.data || [])
+    setPolicies(pol.data || {})
     setLoading(false)
   }
 
