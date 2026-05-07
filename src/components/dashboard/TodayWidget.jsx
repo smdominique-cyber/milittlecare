@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Clock, Check, AlertCircle, Pencil, Loader } from 'lucide-react'
+import AttendanceExportButton from '@/components/ui/AttendanceExportButton'
 
 const STATUS_OPTIONS = [
   { value: 'present',  label: 'Present',  emoji: '✓' },
@@ -25,7 +26,6 @@ function nowHHMM() {
 
 function formatTimeDisplay(t) {
   if (!t) return ''
-  // t is HH:MM or HH:MM:SS
   const [h, m] = t.split(':')
   const hour24 = parseInt(h)
   const hour12 = hour24 === 0 ? 12 : hour24 > 12 ? hour24 - 12 : hour24
@@ -56,13 +56,13 @@ function calcDuration(checkIn, checkOut) {
  * already tapped, the record exists with checked_in_by='parent' and the
  * widget shows that.
  */
-export default function TodayWidget({ licenseeId, userId }) {
+export default function TodayWidget({ licenseeId, userId, businessName, providerName }) {
   const [loading, setLoading] = useState(true)
   const [children, setChildren] = useState([])
   const [families, setFamilies] = useState([])
   const [attendance, setAttendance] = useState([])
-  const [working, setWorking] = useState(null)  // childId currently being updated
-  const [editing, setEditing] = useState(null)  // {childId, field}
+  const [working, setWorking] = useState(null)
+  const [editing, setEditing] = useState(null)
   const [editTime, setEditTime] = useState('')
 
   useEffect(() => {
@@ -125,7 +125,7 @@ export default function TodayWidget({ licenseeId, userId }) {
     setWorking(child.id)
     const now = nowHHMM()
     const today = todayYMD()
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('attendance')
       .upsert({
         user_id: licenseeId,
@@ -136,8 +136,6 @@ export default function TodayWidget({ licenseeId, userId }) {
         checked_in_by: 'provider',
         checked_in_by_user_id: userId,
       }, { onConflict: 'child_id,date' })
-      .select()
-      .single()
     setWorking(null)
     if (!error) await loadAttendanceOnly()
   }
@@ -257,6 +255,20 @@ export default function TodayWidget({ licenseeId, userId }) {
           )}
         </div>
       </div>
+
+      {children.length > 0 && (
+        <div style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          marginBottom: 'var(--space-3)',
+        }}>
+          <AttendanceExportButton
+            licenseeId={licenseeId}
+            businessName={businessName}
+            providerName={providerName}
+          />
+        </div>
+      )}
 
       {loading ? (
         <div className="today-widget-loading">
