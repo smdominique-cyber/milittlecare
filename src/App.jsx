@@ -8,6 +8,7 @@ import ErrorBoundary from '@/components/ui/ErrorBoundary'
 import { ToastProvider } from '@/components/ui/Toast'
 
 import LoginPage from '@/pages/LoginPage'
+import LandingPage from '@/pages/LandingPage'
 import AuthCallbackPage from '@/pages/AuthCallbackPage'
 import ForgotPasswordPage from '@/pages/ForgotPasswordPage'
 import ResetPasswordPage from '@/pages/ResetPasswordPage'
@@ -66,8 +67,8 @@ export default function App() {
                 {/* Staff invitation accept */}
                 <Route path="/staff-invite/:token" element={<StaffInviteAcceptPage />} />
 
-                {/* Redirect root to dashboard */}
-                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                {/* Public landing page */}
+                <Route path="/" element={<LandingPage />} />
 
                 {/* Protected dashboard routes (with paywall gate) */}
                 <Route
