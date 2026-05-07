@@ -105,7 +105,6 @@ export default function FamiliesPage() {
     statusFilter === 'all' || f.enrollment_status === statusFilter
   )
 
-  // Stats
   const activeFamilies = families.filter(f => f.enrollment_status === 'active')
   const activeChildren = children.filter(c =>
     activeFamilies.some(f => f.id === c.family_id)
@@ -125,7 +124,6 @@ export default function FamiliesPage() {
 
   return (
     <div className="families-page">
-      {/* Summary */}
       <div className="families-summary">
         <div className="summary-card">
           <div className="summary-label">Active Families</div>
@@ -148,7 +146,6 @@ export default function FamiliesPage() {
         </div>
       </div>
 
-      {/* Header */}
       <div className="families-header">
         <h2>Families</h2>
         <button className="btn-add-family" onClick={() => setCreating(true)}>
@@ -156,7 +153,6 @@ export default function FamiliesPage() {
         </button>
       </div>
 
-      {/* Status tabs */}
       <div className="status-tabs">
         {['all', 'active', 'paused', 'ended'].map(s => (
           <button
@@ -170,7 +166,6 @@ export default function FamiliesPage() {
         ))}
       </div>
 
-      {/* Grid */}
       {filteredFamilies.length === 0 ? (
         <div className="deductions-empty">
           <div className="deductions-empty-icon">👨‍👩‍👧</div>
@@ -293,8 +288,6 @@ export default function FamiliesPage() {
 }
 
 // ════════════════════════════════════════════════════════════
-// Family Detail Modal
-// ════════════════════════════════════════════════════════════
 function FamilyDetailModal({ userId, family, children: initialChildren, guardians: initialGuardians, emergencyContacts: initialEC, onClose, onChange }) {
   const isNew = !family
   const [tab, setTab] = useState('overview')
@@ -307,10 +300,10 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
     start_date:                  family?.start_date || '',
     end_date:                    family?.end_date || '',
     notes:                       family?.notes || '',
-    // New billing schedule fields:
     billing_frequency:           family?.billing_frequency || 'weekly',
     billing_frequency_weeks:     family?.billing_frequency_weeks || '',
     billing_cycle_start_day:     family?.billing_cycle_start_day ?? 1,
+    billing_cycle_end_day:       family?.billing_cycle_end_day ?? '',
     billing_cycle_anchor_date:   family?.billing_cycle_anchor_date || '',
     billing_monthly_mode:        family?.billing_monthly_mode || 'calendar',
     billing_partial_week_mode:   family?.billing_partial_week_mode || 'full_rate',
@@ -335,6 +328,9 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
                                    ? parseInt(form.billing_frequency_weeks)
                                    : null,
       billing_cycle_start_day:   parseInt(form.billing_cycle_start_day) || 1,
+      billing_cycle_end_day:     form.billing_cycle_end_day === '' || form.billing_cycle_end_day === null
+                                   ? null
+                                   : parseInt(form.billing_cycle_end_day),
       billing_cycle_anchor_date: form.billing_cycle_anchor_date || null,
       billing_monthly_mode:      form.billing_monthly_mode || 'calendar',
       billing_partial_week_mode: form.billing_partial_week_mode || 'full_rate',
@@ -439,7 +435,6 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
   )
 }
 
-// ─── Overview tab ──────────────────────────────────────
 function OverviewTab({ form, update }) {
   return (
     <>
@@ -479,7 +474,6 @@ function OverviewTab({ form, update }) {
         )}
       </div>
 
-      {/* ─── Billing schedule section (only for weekly flat-rate families) ─── */}
       {form.billing_type === 'weekly' && (
         <BillingScheduleSection form={form} update={update} />
       )}
@@ -503,7 +497,6 @@ function OverviewTab({ form, update }) {
   )
 }
 
-// ─── Billing Schedule Section ──────────────────────────
 function BillingScheduleSection({ form, update }) {
   const freq = form.billing_frequency || 'weekly'
   const showStartDay = freq === 'weekly' || freq === 'biweekly' || freq === 'custom'
@@ -511,7 +504,6 @@ function BillingScheduleSection({ form, update }) {
   const showCustomWeeks = freq === 'custom'
   const showMonthlyMode = freq === 'monthly'
 
-  // Compute preview of next invoice
   let preview = null
   if (form.weekly_rate) {
     try {
@@ -521,6 +513,9 @@ function BillingScheduleSection({ form, update }) {
           ? parseInt(form.billing_frequency_weeks)
           : null,
         billing_cycle_start_day: parseInt(form.billing_cycle_start_day) || 1,
+        billing_cycle_end_day: form.billing_cycle_end_day === '' || form.billing_cycle_end_day === null
+          ? null
+          : parseInt(form.billing_cycle_end_day),
         billing_cycle_anchor_date: form.billing_cycle_anchor_date || null,
         billing_monthly_mode: form.billing_monthly_mode || 'calendar',
         billing_partial_week_mode: form.billing_partial_week_mode || 'full_rate',
@@ -593,6 +588,18 @@ function BillingScheduleSection({ form, update }) {
               ))}
             </select>
           </div>
+          <div className="form-field-group">
+            <label className="field-label">Cycle ends on</label>
+            <select className="field-input" value={form.billing_cycle_end_day} onChange={update('billing_cycle_end_day')}>
+              <option value="">End of full cycle (default)</option>
+              {DAY_OF_WEEK_OPTIONS.map(d => (
+                <option key={d.value} value={d.value}>{d.label}</option>
+              ))}
+            </select>
+            <p style={{ fontSize: '0.75rem', color: 'var(--clr-ink-soft)', margin: '4px 0 0', lineHeight: 1.5 }}>
+              For Mon–Fri operations, set this to <strong>Friday</strong> so invoices show the work week instead of including weekends.
+            </p>
+          </div>
         </div>
       )}
 
@@ -640,7 +647,6 @@ function BillingScheduleSection({ form, update }) {
         </div>
       </div>
 
-      {/* Preview */}
       {preview && (
         <div style={{
           marginTop: 'var(--space-3)',
@@ -664,7 +670,6 @@ function BillingScheduleSection({ form, update }) {
   )
 }
 
-// ─── Children tab (UNCHANGED) ──────────────────────────
 function ChildrenTab({ userId, familyId, children, onChange }) {
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -791,7 +796,6 @@ function ChildForm({ userId, familyId, child, onClose, onSaved }) {
   )
 }
 
-// ─── Guardians tab (UNCHANGED) ──────────────────────────
 function GuardiansTab({ userId, familyId, guardians, onChange }) {
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -933,7 +937,6 @@ function GuardianForm({ userId, familyId, guardian, onClose, onSaved }) {
   )
 }
 
-// ─── Emergency contacts tab (UNCHANGED) ──────────────────
 function EmergencyTab({ userId, familyId, contacts, onChange }) {
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ name: '', relationship: '', phone: '', notes: '' })
@@ -1019,7 +1022,6 @@ function EmergencyTab({ userId, familyId, contacts, onChange }) {
   )
 }
 
-// ─── Attendance tab (UNCHANGED) ──────────────────────────
 function AttendanceTab({ userId, children }) {
   const [weekStart, setWeekStart] = useState(getMonday(new Date()))
   const [attendance, setAttendance] = useState([])
@@ -1140,7 +1142,6 @@ function AttendanceTab({ userId, children }) {
   )
 }
 
-// ─── Invitations tab (UNCHANGED) ──────────────────────────
 function InvitationsTab({ userId, family, guardians, onChange }) {
   const familyId = family.id
   const familyName = family.family_name
