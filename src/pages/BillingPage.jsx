@@ -54,6 +54,7 @@ export default function BillingPage() {
   const [payments, setPayments] = useState([])
   const [attendance, setAttendance] = useState([])
   const [children, setChildren] = useState([])
+  const [policies, setPolicies] = useState({})
   const [loading, setLoading] = useState(true)
 
   const [filter, setFilter] = useState('all')
