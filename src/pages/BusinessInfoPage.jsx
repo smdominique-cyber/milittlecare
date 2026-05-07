@@ -645,6 +645,44 @@ export default function BusinessInfoPage() {
               )}
             </div>
 
+            {/* ─── NEW: Invoice due date defaults ─── */}
+            <div className="bi-fieldset">
+              <label style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', fontWeight: 500, color: 'var(--clr-ink)', display: 'block', marginBottom: 8 }}>
+                Invoice due date
+              </label>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-mid)', marginTop: 0, marginBottom: 'var(--space-3)', lineHeight: 1.5 }}>
+                When should new invoices be due? This is used as the default when invoices are generated.
+              </p>
+              <div className="bi-form-row">
+                <div className="bi-field">
+                  <label>Days until due</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={policies.default_invoice_due_offset_days ?? 7}
+                    onChange={(e) => updatePolicy('default_invoice_due_offset_days', parseInt(e.target.value) || 0)}
+                    className="bi-input"
+                  />
+                </div>
+                <div className="bi-field">
+                  <label>Counted from</label>
+                  <select
+                    value={policies.default_invoice_due_anchor || 'generate_date'}
+                    onChange={(e) => updatePolicy('default_invoice_due_anchor', e.target.value)}
+                    className="bi-input"
+                  >
+                    <option value="generate_date">When I generate the invoice</option>
+                    <option value="period_start">Start of the billing period</option>
+                    <option value="period_end">End of the billing period</option>
+                  </select>
+                </div>
+              </div>
+              <p style={{ fontSize: '0.75rem', color: 'var(--clr-ink-soft)', margin: '8px 0 0', lineHeight: 1.5 }}>
+                Examples: "7 days from when I generate" → bill on Monday, due next Monday. "0 days from period end" → due on the last day of the billing period.
+              </p>
+            </div>
+
             <div className="bi-field">
               <label>Drop-off notes (optional)</label>
               <textarea
