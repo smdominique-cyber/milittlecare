@@ -6,10 +6,25 @@ import {
 } from 'lucide-react'
 import '@/styles/staff.css'
 
+// User-facing labels and descriptions for each role.
+// DB values stay the same: adult_staff / assistant / view_only.
+// Internally `assistant` maps to "Daily Helper" — younger or older, financial-restricted.
 const ROLES = [
-  { value: 'adult_staff', label: 'Adult Staff (18+)', desc: 'Full daily ops + medication. Cannot manage billing.' },
-  { value: 'assistant', label: 'Assistant (14-17)', desc: 'Daily ops only. CANNOT log medication (Michigan R 400.1918).' },
-  { value: 'view_only', label: 'View-only', desc: 'Sees data but cannot edit anything. Good for spouses managing books.' },
+  {
+    value: 'adult_staff',
+    label: 'Co-Provider',
+    desc: 'Full trust — handles families, billing, receipts, attendance, messages. Cannot change subscription. Use for a spouse, business partner, or full assistant.',
+  },
+  {
+    value: 'assistant',
+    label: 'Daily Helper',
+    desc: 'Day-to-day caregiver — attendance, messages, family info. Cannot see or touch billing, invoices, receipts, or any financial information.',
+  },
+  {
+    value: 'view_only',
+    label: 'View-only',
+    desc: 'Reads deductions, T/S ratio, and attendance reports. Cannot edit anything. Good for an accountant or bookkeeper.',
+  },
 ]
 
 export default function StaffPage() {
@@ -18,7 +33,12 @@ export default function StaffPage() {
   const [invitations, setInvitations] = useState([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ recipient_name: '', recipient_email: '', intended_role: 'adult_staff' })
+  const [form, setForm] = useState({
+    recipient_name: '',
+    recipient_email: '',
+    intended_role: 'adult_staff',
+    is_18_or_older: true,
+  })
   const [sending, setSending] = useState(false)
   const [message, setMessage] = useState(null)
 
@@ -31,7 +51,6 @@ export default function StaffPage() {
       supabase.from('staff_invitations').select('*').eq('licensee_id', user.id).order('created_at', { ascending: false }),
     ])
 
-    // Augment with profiles
     const memberships = m.data || []
     for (const m of memberships) {
       const { data: p } = await supabase.from('profiles').select('full_name, email').eq('id', m.staff_user_id).maybeSingle()
@@ -62,7 +81,7 @@ export default function StaffPage() {
         ? `Invitation sent to ${form.recipient_email}`
         : `Invitation created. Email could not be sent — share the link directly: ${data.invitation.url}`
       setMessage({ type: data.email_sent ? 'success' : 'info', text: sentMsg })
-      setForm({ recipient_name: '', recipient_email: '', intended_role: 'adult_staff' })
+      setForm({ recipient_name: '', recipient_email: '', intended_role: 'adult_staff', is_18_or_older: true })
       setShowForm(false)
       await loadAll()
     } catch (err) {
@@ -85,6 +104,7 @@ export default function StaffPage() {
           recipient_name: invitation.recipient_name,
           recipient_email: invitation.recipient_email,
           intended_role: invitation.intended_role,
+          is_18_or_older: invitation.is_18_or_older ?? true,
         }),
       })
       setMessage({ type: 'success', text: `Resent to ${invitation.recipient_email}` })
@@ -106,6 +126,12 @@ export default function StaffPage() {
   const updateRole = async (membershipId, newRole) => {
     await supabase.from('staff_memberships').update({ role: newRole }).eq('id', membershipId)
     setMessage({ type: 'success', text: 'Role updated' })
+    await loadAll()
+  }
+
+  const updateAgeFlag = async (membershipId, is18) => {
+    await supabase.from('staff_memberships').update({ is_18_or_older: is18 }).eq('id', membershipId)
+    setMessage({ type: 'success', text: is18 ? 'Marked 18 or older — medication logging enabled' : 'Marked under 18 — medication logging disabled (Michigan R 400.1918)' })
     await loadAll()
   }
 
@@ -146,7 +172,7 @@ export default function StaffPage() {
     <>
       <div className="staff-intro">
         <h2>Your Team</h2>
-        <p>Invite staff members to help with daily operations. Roles enforce what each person can do — Michigan R 400.1918 requires medication be logged only by adult caregivers (18+).</p>
+        <p>Invite staff members to help with daily operations. Roles control what each person can do — and Michigan R 400.1918 requires medication be logged only by adult caregivers (18+).</p>
       </div>
 
       {message && (
@@ -190,6 +216,20 @@ export default function StaffPage() {
                 <span className={`staff-role-badge ${m.role}`}>
                   {ROLES.find(r => r.value === m.role)?.label || m.role}
                 </span>
+                {!m.is_18_or_older && (
+                  <span style={{
+                    fontSize: '0.6875rem',
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--clr-warm)',
+                    color: 'var(--clr-ink-soft)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                  }}>
+                    Under 18
+                  </span>
+                )}
               </div>
               <div className="staff-meta">
                 {m._profile?.email}
@@ -207,6 +247,29 @@ export default function StaffPage() {
                   <option key={r.value} value={r.value}>{r.label}</option>
                 ))}
               </select>
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: '0.75rem',
+                  color: 'var(--clr-ink-mid)',
+                  cursor: 'pointer',
+                  padding: '4px 8px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--clr-cream)',
+                  border: '1px solid var(--clr-warm-mid)',
+                }}
+                title="If checked, this person can log medication (Michigan R 400.1918)"
+              >
+                <input
+                  type="checkbox"
+                  checked={m.is_18_or_older ?? true}
+                  onChange={(e) => updateAgeFlag(m.id, e.target.checked)}
+                  style={{ cursor: 'pointer' }}
+                />
+                18+
+              </label>
               <button className="staff-icon-btn danger" onClick={() => removeStaff(m)} title="Remove">
                 <Trash2 size={13} />
               </button>
@@ -306,8 +369,38 @@ export default function StaffPage() {
               </div>
             </div>
 
+            <div className="staff-field">
+              <label style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 10,
+                padding: 12,
+                background: 'var(--clr-cream)',
+                border: '1.5px solid var(--clr-warm-mid)',
+                borderRadius: 'var(--radius-md)',
+                cursor: 'pointer',
+                fontWeight: 400,
+                color: 'var(--clr-ink)',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={form.is_18_or_older}
+                  onChange={(e) => setForm(f => ({ ...f, is_18_or_older: e.target.checked }))}
+                  style={{ marginTop: 3, cursor: 'pointer', flexShrink: 0, accentColor: 'var(--clr-sage-dark)' }}
+                />
+                <div>
+                  <div style={{ fontSize: '0.9375rem', fontWeight: 500, marginBottom: 2 }}>
+                    This person is 18 or older
+                  </div>
+                  <div style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)', lineHeight: 1.4 }}>
+                    Required to log medication. Michigan R 400.1918 prohibits caregivers under 18 from administering medication. Uncheck if this is a teen helper.
+                  </div>
+                </div>
+              </label>
+            </div>
+
             <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-4)' }}>
-              <button className="staff-cancel-btn" onClick={() => { setShowForm(false); setForm({ recipient_name: '', recipient_email: '', intended_role: 'adult_staff' }) }}>
+              <button className="staff-cancel-btn" onClick={() => { setShowForm(false); setForm({ recipient_name: '', recipient_email: '', intended_role: 'adult_staff', is_18_or_older: true }) }}>
                 Cancel
               </button>
               <button
