@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, CreditCard, X, Clock, Phone, ChevronDown, ChevronUp, Info, Settings, ChevronRight, MessageCircle } from 'lucide-react'
+import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, CreditCard, X, Clock, Phone, ChevronDown, ChevronUp, Info, Settings, ChevronRight, MessageCircle, LogIn } from 'lucide-react'
 import AutopayEnrollment from '@/components/parent/AutopayEnrollment'
 import BusinessInfoSection from '@/components/parent/BusinessInfoSection'
 import InstallBanner from '@/components/ui/InstallBanner'
@@ -21,7 +21,25 @@ function shortDate(d) {
   return new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-// Local storage key for the password banner dismissal
+function todayYMD() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function nowHHMM() {
+  const d = new Date()
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function formatTimeDisplay(t) {
+  if (!t) return ''
+  const [h, m] = t.split(':')
+  const hour24 = parseInt(h)
+  const hour12 = hour24 === 0 ? 12 : hour24 > 12 ? hour24 - 12 : hour24
+  const ampm = hour24 >= 12 ? 'PM' : 'AM'
+  return `${hour12}:${m} ${ampm}`
+}
+
 const PWBANNER_DISMISSED_KEY = 'mlc_pw_banner_dismissed_v1'
 
 export default function ParentDashboardPage() {
@@ -38,8 +56,13 @@ export default function ParentDashboardPage() {
   const [enrollingFamily, setEnrollingFamily] = useState(null)
   const [disabling, setDisabling] = useState(false)
 
+  // Today widget state
+  const [children, setChildren] = useState([])
+  const [attendance, setAttendance] = useState([])
+  const [working, setWorking] = useState(null)
+
   // Password setup state
-  const [hasPassword, setHasPassword] = useState(null)  // null = unknown
+  const [hasPassword, setHasPassword] = useState(null)
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [pwFields, setPwFields] = useState({ password: '', confirm: '' })
@@ -81,6 +104,14 @@ export default function ParentDashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Re-fetch attendance every 30s so provider-recorded check-outs show up
+  useEffect(() => {
+    if (!session || families.length === 0) return
+    const intervalId = setInterval(() => loadAttendanceOnly(), 30000)
+    return () => clearInterval(intervalId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, families])
+
   async function checkHasPassword(userId) {
     const { data } = await supabase
       .from('parent_profiles')
@@ -107,12 +138,29 @@ export default function ParentDashboardPage() {
     }
 
     const familyIds = familiesData.map(f => f.id)
-    const { data: invoicesData } = await supabase
-      .from('invoices')
-      .select('*')
-      .in('family_id', familyIds)
-      .order('created_at', { ascending: false })
-    setInvoices(invoicesData || [])
+
+    // Load children, invoices, providers, and today's attendance in parallel
+    const [invoicesResp, childrenResp, attendanceResp] = await Promise.all([
+      supabase
+        .from('invoices')
+        .select('*')
+        .in('family_id', familyIds)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('children')
+        .select('id, first_name, last_name, family_id')
+        .in('family_id', familyIds),
+      supabase
+        .from('attendance')
+        .select('*')
+        .eq('date', todayYMD()),
+    ])
+    setInvoices(invoicesResp.data || [])
+    setChildren(childrenResp.data || [])
+
+    // Filter attendance to only this parent's children
+    const childIds = new Set((childrenResp.data || []).map(c => c.id))
+    setAttendance((attendanceResp.data || []).filter(a => childIds.has(a.child_id)))
 
     const providerIds = [...new Set((links || []).map(l => l.provider_user_id))]
     const providerMap = {}
@@ -126,6 +174,60 @@ export default function ParentDashboardPage() {
     setLoading(false)
   }
 
+  async function loadAttendanceOnly() {
+    if (children.length === 0) return
+    const childIds = children.map(c => c.id)
+    const { data } = await supabase
+      .from('attendance')
+      .select('*')
+      .eq('date', todayYMD())
+      .in('child_id', childIds)
+    if (data) setAttendance(data)
+  }
+
+  // ─── Drop-off / pickup actions ─────────────────
+  const handleDropOff = async (child) => {
+    if (!session) return
+    setWorking(child.id)
+    const today = todayYMD()
+    const now = nowHHMM()
+    const { data: family } = await supabase
+      .from('families')
+      .select('user_id')
+      .eq('id', child.family_id)
+      .single()
+
+    if (!family) {
+      setMessage({ type: 'error', text: 'Could not record drop-off — family not found.' })
+      setWorking(null)
+      return
+    }
+
+    const { error } = await supabase
+      .from('attendance')
+      .upsert({
+        user_id: family.user_id,
+        child_id: child.id,
+        date: today,
+        check_in: now,
+        status: 'present',
+        checked_in_by: 'parent',
+        checked_in_by_user_id: session.user.id,
+      }, { onConflict: 'child_id,date' })
+    setWorking(null)
+    if (error) {
+      setMessage({ type: 'error', text: `Could not record drop-off: ${error.message}` })
+    } else {
+      setMessage({ type: 'success', text: `✓ ${child.first_name} dropped off at ${formatTimeDisplay(now)}` })
+      await loadAttendanceOnly()
+    }
+  }
+
+  const getRecord = (childId) => {
+    return attendance.find(a => a.child_id === childId)
+  }
+
+  // ─── Other handlers ─────────────────
   const signOut = async () => {
     await supabase.auth.signOut()
     navigate('/')
@@ -181,7 +283,6 @@ export default function ParentDashboardPage() {
     setDisabling(false)
   }
 
-  // ─── Password handling ─────────────────
   const dismissBanner = () => {
     localStorage.setItem(PWBANNER_DISMISSED_KEY, '1')
     setBannerDismissed(true)
@@ -286,7 +387,6 @@ export default function ParentDashboardPage() {
   const primaryProvider = providers[primaryFamily.user_id]
   const primaryProviderName = primaryProvider?.daycare_name || primaryProvider?.full_name || 'Your provider'
 
-  // Show password banner if: we know they don't have one AND they haven't dismissed it
   const showPasswordBanner = hasPassword === false && !bannerDismissed
 
   return (
@@ -381,6 +481,137 @@ export default function ParentDashboardPage() {
                 : 'You\'re all caught up — nothing owed!'}
           </div>
         </div>
+
+        {/* ─── Today / drop-off section ─── */}
+        {children.length > 0 && (
+          <section className="parent-section">
+            <h3 className="parent-section-title">Today</h3>
+            <div style={{
+              background: 'white',
+              border: '1px solid var(--clr-warm-mid)',
+              borderRadius: 'var(--radius-lg)',
+              padding: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+            }}>
+              {children.map(child => {
+                const rec = getRecord(child.id)
+                const isWorking = working === child.id
+
+                let state
+                if (!rec) state = 'not_arrived'
+                else if (rec.status === 'absent') state = 'absent'
+                else if (rec.check_in && rec.check_out) state = 'done'
+                else if (rec.check_in) state = 'here'
+                else state = 'not_arrived'
+
+                return (
+                  <div
+                    key={child.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '8px 0',
+                      borderTop: child === children[0] ? 'none' : '1px solid var(--clr-warm-mid)',
+                      paddingTop: child === children[0] ? 0 : 12,
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontFamily: 'var(--font-display)',
+                        fontSize: '1rem',
+                        color: 'var(--clr-ink)',
+                        fontWeight: 500,
+                      }}>
+                        {child.first_name} {child.last_name}
+                      </div>
+                      <div style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-mid)', marginTop: 2 }}>
+                        {state === 'not_arrived' && (
+                          <span style={{ color: 'var(--clr-ink-soft)' }}>Not yet at daycare</span>
+                        )}
+                        {state === 'here' && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <CheckCircle size={12} style={{ color: 'var(--clr-success)' }} />
+                            Dropped off at {formatTimeDisplay(rec.check_in)}
+                            {rec.checked_in_by === 'parent' && (
+                              <span style={{
+                                fontSize: '0.625rem',
+                                background: 'var(--clr-cream)',
+                                color: 'var(--clr-sage-dark)',
+                                padding: '1px 6px',
+                                borderRadius: 'var(--radius-full)',
+                                fontWeight: 600,
+                                marginLeft: 4,
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.04em',
+                              }}>by you</span>
+                            )}
+                          </span>
+                        )}
+                        {state === 'done' && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <CheckCircle size={12} style={{ color: 'var(--clr-success)' }} />
+                            {formatTimeDisplay(rec.check_in)} – {formatTimeDisplay(rec.check_out)}
+                          </span>
+                        )}
+                        {state === 'absent' && (
+                          <span style={{ color: 'var(--clr-ink-soft)' }}>Marked absent</span>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      {state === 'not_arrived' && (
+                        <button
+                          className="parent-cta"
+                          onClick={() => handleDropOff(child)}
+                          disabled={isWorking}
+                          style={{
+                            width: 'auto',
+                            padding: '10px 16px',
+                            fontSize: '0.875rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                        >
+                          <LogIn size={14} />
+                          {isWorking ? 'Saving…' : 'Drop Off'}
+                        </button>
+                      )}
+                      {state === 'here' && (
+                        <span style={{
+                          fontSize: '0.78125rem',
+                          color: 'var(--clr-success)',
+                          fontWeight: 500,
+                          padding: '6px 10px',
+                          background: 'var(--clr-success-pale)',
+                          borderRadius: 'var(--radius-full)',
+                        }}>
+                          At daycare
+                        </span>
+                      )}
+                      {state === 'done' && (
+                        <span style={{
+                          fontSize: '0.78125rem',
+                          color: 'var(--clr-ink-soft)',
+                          fontWeight: 500,
+                          padding: '6px 10px',
+                          background: 'var(--clr-cream)',
+                          borderRadius: 'var(--radius-full)',
+                        }}>
+                          Picked up ✓
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Autopay status / enrollment */}
         {primaryFamily.autopay_enabled ? (
@@ -514,7 +745,6 @@ export default function ParentDashboardPage() {
         <section className="parent-section">
           <h3 className="parent-section-title">Account</h3>
 
-          {/* Messages link */}
           <button
             onClick={() => navigate('/parent/messages')}
             style={{
@@ -575,7 +805,6 @@ export default function ParentDashboardPage() {
             <ChevronRight size={16} style={{ color: 'var(--clr-ink-soft)' }} />
           </button>
 
-          {/* My Family quick link */}
           <button
             onClick={() => navigate('/parent/family')}
             style={{
