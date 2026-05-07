@@ -171,7 +171,12 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        <TodayWidget licenseeId={licenseeId} userId={user?.id} />
+        <TodayWidget
+          licenseeId={licenseeId}
+          userId={user?.id}
+          providerName={user?.user_metadata?.full_name}
+          businessName={null}
+        />
 
         <div style={{
           background: 'var(--clr-white)',
@@ -249,7 +254,12 @@ export default function DashboardPage() {
       </div>
 
       {/* Today widget — daily check-in/out at-a-glance */}
-      <TodayWidget licenseeId={licenseeId} userId={user?.id} />
+      <TodayWidget
+        licenseeId={licenseeId}
+        userId={user?.id}
+        providerName={user?.user_metadata?.full_name}
+        businessName={null}
+      />
 
       {/* Setup Progress Widget */}
       <SetupWidget stats={setupStats} />
