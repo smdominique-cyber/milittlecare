@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { Clock, Check, AlertCircle, Pencil, Loader } from 'lucide-react'
+import { Clock, Check, AlertCircle, Pencil, Loader, Undo2 } from 'lucide-react'
 import AttendanceExportButton from '@/components/ui/AttendanceExportButton'
 
 const STATUS_OPTIONS = [
@@ -44,18 +44,6 @@ function calcDuration(checkIn, checkOut) {
   return `${hours}h ${String(remainingMins).padStart(2, '0')}m`
 }
 
-/**
- * TodayWidget — provider's daily check-in/out at-a-glance.
- *
- * Shows every child in active families. Three visual states per child:
- * - Not arrived yet → "Drop off" button
- * - Currently here → checked-in info + "Release" button
- * - Done for the day → both times + duration
- *
- * Provider taps record attendance with checked_in_by='provider'. If parent has
- * already tapped, the record exists with checked_in_by='parent' and the
- * widget shows that.
- */
 export default function TodayWidget({ licenseeId, userId, businessName, providerName }) {
   const [loading, setLoading] = useState(true)
   const [children, setChildren] = useState([])
@@ -70,7 +58,6 @@ export default function TodayWidget({ licenseeId, userId, businessName, provider
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [licenseeId])
 
-  // Re-fetch every 30 seconds so parent-recorded check-ins show up
   useEffect(() => {
     if (!licenseeId) return
     const intervalId = setInterval(() => {
@@ -159,6 +146,40 @@ export default function TodayWidget({ licenseeId, userId, businessName, provider
     if (!error) await loadAttendanceOnly()
   }
 
+  // ─── New: Undo a check-in ──────────────────────
+  // Removes the entire attendance record for today, returning child to "not arrived"
+  const handleUndoCheckIn = async (child) => {
+    if (!window.confirm(`Undo ${child.first_name}'s check-in? This will remove the record entirely.`)) return
+    setWorking(child.id)
+    const today = todayYMD()
+    const { error } = await supabase
+      .from('attendance')
+      .delete()
+      .eq('child_id', child.id)
+      .eq('date', today)
+    setWorking(null)
+    if (!error) await loadAttendanceOnly()
+  }
+
+  // ─── New: Undo a release (check-out) ──────────
+  // Clears only check_out, leaving check_in intact — child returns to "here" state
+  const handleUndoCheckOut = async (child) => {
+    if (!window.confirm(`Undo ${child.first_name}'s release? They'll go back to "at daycare" status.`)) return
+    setWorking(child.id)
+    const today = todayYMD()
+    const { error } = await supabase
+      .from('attendance')
+      .update({
+        check_out: null,
+        checked_out_by: null,
+        checked_out_by_user_id: null,
+      })
+      .eq('child_id', child.id)
+      .eq('date', today)
+    setWorking(null)
+    if (!error) await loadAttendanceOnly()
+  }
+
   const handleMarkAbsent = async (child) => {
     if (!window.confirm(`Mark ${child.first_name} absent today?`)) return
     setWorking(child.id)
@@ -214,7 +235,6 @@ export default function TodayWidget({ licenseeId, userId, businessName, provider
     setEditTime('')
   }
 
-  // ─── Compute summary ────────────────────────────
   const states = children.map(c => {
     const rec = getRecord(c.id)
     if (!rec) return { child: c, state: 'not_arrived' }
@@ -232,7 +252,6 @@ export default function TodayWidget({ licenseeId, userId, businessName, provider
     done: states.filter(s => s.state === 'done').length,
   }
 
-  // ─── Render ─────────────────────────────────────
   return (
     <div className="today-widget">
       <div className="today-widget-header">
@@ -363,12 +382,34 @@ export default function TodayWidget({ licenseeId, userId, businessName, provider
                     </>
                   )}
                   {state === 'here' && (
-                    <button className="tw-action accent" onClick={() => handleCheckOut(child)} disabled={isWorking}>
-                      {isWorking ? '…' : 'Release'}
-                    </button>
+                    <>
+                      <button className="tw-action accent" onClick={() => handleCheckOut(child)} disabled={isWorking}>
+                        {isWorking ? '…' : 'Release'}
+                      </button>
+                      <button
+                        className="tw-action ghost"
+                        onClick={() => handleUndoCheckIn(child)}
+                        disabled={isWorking}
+                        title="Undo check-in (mistake)"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <Undo2 size={12} /> Undo
+                      </button>
+                    </>
                   )}
                   {state === 'done' && (
-                    <span className="tw-done-check"><Check size={16} /></span>
+                    <>
+                      <span className="tw-done-check"><Check size={16} /></span>
+                      <button
+                        className="tw-action ghost"
+                        onClick={() => handleUndoCheckOut(child)}
+                        disabled={isWorking}
+                        title="Undo release — back to 'at daycare'"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <Undo2 size={12} /> Undo release
+                      </button>
+                    </>
                   )}
                   {state === 'absent' && (
                     <button className="tw-action ghost" onClick={() => handleClearAbsent(child)} disabled={isWorking}>
