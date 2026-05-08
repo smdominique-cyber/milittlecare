@@ -139,7 +139,6 @@ export default function ParentDashboardPage() {
 
     const familyIds = familiesData.map(f => f.id)
 
-    // Load children, invoices, providers, and today's attendance in parallel
     const [invoicesResp, childrenResp, attendanceResp] = await Promise.all([
       supabase
         .from('invoices')
@@ -158,7 +157,6 @@ export default function ParentDashboardPage() {
     setInvoices(invoicesResp.data || [])
     setChildren(childrenResp.data || [])
 
-    // Filter attendance to only this parent's children
     const childIds = new Set((childrenResp.data || []).map(c => c.id))
     setAttendance((attendanceResp.data || []).filter(a => childIds.has(a.child_id)))
 
@@ -219,6 +217,29 @@ export default function ParentDashboardPage() {
       setMessage({ type: 'error', text: `Could not record drop-off: ${error.message}` })
     } else {
       setMessage({ type: 'success', text: `✓ ${child.first_name} dropped off at ${formatTimeDisplay(now)}` })
+      await loadAttendanceOnly()
+    }
+  }
+
+  // ─── New: Undo a parent-recorded drop-off ─────
+  // Only works if the parent themselves recorded the check-in (checked_in_by='parent').
+  // If the provider recorded it, this is locked — only the provider can undo.
+  const handleUndoDropOff = async (child) => {
+    if (!session) return
+    if (!window.confirm(`Undo ${child.first_name}'s drop-off? This will remove the check-in record.`)) return
+    setWorking(child.id)
+    const today = todayYMD()
+    const { error } = await supabase
+      .from('attendance')
+      .delete()
+      .eq('child_id', child.id)
+      .eq('date', today)
+      .eq('checked_in_by', 'parent')
+    setWorking(null)
+    if (error) {
+      setMessage({ type: 'error', text: `Could not undo: ${error.message}` })
+    } else {
+      setMessage({ type: 'success', text: `✓ ${child.first_name}'s drop-off was undone` })
       await loadAttendanceOnly()
     }
   }
@@ -582,16 +603,37 @@ export default function ParentDashboardPage() {
                         </button>
                       )}
                       {state === 'here' && (
-                        <span style={{
-                          fontSize: '0.78125rem',
-                          color: 'var(--clr-success)',
-                          fontWeight: 500,
-                          padding: '6px 10px',
-                          background: 'var(--clr-success-pale)',
-                          borderRadius: 'var(--radius-full)',
-                        }}>
-                          At daycare
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{
+                            fontSize: '0.78125rem',
+                            color: 'var(--clr-success)',
+                            fontWeight: 500,
+                            padding: '6px 10px',
+                            background: 'var(--clr-success-pale)',
+                            borderRadius: 'var(--radius-full)',
+                          }}>
+                            At daycare
+                          </span>
+                          {rec.checked_in_by === 'parent' && (
+                            <button
+                              onClick={() => handleUndoDropOff(child)}
+                              disabled={isWorking}
+                              title="Undo drop-off (mistake)"
+                              style={{
+                                background: 'transparent',
+                                border: '1px solid var(--clr-warm-mid)',
+                                color: 'var(--clr-ink-soft)',
+                                padding: '6px 10px',
+                                borderRadius: 'var(--radius-md)',
+                                fontSize: '0.78125rem',
+                                cursor: 'pointer',
+                                fontFamily: 'var(--font-body)',
+                              }}
+                            >
+                              {isWorking ? '…' : 'Undo'}
+                            </button>
+                          )}
+                        </div>
                       )}
                       {state === 'done' && (
                         <span style={{
