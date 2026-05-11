@@ -12,7 +12,8 @@ export default function InviteAcceptPage() {
   const [invitation, setInvitation] = useState(null)
   const [fullName, setFullName] = useState('')
   const [password, setPassword] = useState('')
-  const [usePassword, setUsePassword] = useState(true)
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [skipPassword, setSkipPassword] = useState(false)
 
   useEffect(() => {
     if (!token) {
@@ -46,15 +47,21 @@ export default function InviteAcceptPage() {
   }
 
   const handleAccept = async () => {
-    setPhase('accepting')
     setError(null)
 
-    // Validate password if they chose to set one
-    if (usePassword && password.length > 0 && password.length < 8) {
-      setError('Password must be at least 8 characters.')
-      setPhase('form')
-      return
+    // Validate password if they're setting one
+    if (!skipPassword) {
+      if (!password || password.length < 8) {
+        setError('Password must be at least 8 characters. Or click "I\'ll set a password later" below.')
+        return
+      }
+      if (password !== confirmPassword) {
+        setError("Passwords don't match. Please re-enter.")
+        return
+      }
     }
+
+    setPhase('accepting')
 
     try {
       const resp = await fetch('/api/accept-invitation', {
@@ -66,28 +73,43 @@ export default function InviteAcceptPage() {
       if (!resp.ok) throw new Error(data.error || 'Failed to accept invitation')
 
       // Sign in via OTP verification
+      let signedInViaOtp = false
       if (data.auto_signin_token && data.email) {
         const { error: otpErr } = await supabase.auth.verifyOtp({
           email: data.email,
           token_hash: data.auto_signin_token,
           type: 'email',
         })
-        if (otpErr) {
-          if (data.magic_link) {
-            window.location.href = data.magic_link
-            return
-          }
-          throw otpErr
+        if (!otpErr) {
+          signedInViaOtp = true
         }
       }
 
-      // Now that we're signed in, set the password if they chose to
-      if (usePassword && password.length >= 8) {
+      // If we successfully signed in via OTP, set the password while we're signed in
+      if (signedInViaOtp && !skipPassword && password.length >= 8) {
         const { error: pwErr } = await supabase.auth.updateUser({ password })
         if (pwErr) {
-          // Don't fail the whole flow — they're signed in, just couldn't set the password
           console.warn('Password set failed:', pwErr.message)
+        } else {
+          // Mark has_password=true on parent_profiles so login flow knows
+          const { data: { user } } = await supabase.auth.getUser()
+          if (user) {
+            await supabase
+              .from('parent_profiles')
+              .update({ has_password: true })
+              .eq('id', user.id)
+          }
         }
+      }
+
+      // If OTP sign-in failed and we have a magic_link fallback, redirect to it.
+      // NOTE: in this path the password we collected does NOT get applied,
+      // because the magic link reloads the page. The parent will need to set
+      // a password from their dashboard after signing in. This is acceptable
+      // because the dashboard prompts for password setup if has_password=false.
+      if (!signedInViaOtp && data.magic_link) {
+        window.location.href = data.magic_link
+        return
       }
 
       setPhase('done')
@@ -169,48 +191,109 @@ export default function InviteAcceptPage() {
           Signing in as <strong>{invitation?.recipient_email}</strong>
         </div>
 
-        {/* Password section */}
-        <div style={{
-          marginTop: 20,
-          padding: 16,
-          background: 'var(--clr-cream)',
-          borderRadius: 'var(--radius-md)',
-          border: '1px solid var(--clr-warm-mid)',
-        }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: usePassword ? 12 : 0 }}>
-            <input
-              type="checkbox"
-              checked={usePassword}
-              onChange={(e) => setUsePassword(e.target.checked)}
-            />
-            <span style={{ fontSize: '0.9375rem', fontWeight: 500, color: 'var(--clr-ink)' }}>
-              <Lock size={14} style={{ display: 'inline', verticalAlign: '-2px', marginRight: 6 }} />
-              Set a password (recommended)
-            </span>
-          </label>
+        {/* Password section — default ON */}
+        {!skipPassword && (
+          <div style={{
+            marginTop: 20,
+            padding: 16,
+            background: 'var(--clr-cream)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--clr-warm-mid)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <Lock size={14} style={{ color: 'var(--clr-sage-dark)' }} />
+              <span style={{ fontSize: '0.9375rem', fontWeight: 500, color: 'var(--clr-ink)' }}>
+                Set a password
+              </span>
+            </div>
 
-          {usePassword ? (
-            <>
-              <input
-                className="parent-input"
-                type="password"
-                autoComplete="new-password"
-                minLength={8}
-                placeholder="At least 8 characters"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                style={{ marginTop: 0 }}
-              />
-              <p style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)', marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
-                You'll be able to sign in with this password going forward. You can also still use a magic link sent to your email anytime.
-              </p>
-            </>
-          ) : (
-            <p style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)', margin: 0, lineHeight: 1.5 }}>
-              You can skip this and sign in via email magic link each time. You can set a password later from your dashboard.
+            <label className="parent-label" style={{ fontSize: '0.8125rem' }}>Password</label>
+            <input
+              className="parent-input"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              placeholder="At least 8 characters"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={{ marginTop: 0 }}
+            />
+
+            <label className="parent-label" style={{ fontSize: '0.8125rem', marginTop: 10 }}>Confirm password</label>
+            <input
+              className="parent-input"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              placeholder="Type it again"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              style={{ marginTop: 0 }}
+            />
+
+            <p style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)', marginTop: 10, marginBottom: 0, lineHeight: 1.5 }}>
+              You'll be able to sign in with this password going forward. You can also use a magic link sent to your email anytime.
             </p>
-          )}
-        </div>
+
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--clr-warm-mid)' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setSkipPassword(true)
+                  setPassword('')
+                  setConfirmPassword('')
+                  setError(null)
+                }}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--clr-ink-soft)',
+                  fontSize: '0.78125rem',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  padding: 0,
+                  fontFamily: 'var(--font-body)',
+                }}
+              >
+                I'll set a password later
+              </button>
+            </div>
+          </div>
+        )}
+
+        {skipPassword && (
+          <div style={{
+            marginTop: 20,
+            padding: 14,
+            background: 'var(--clr-warm)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--clr-warm-mid)',
+            fontSize: '0.8125rem',
+            color: 'var(--clr-ink-mid)',
+            lineHeight: 1.5,
+          }}>
+            <strong style={{ color: 'var(--clr-ink)' }}>Heads up:</strong> without a password, you'll need to request a magic link by email every time you sign in. You can set a password anytime from your dashboard.
+            <div style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                onClick={() => { setSkipPassword(false); setError(null) }}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--clr-sage-dark)',
+                  fontSize: '0.78125rem',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  padding: 0,
+                  fontFamily: 'var(--font-body)',
+                  fontWeight: 500,
+                }}
+              >
+                ← Set a password now
+              </button>
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="parent-error">
@@ -221,7 +304,7 @@ export default function InviteAcceptPage() {
         <button
           className="parent-cta"
           onClick={handleAccept}
-          disabled={phase === 'accepting' || !fullName.trim() || (usePassword && password.length > 0 && password.length < 8)}
+          disabled={phase === 'accepting' || !fullName.trim()}
         >
           {phase === 'accepting' ? 'Setting up…' : 'Accept invitation'}
         </button>
