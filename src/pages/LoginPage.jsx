@@ -47,18 +47,69 @@ export default function LoginPage() {
     }
   }
 
+  // ──────────────────────────────────────────────────────────────
+  // When password sign-in fails with "Invalid login credentials",
+  // figure out WHY and give a useful error.
+  //
+  // The common case we're fixing: parent accepted invitation without
+  // setting a password. They later try to sign in with a password
+  // they never set. Supabase returns the generic "Invalid login
+  // credentials" — we detect this and tell them to use magic link.
+  // ──────────────────────────────────────────────────────────────
+  async function diagnoseLoginFailure(email) {
+    if (!email) return null
+    const { data: parentProfile } = await supabase
+      .from('parent_profiles')
+      .select('id, has_password')
+      .eq('email', email.toLowerCase().trim())
+      .maybeSingle()
+
+    if (parentProfile && !parentProfile.has_password) {
+      return 'parent_no_password'
+    }
+    if (parentProfile && parentProfile.has_password) {
+      return 'parent_wrong_password'
+    }
+    return null  // either a provider or no account at all — fall through to generic
+  }
+
   const handleLogin = async (e) => {
     e.preventDefault()
     setLoading(true)
     setMessage(null)
 
     const { error } = await signIn({ email: form.email, password: form.password })
-    if (error) {
-      setMessage({ type: 'error', text: error.message })
-      setLoading(false)
-    } else {
+
+    if (!error) {
       await routeAfterLogin()
+      return
     }
+
+    // Sign-in failed — try to diagnose for a better error message
+    const diagnosis = await diagnoseLoginFailure(form.email)
+    setLoading(false)
+
+    if (diagnosis === 'parent_no_password') {
+      setMessage({
+        type: 'info',
+        text: "We don't see a password on this account yet. Use 'Sign in with magic link' below — once you're in, you can set a password from your dashboard.",
+      })
+      // Helpfully auto-switch to magic link mode
+      setLoginMode('magic')
+      setForm((f) => ({ ...f, password: '' }))
+      return
+    }
+
+    if (diagnosis === 'parent_wrong_password') {
+      setMessage({
+        type: 'error',
+        text: "That password doesn't match. Try again, or use 'Sign in with magic link' below if you've forgotten it.",
+      })
+      return
+    }
+
+    // Generic case — provider with wrong password, or no account at all
+    setMessage({ type: 'error', text: error.message })
   }
 
   const handleSignUp = async (e) => {
@@ -166,7 +217,7 @@ export default function LoginPage() {
 
           {message && (
             <div className={`auth-message ${message.type}`}>
-              <span>{message.type === 'error' ? '⚠' : '✓'}</span>
+              <span>{message.type === 'error' ? '⚠' : message.type === 'info' ? 'ℹ' : '✓'}</span>
               <span>{message.text}</span>
             </div>
           )}
@@ -208,6 +259,9 @@ export default function LoginPage() {
               <button className="btn-primary" type="submit" disabled={loading}>
                 {loading ? 'Signing in…' : 'Sign in'}
               </button>
+              <p style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)', textAlign: 'center', marginTop: 12, marginBottom: 0, lineHeight: 1.5 }}>
+                Invited by a daycare provider? Try <strong>magic link</strong> below — your password may not be set yet.
+              </p>
             </form>
           )}
 
