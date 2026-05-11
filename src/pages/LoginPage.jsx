@@ -7,12 +7,11 @@ import '@/styles/auth.css'
 export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { signIn, signUp, signInWithMagicLink } = useAuth()
+  const { signIn, signUp } = useAuth()
 
   const from = location.state?.from?.pathname || null
 
   const [tab, setTab] = useState('login')
-  const [loginMode, setLoginMode] = useState('password')
 
   const [form, setForm] = useState({ email: '', password: '', fullName: '' })
   const [loading, setLoading] = useState(false)
@@ -34,7 +33,6 @@ export default function LoginPage() {
       navigate('/dashboard', { replace: true })
       return
     }
-    // Check if this user is a parent (has a parent_profiles row)
     const { data: parentProfile } = await supabase
       .from('parent_profiles')
       .select('id')
@@ -47,15 +45,9 @@ export default function LoginPage() {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // When password sign-in fails with "Invalid login credentials",
-  // figure out WHY and give a useful error.
-  //
-  // The common case we're fixing: parent accepted invitation without
-  // setting a password. They later try to sign in with a password
-  // they never set. Supabase returns the generic "Invalid login
-  // credentials" — we detect this and tell them to use magic link.
-  // ──────────────────────────────────────────────────────────────
+  // When password sign-in fails, see whether this is a parent who never
+  // set a password (existing legacy account from the old invite flow).
+  // If so, point them at /forgot-password to reset.
   async function diagnoseLoginFailure(email) {
     if (!email) return null
     const { data: parentProfile } = await supabase
@@ -70,7 +62,7 @@ export default function LoginPage() {
     if (parentProfile && parentProfile.has_password) {
       return 'parent_wrong_password'
     }
-    return null  // either a provider or no account at all — fall through to generic
+    return null
   }
 
   const handleLogin = async (e) => {
@@ -85,30 +77,25 @@ export default function LoginPage() {
       return
     }
 
-    // Sign-in failed — try to diagnose for a better error message
     const diagnosis = await diagnoseLoginFailure(form.email)
     setLoading(false)
 
     if (diagnosis === 'parent_no_password') {
       setMessage({
         type: 'info',
-        text: "We don't see a password on this account yet. Use 'Sign in with magic link' below — once you're in, you can set a password from your dashboard.",
+        text: "Your account doesn't have a password set yet. Click 'Forgot password?' below to set one — we'll email you a secure link.",
       })
-      // Helpfully auto-switch to magic link mode
-      setLoginMode('magic')
-      setForm((f) => ({ ...f, password: '' }))
       return
     }
 
     if (diagnosis === 'parent_wrong_password') {
       setMessage({
         type: 'error',
-        text: "That password doesn't match. Try again, or use 'Sign in with magic link' below if you've forgotten it.",
+        text: "That password doesn't match. Try again, or click 'Forgot password?' to reset it.",
       })
       return
     }
 
-    // Generic case — provider with wrong password, or no account at all
     setMessage({ type: 'error', text: error.message })
   }
 
@@ -117,10 +104,10 @@ export default function LoginPage() {
     setLoading(true)
     setMessage(null)
 
-    const { error } = await signUp({
+    const { error } = await supabase.auth.signUp({
       email: form.email,
       password: form.password,
-      fullName: form.fullName,
+      options: { data: { full_name: form.fullName } },
     })
 
     setLoading(false)
@@ -130,23 +117,6 @@ export default function LoginPage() {
       setMessage({
         type: 'success',
         text: 'Almost there! Check your email to confirm your account, then come back to sign in.',
-      })
-    }
-  }
-
-  const handleMagicLink = async (e) => {
-    e.preventDefault()
-    setLoading(true)
-    setMessage(null)
-
-    const { error } = await signInWithMagicLink({ email: form.email })
-    setLoading(false)
-    if (error) {
-      setMessage({ type: 'error', text: error.message })
-    } else {
-      setMessage({
-        type: 'success',
-        text: 'Magic link sent! Check your email and click the link to sign in.',
       })
     }
   }
@@ -223,7 +193,7 @@ export default function LoginPage() {
           )}
 
           {/* ---- LOGIN ---- */}
-          {tab === 'login' && loginMode === 'password' && (
+          {tab === 'login' && (
             <form onSubmit={handleLogin}>
               <div className="form-field">
                 <label className="form-label" htmlFor="email">Email address</label>
@@ -260,48 +230,9 @@ export default function LoginPage() {
                 {loading ? 'Signing in…' : 'Sign in'}
               </button>
               <p style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)', textAlign: 'center', marginTop: 12, marginBottom: 0, lineHeight: 1.5 }}>
-                Invited by a daycare provider? Try <strong>magic link</strong> below — your password may not be set yet.
+                Invited by a daycare provider and don't have a password yet? Click <a href="/forgot-password" style={{ color: 'var(--clr-sage-dark)', fontWeight: 500 }}>Forgot password?</a> above to set one.
               </p>
             </form>
-          )}
-
-          {tab === 'login' && loginMode === 'magic' && (
-            <form onSubmit={handleMagicLink}>
-              <div className="form-field">
-                <label className="form-label" htmlFor="magic-email">Email address</label>
-                <input
-                  id="magic-email"
-                  className="form-input"
-                  type="email"
-                  autoComplete="email"
-                  required
-                  placeholder="you@example.com"
-                  value={form.email}
-                  onChange={set('email')}
-                />
-              </div>
-              <button className="btn-primary" type="submit" disabled={loading}>
-                {loading ? 'Sending…' : '✉ Send magic link'}
-              </button>
-            </form>
-          )}
-
-          {tab === 'login' && (
-            <>
-              <div className="auth-divider">or</div>
-              <button
-                className="btn-secondary"
-                type="button"
-                onClick={() => {
-                  setLoginMode(loginMode === 'password' ? 'magic' : 'password')
-                  setMessage(null)
-                }}
-              >
-                {loginMode === 'password'
-                  ? '✉ Sign in with magic link'
-                  : '🔑 Sign in with password'}
-              </button>
-            </>
           )}
 
           {/* ---- SIGN UP ---- */}
