@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import SetupWidget from '@/components/dashboard/SetupWidget'
 import TodayWidget from '@/components/dashboard/TodayWidget'
+import StaffClockWidget from '@/components/dashboard/StaffClockWidget'
 import InstallBanner from '@/components/ui/InstallBanner'
 import '@/styles/today-widget.css'
 
@@ -65,6 +66,7 @@ function categoryClass(cat) {
 export default function DashboardPage() {
   const { user } = useAuth()
   const { licenseeId, isLicensee, role } = useRole()
+  const [staffMembership, setStaffMembership] = useState(null)
   const navigate = useNavigate()
   const firstName = user?.user_metadata?.full_name?.split(' ')[0] || 'there'
   const greeting = getGreeting()
@@ -78,6 +80,24 @@ export default function DashboardPage() {
   const [policies, setPolicies] = useState(null)
 
   useEffect(() => { if (licenseeId) loadAll() }, [licenseeId])
+
+  // Load staff membership for clock-in widget (only relevant if user is staff, not licensee)
+  useEffect(() => {
+    if (!user || isLicensee) {
+      setStaffMembership(null)
+      return
+    }
+    async function loadMembership() {
+      const { data } = await supabase
+        .from('staff_memberships')
+        .select('licensee_id, role, status, location_required, hourly_rate')
+        .eq('staff_user_id', user.id)
+        .eq('status', 'active')
+        .maybeSingle()
+      setStaffMembership(data)
+    }
+    loadMembership()
+  }, [user, isLicensee])
 
   async function loadAll() {
     if (!licenseeId) return
@@ -158,6 +178,9 @@ export default function DashboardPage() {
     return (
       <>
         <InstallBanner />
+        {staffMembership && (
+          <StaffClockWidget userId={user.id} membership={staffMembership} />
+        )}
         <div className="welcome-banner">
           <div className="welcome-text">
             <h2>{greeting}, <em>{firstName}</em> 👋</h2>
@@ -226,6 +249,9 @@ export default function DashboardPage() {
   return (
     <>
       <InstallBanner />
+      {staffMembership && (
+        <StaffClockWidget userId={user.id} membership={staffMembership} />
+      )}
       <div className="welcome-banner">
         <div className="welcome-text">
           <h2>{greeting}, <em>{firstName}</em> 👋</h2>
