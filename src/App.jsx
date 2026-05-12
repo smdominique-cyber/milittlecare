@@ -10,6 +10,7 @@ import { ToastProvider } from '@/components/ui/Toast'
 import LoginPage from '@/pages/LoginPage'
 import LandingPage from '@/pages/LandingPage'
 import AttendancePage from '@/pages/AttendancePage'
+import AdminPage from '@/pages/AdminPage'
 import AuthCallbackPage from '@/pages/AuthCallbackPage'
 import ForgotPasswordPage from '@/pages/ForgotPasswordPage'
 import ResetPasswordPage from '@/pages/ResetPasswordPage'
@@ -98,6 +99,7 @@ export default function App() {
                   <Route path="business-info" element={<BusinessInfoPage />} />
                   <Route path="staff" element={<StaffPage />} />
                   <Route path="contact" element={<ContactPage />} />
+                  <Route path="admin" element={<AdminPage />} />
                 </Route>
 
                 {/* 404 fallback */}
