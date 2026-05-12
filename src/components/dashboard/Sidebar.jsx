@@ -20,6 +20,7 @@ import {
   UserCog,
   MessageSquare,
   MessageCircle,
+  Calendar,
 } from 'lucide-react'
 
 function getInitials(name) {
