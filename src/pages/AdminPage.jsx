@@ -216,7 +216,7 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {rows.map(r => (
-                  <tr key={r.user_id} style={{ borderBottom: '1px solid var(--clr-warm-mid)' }}>
+                  <tr key={r.id} style={{ borderBottom: '1px solid var(--clr-warm-mid)' }}>
                     <td style={td}>
                       <div style={{ fontWeight: 500, color: 'var(--clr-ink)' }}>
                         {r.full_name || '(no name)'}
