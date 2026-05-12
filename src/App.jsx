@@ -9,6 +9,7 @@ import { ToastProvider } from '@/components/ui/Toast'
 
 import LoginPage from '@/pages/LoginPage'
 import LandingPage from '@/pages/LandingPage'
+import AttendancePage from '@/pages/AttendancePage'
 import AuthCallbackPage from '@/pages/AuthCallbackPage'
 import ForgotPasswordPage from '@/pages/ForgotPasswordPage'
 import ResetPasswordPage from '@/pages/ResetPasswordPage'
@@ -85,6 +86,7 @@ export default function App() {
                   <Route path="receipts" element={<ReceiptsPage />} />
                   <Route path="deductions" element={<DeductionsPage />} />
                   <Route path="ts-ratio" element={<TSRatioPage />} />
+                  <Route path="attendance" element={<AttendancePage />} />
                   <Route path="families" element={<FamiliesPage />} />
                   <Route path="billing" element={<BillingPage />} />
                   <Route path="messages" element={<MessagesPage />} />
