@@ -1,0 +1,432 @@
+/* ============================================================
+   Attendance Page — week view of all kids across active families
+   ============================================================ */
+
+.att-page {
+  padding: 0;
+}
+
+.att-header {
+  background: white;
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  margin-bottom: var(--space-4);
+}
+
+.att-header h2 {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 400;
+  color: var(--clr-ink);
+  margin: 0 0 4px;
+  letter-spacing: -0.02em;
+}
+
+.att-header-sub {
+  color: var(--clr-ink-mid);
+  font-size: 0.875rem;
+  margin: 0 0 var(--space-4);
+}
+
+/* ─── Week navigation ─── */
+.att-week-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.att-week-nav-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.att-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: white;
+  border: 1px solid var(--clr-warm-mid);
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  color: var(--clr-ink-mid);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.att-nav-btn:hover {
+  border-color: var(--clr-sage);
+  color: var(--clr-sage-dark);
+}
+
+.att-nav-btn.today {
+  background: var(--clr-sage-pale);
+  border-color: var(--clr-sage);
+  color: var(--clr-sage-dark);
+  font-weight: 500;
+}
+
+.att-week-label {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  color: var(--clr-ink);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  padding: 0 8px;
+}
+
+.att-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.8125rem;
+  color: var(--clr-ink-mid);
+}
+
+.att-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.att-toggle input {
+  accent-color: var(--clr-sage-dark);
+  cursor: pointer;
+}
+
+.att-summary {
+  font-size: 0.8125rem;
+  color: var(--clr-ink-soft);
+}
+
+/* ─── Day cards ─── */
+.att-day-card {
+  background: white;
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-3);
+  overflow: hidden;
+}
+
+.att-day-card.is-today {
+  border-color: var(--clr-sage);
+  box-shadow: 0 0 0 2px var(--clr-sage-pale);
+}
+
+.att-day-card.is-future {
+  background: #fcfbf6;
+}
+
+.att-day-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--clr-cream);
+  border-bottom: 1px solid var(--clr-warm-mid);
+}
+
+.att-day-card.is-future .att-day-header {
+  background: #f4f0e3;
+}
+
+.att-day-title {
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  font-weight: 500;
+  color: var(--clr-ink);
+  letter-spacing: -0.01em;
+}
+
+.att-day-title-meta {
+  font-size: 0.75rem;
+  color: var(--clr-ink-soft);
+  font-weight: 400;
+  margin-left: 8px;
+  font-family: var(--font-body);
+}
+
+.att-day-pill {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--clr-sage-pale);
+  color: var(--clr-sage-dark);
+}
+
+.att-day-pill.future {
+  background: var(--clr-cream);
+  color: var(--clr-ink-soft);
+}
+
+/* ─── Kid rows ─── */
+.att-kid-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 90px auto;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--clr-warm-mid);
+  align-items: center;
+}
+
+.att-kid-row:last-child {
+  border-bottom: none;
+}
+
+.att-kid-row.has-record {
+  background: white;
+}
+
+.att-kid-row.no-record {
+  background: #fdfcf7;
+}
+
+.att-kid-row.absent {
+  background: #fdf9f2;
+}
+
+.att-kid-info {
+  min-width: 0;
+}
+
+.att-kid-name {
+  font-size: 0.9375rem;
+  color: var(--clr-ink);
+  font-weight: 500;
+}
+
+.att-kid-family {
+  font-size: 0.78125rem;
+  color: var(--clr-ink-soft);
+  margin-top: 2px;
+}
+
+.att-time-cell {
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  color: var(--clr-ink);
+}
+
+.att-time-input {
+  padding: 6px 8px;
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-sm);
+  background: white;
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  color: var(--clr-ink);
+  width: 100%;
+  max-width: 100px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.att-time-input:hover {
+  border-color: var(--clr-sage);
+}
+
+.att-time-input:focus {
+  outline: none;
+  border-color: var(--clr-sage-dark);
+}
+
+.att-time-input.empty {
+  color: var(--clr-ink-soft);
+}
+
+.att-status-select {
+  padding: 4px 8px;
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-sm);
+  background: white;
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  color: var(--clr-ink-mid);
+  cursor: pointer;
+  width: 100%;
+}
+
+.att-status-pill {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: inline-block;
+}
+
+.att-status-pill.absent { background: #fce8d8; color: #a8854a; }
+.att-status-pill.sick { background: #fde7e3; color: #c0392b; }
+.att-status-pill.vacation { background: #dde8f4; color: #3a6a8a; }
+.att-status-pill.holiday { background: #f4e7fd; color: #7a4ab8; }
+
+.att-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.att-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--clr-warm-mid);
+  background: white;
+  color: var(--clr-ink-soft);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.att-icon-btn:hover {
+  border-color: var(--clr-sage);
+  color: var(--clr-sage-dark);
+}
+
+.att-icon-btn.has-note {
+  background: var(--clr-cream);
+  color: var(--clr-sage-dark);
+  border-color: var(--clr-sage);
+}
+
+.att-icon-btn.danger:hover {
+  border-color: var(--clr-error);
+  color: var(--clr-error);
+}
+
+.att-add-btn {
+  background: var(--clr-sage-dark);
+  border: none;
+  color: white;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  font-size: 0.78125rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: background 0.15s;
+}
+
+.att-add-btn:hover {
+  background: var(--clr-sage);
+}
+
+.att-add-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ─── Note row (expanded under kid row) ─── */
+.att-note-row {
+  padding: 8px 18px 14px 18px;
+  background: #fdfcf7;
+  border-bottom: 1px solid var(--clr-warm-mid);
+}
+
+.att-note-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-md);
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  color: var(--clr-ink);
+  background: white;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 60px;
+}
+
+.att-note-input:focus {
+  outline: none;
+  border-color: var(--clr-sage);
+}
+
+.att-note-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+/* ─── Loading / empty ─── */
+.att-empty {
+  background: white;
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-lg);
+  padding: 60px 24px;
+  text-align: center;
+  color: var(--clr-ink-soft);
+}
+
+.att-empty-icon {
+  font-size: 2.5rem;
+  margin-bottom: 12px;
+}
+
+.att-empty-title {
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  color: var(--clr-ink);
+  margin-bottom: 6px;
+}
+
+/* ─── Mobile: collapse the grid into stacked rows ─── */
+@media (max-width: 720px) {
+  .att-kid-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 14px 16px;
+  }
+
+  .att-kid-row .att-time-cell,
+  .att-kid-row .att-status-cell {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .att-kid-row .att-time-cell::before {
+    content: attr(data-label);
+    font-size: 0.75rem;
+    color: var(--clr-ink-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+
+  .att-actions {
+    justify-content: flex-end;
+    margin-top: 4px;
+  }
+
+  .att-time-input {
+    max-width: 110px;
+  }
+
+  .att-week-label {
+    font-size: 1rem;
+  }
+
+  .att-day-header {
+    padding: 12px 14px;
+  }
+}
