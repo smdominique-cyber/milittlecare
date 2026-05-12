@@ -67,6 +67,12 @@ export default function Sidebar({ isOpen = false }) {
       ],
     },
     {
+      section: 'Operations',
+      items: [
+        { label: 'Attendance', icon: Calendar, path: '/attendance' },
+      ],
+    },
+    {
       section: 'Revenue',
       items: [
         { label: 'Families', icon: Users, path: '/families' },
