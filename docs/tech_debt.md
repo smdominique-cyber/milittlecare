@@ -1,0 +1,111 @@
+# Tech Debt
+
+## Migrations folder is out of sync with production schema
+
+As of 2026-05-13, `supabase/migrations/` contains only:
+
+- `001_profiles.sql` — creates `profiles` (6 columns), the `handle_new_user`
+  signup trigger, and the `set_updated_at()` helper.
+- `002_receipts.sql` — creates `receipts` plus the `receipts` storage bucket
+  and image-access policies.
+
+The production Supabase database has substantially more schema than these
+two files describe. Many objects were added directly via the Supabase SQL
+editor without a migration file.
+
+### Tables present in production but missing a migration file
+
+Confirmed via `information_schema.tables` and cross-referenced against
+React `.from('...')` call sites:
+
+| Table | First reference in code |
+| --- | --- |
+| attendance | `src/components/ui/AttendanceExportButton.jsx` |
+| autopay_charges | (live schema; not yet referenced by name in React) |
+| business_hours | `src/components/parent/BusinessInfoSection.jsx` |
+| business_policies | `src/components/dashboard/Sidebar.jsx` |
+| children | `src/lib/messages.js` |
+| closures | `src/components/parent/BusinessInfoSection.jsx` |
+| emergency_contacts | `src/pages/FamiliesPage.jsx` |
+| families | `src/pages/BillingPage.jsx` |
+| family_invitations | `src/pages/FamiliesPage.jsx` |
+| guardians | `src/pages/FamiliesPage.jsx` |
+| hour_logs | `src/lib/taxExport.js` |
+| invoice_items | `src/pages/BillingPage.jsx` |
+| invoices | `src/pages/BillingPage.jsx` |
+| message_attachments | `src/lib/messages.js` |
+| message_threads | `src/lib/messages.js` |
+| messages | `src/lib/messages.js` |
+| notification_log | (live schema; used by server-side notification flow) |
+| parent_family_links | `src/pages/ParentDashboardPage.jsx` |
+| parent_profiles | `src/pages/AuthCallbackPage.jsx` |
+| payments | `src/pages/BillingPage.jsx` |
+| staff_invitations | `src/pages/StaffPage.jsx` |
+| staff_memberships | `src/hooks/useRole.jsx` |
+| staff_time_audit_log | `src/pages/StaffPage.jsx` |
+| staff_time_entries | `src/components/dashboard/StaffClockWidget.jsx` |
+| subscription_events | (live schema; used by Stripe webhook handler) |
+| ts_ratios | `src/lib/taxExport.js` |
+
+### Columns added to `profiles` out-of-band
+
+Migration 001 created `profiles` with 6 columns. Production has these
+additional columns:
+
+- `trial_started_at`, `trial_ends_at`
+- `subscription_status` (default `'trialing'`)
+- `stripe_customer_id`, `stripe_subscription_id`
+- `current_period_end`, `cancel_at_period_end`
+- `role` (default `'licensee'`)
+- `tax_id`
+
+## Why this matters
+
+- **Clean environments cannot be reproduced from migrations alone.** A
+  fresh Supabase project bootstrapped from `supabase/migrations/` would
+  fail to serve the React app — over 25 tables would be missing.
+- **Schema reviews are unreliable.** Reviewers must compare against
+  production via `information_schema` queries, not against the repo.
+- **Future migrations risk colliding** with out-of-band changes. Authors
+  must dump the live schema first to avoid duplicate column names or
+  constraint conflicts.
+
+## Recommended cleanup (separate PR — explicitly out of scope here)
+
+1. `pg_dump --schema-only --no-owner` from the production Supabase project.
+2. Diff against `001` + `002` + new migrations from this PR.
+3. Author retroactive migrations (suggested numbering: `010_` onward to
+   leave room) that recreate every missing table and column. Mark each
+   clearly: `-- RETROACTIVE: already present in production as of YYYY-MM-DD`.
+4. Verify `supabase db reset` against a fresh project produces a working
+   schema and the React app boots without "relation does not exist" errors.
+
+## Scope of this PR
+
+The funding-source scaffolding PR (migrations `003`–`006`) adds **only new
+objects** on top of what production already has. It assumes existing
+tables (`children`, `families`, `invoice_items`, `profiles`) are present
+with their current production schema. It does not attempt to backfill the
+missing migration history.
+
+## Conventions introduced by this PR (apply to all future migrations)
+
+- **Soft delete on audit-relevant tables: `archived_at timestamptz`.**
+  Funding records and anything with regulatory retention requirements
+  (4 years for licensed providers, longer for license-exempt) must never
+  be hard-deleted. Filter active rows with `where archived_at is null`.
+  Operational-only tables (e.g. `billing_periods`) can keep using hard
+  delete.
+- **Backfill marker for rollback safety: `details.backfilled_by = '<NNN>'`.**
+  Any migration that inserts rows into an existing table must stamp those
+  rows with a marker in a JSON column (or equivalent), so the migration's
+  DOWN section can DELETE precisely the rows it created. See
+  `006_backfill_private_pay.sql` for the canonical example.
+- **Rollback safety past dependent migrations.** If a later migration
+  adds a FK pointing at rows created by an earlier backfill, that FK
+  must be `on delete set null` (or `on delete cascade` with caution),
+  and the earlier migration's DOWN section must document the orphaning
+  risk. See the warning header in `006_backfill_private_pay.sql`.
+- **Transactional backfills.** Wrap any backfill INSERT in an explicit
+  `begin; ... commit;` so a mid-run error rolls back cleanly. Include a
+  trailing `SELECT` that prints row counts for verification.
