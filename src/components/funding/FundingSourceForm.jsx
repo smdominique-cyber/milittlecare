@@ -425,6 +425,17 @@ export default function FundingSourceForm({
     onClose?.()
   }
 
+  // Escape key dismisses the form (with the same dirty-check as Cancel).
+  // Listener is re-bound when handleCancel changes so the dirty check
+  // sees current form state. Pattern reusable for any modal.
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === 'Escape') handleCancel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [handleCancel])
+
   const handleSave = async () => {
     setSubmitAttempted(true)
     if (Object.keys(errors).length > 0) return

@@ -86,6 +86,7 @@ export default function FundingSourceList({
   familyId,
   familyName,
   childrenList = [],
+  refreshTick = 0,
   onAdd,
   onEdit,
   onChanged,
@@ -137,7 +138,7 @@ export default function FundingSourceList({
   useEffect(() => {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [familyId, childIdsKey, showArchived])
+  }, [familyId, childIdsKey, showArchived, refreshTick])
 
   const ownerLabelFor = source => {
     if (source.family_id) return familyName || 'Family'
