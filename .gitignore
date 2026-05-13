@@ -32,3 +32,9 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+
+# Session scratch files (Claude Code working notes, schema dumps)
+answers.txt
+decision.txt
+schema.txt
+.claude/

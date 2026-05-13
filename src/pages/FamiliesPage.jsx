@@ -8,6 +8,8 @@ import {
   Send, Copy, ExternalLink,
 } from 'lucide-react'
 import { getNextInvoicePeriod, describeFrequency, computeInvoiceAmount } from '@/lib/billing'
+import FundingSourceList from '@/components/funding/FundingSourceList'
+import FundingSourceForm from '@/components/funding/FundingSourceForm'
 import '@/styles/families.css'
 
 const STATUS_OPTIONS = [
@@ -384,6 +386,9 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
             <button className={`detail-tab${tab === 'children' ? ' active' : ''}`} onClick={() => setTab('children')}>
               Children ({initialChildren.length})
             </button>
+            <button className={`detail-tab${tab === 'funding' ? ' active' : ''}`} onClick={() => setTab('funding')}>
+              Funding
+            </button>
             <button className={`detail-tab${tab === 'guardians' ? ' active' : ''}`} onClick={() => setTab('guardians')}>
               Guardians ({initialGuardians.length})
             </button>
@@ -405,6 +410,13 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
           )}
           {!isNew && tab === 'children' && (
             <ChildrenTab userId={userId} familyId={family.id} children={initialChildren} onChange={onChange} />
+          )}
+          {!isNew && tab === 'funding' && (
+            <FundingTab
+              family={family}
+              childrenList={initialChildren}
+              onChange={onChange}
+            />
           )}
           {!isNew && tab === 'guardians' && (
             <GuardiansTab userId={userId} familyId={family.id} guardians={initialGuardians} onChange={onChange} />
@@ -667,6 +679,68 @@ function BillingScheduleSection({ form, update }) {
         </div>
       )}
     </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════
+// Funding tab — bridges FundingSourceList + FundingSourceForm.
+//
+// Modal-on-modal: when the user clicks Add or Edit on the list, we
+// mount FundingSourceForm. The form is a self-contained modal that
+// stacks on top of the family modal via DOM order (no z-index needed).
+// Cancel/save closes only the form; the family modal stays put.
+// ════════════════════════════════════════════════════════════
+function FundingTab({ family, childrenList, onChange }) {
+  const [editingSource, setEditingSource] = useState(null)
+  const [adding, setAdding] = useState(false)
+  const [refreshTick, setRefreshTick] = useState(0)
+
+  const closeForm = () => {
+    setAdding(false)
+    setEditingSource(null)
+  }
+
+  // After a save: close the form, force the list to refetch (refreshTick
+  // bump preserves the Show-archived toggle state, which a key reset
+  // would clobber), then notify the parent FamilyDetailModal so the
+  // family-level data reloads (private_pay dual-writes families.* rate
+  // columns; the Overview tab needs to see the new values).
+  const handleSaved = () => {
+    closeForm()
+    setRefreshTick(t => t + 1)
+    onChange?.()
+  }
+
+  // Archive/restore from the list already refetches itself; just bubble
+  // up so the parent can also refresh if needed.
+  const handleChanged = () => {
+    onChange?.()
+  }
+
+  const isFormOpen = adding || !!editingSource
+
+  return (
+    <>
+      <FundingSourceList
+        familyId={family.id}
+        familyName={family.family_name}
+        childrenList={childrenList}
+        refreshTick={refreshTick}
+        onAdd={() => setAdding(true)}
+        onEdit={(source) => setEditingSource(source)}
+        onChanged={handleChanged}
+      />
+      {isFormOpen && (
+        <FundingSourceForm
+          familyId={family.id}
+          family={family}
+          childrenList={childrenList}
+          existingSource={editingSource}
+          onClose={closeForm}
+          onSaved={handleSaved}
+        />
+      )}
+    </>
   )
 }
 
