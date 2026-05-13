@@ -91,15 +91,23 @@ missing migration history.
 ## Deferred work introduced by this PR
 
 - **Inline styles in `src/components/funding/`.** `FundingSourceList.jsx`
-  uses inline `style={{...}}` props for layout instead of CSS classes.
-  Lift into `src/styles/funding.css` when adding a third file in
-  `src/components/funding/`, or earlier if styling diverges meaningfully
-  from `FamiliesPage.jsx`'s conventions.
+  and `FundingSourceForm.jsx` use inline `style={{...}}` props for layout
+  instead of CSS classes. Lift into `src/styles/funding.css` when adding
+  a third file in `src/components/funding/`, or earlier if styling
+  diverges meaningfully from `FamiliesPage.jsx`'s conventions.
 - **Component tests for `src/components/funding/`.** No render tests
-  exist yet. Add them when `FundingSourceForm` ships — that work will
-  bring in React Testing Library and we should cover loading, empty,
-  error, populated, and show-archived states for the list at the same
-  time.
+  exist yet. Add when React Testing Library is approved and installed;
+  cover loading/empty/error/populated/show-archived for the list, and
+  add+edit/per-type-branches/validation-summary/dual-write/stub-coming-soon
+  for the form.
+- **Private Pay edit form writes to both `families.*` columns and
+  `funding_source.details` JSON.** Remove the legacy write path when
+  invoice generation refactors to read from funding sources only. Future
+  PR cleans this up.
+- **Private Pay form duplicates some billing fields from the family
+  Overview tab.** Two surfaces edit the same underlying `families.*`
+  columns. Consolidate when refactoring invoice generation to read
+  from funding sources only.
 
 ## Conventions introduced by this PR (apply to all future migrations)
 
