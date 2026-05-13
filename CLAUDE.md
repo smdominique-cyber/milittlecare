@@ -44,6 +44,7 @@ NOTE: src/ReceiptsPage.jsx currently lives at src/ root; should eventually move 
 - Migration files numbered sequentially: 003_funding_sources.sql, etc.
 - Migrations are forward-only by default; include a Down section as comments for rollback steps when destructive
 - Commit messages: imperative, under 72 chars
+- Error states announce to screen readers via `role="alert"`. Sets a project-wide accessibility baseline.
 
 ## Critical Domain Knowledge
 

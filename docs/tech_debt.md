@@ -88,6 +88,19 @@ tables (`children`, `families`, `invoice_items`, `profiles`) are present
 with their current production schema. It does not attempt to backfill the
 missing migration history.
 
+## Deferred work introduced by this PR
+
+- **Inline styles in `src/components/funding/`.** `FundingSourceList.jsx`
+  uses inline `style={{...}}` props for layout instead of CSS classes.
+  Lift into `src/styles/funding.css` when adding a third file in
+  `src/components/funding/`, or earlier if styling diverges meaningfully
+  from `FamiliesPage.jsx`'s conventions.
+- **Component tests for `src/components/funding/`.** No render tests
+  exist yet. Add them when `FundingSourceForm` ships — that work will
+  bring in React Testing Library and we should cover loading, empty,
+  error, populated, and show-archived states for the list at the same
+  time.
+
 ## Conventions introduced by this PR (apply to all future migrations)
 
 - **Soft delete on audit-relevant tables: `archived_at timestamptz`.**
