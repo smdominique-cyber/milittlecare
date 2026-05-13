@@ -32,3 +32,17 @@ Verification from `006`'s trailing SELECT:
 | 14                            | 4                       | 10       |
 
 Manually spot-checked Venessa's data after application — looks correct. No deviations from the migration text.
+
+### 2026-05-13 — Migration 007: archived_by audit column
+
+Applied to production:
+
+- `007_funding_sources_archived_by.sql` — added nullable `archived_by uuid` FK on `public.funding_sources` referencing `auth.users(id)` with `ON DELETE SET NULL`. Pairs with `archived_at` from `003` to record who soft-deleted each funding source.
+
+Verification (`information_schema.columns` for the new column):
+
+| column_name | data_type | is_nullable |
+| ----------- | --------- | ----------- |
+| archived_by | uuid      | YES         |
+
+Exact match against expected output. No deviations.
