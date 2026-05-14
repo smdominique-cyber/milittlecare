@@ -89,6 +89,56 @@ describe('getActiveModules', () => {
     })
   })
 
+  describe('MiRegistry tracker activation (combined rule per miregistry_tracker_spec.md § 4)', () => {
+    it('is_license_exempt = true with no miregistry_id activates the tracker (the new rule)', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, is_license_exempt: true },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(true)
+    })
+
+    it('is_license_exempt = true AND miregistry_id set still activates (both paths overlap, no double-add)', () => {
+      const modules = getActiveModules({
+        profile: {
+          program_settings: {},
+          is_license_exempt: true,
+          miregistry_id: 'MR-12345',
+        },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(true)
+    })
+
+    it('is_license_exempt = false with no miregistry_id does NOT activate (regression guard)', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, is_license_exempt: false },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(false)
+    })
+
+    it('is_license_exempt = null with no miregistry_id does NOT activate (default state for never-onboarded providers)', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, is_license_exempt: null },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(false)
+    })
+
+    it('miregistry_id set with is_license_exempt = false (licensed provider opt-in) still activates via the existing rule', () => {
+      const modules = getActiveModules({
+        profile: {
+          program_settings: {},
+          miregistry_id: 'MR-67890',
+          is_license_exempt: false,
+        },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(true)
+    })
+  })
+
   describe('edge cases beyond the spec', () => {
     it('archived funding sources are ignored regardless of status', () => {
       const modules = getActiveModules({

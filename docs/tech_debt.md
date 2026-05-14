@@ -136,6 +136,18 @@ missing migration history.
   storage object orphaned, requiring manual reconciliation. Future fix:
   log cleanup failures to a server-side queue with periodic review.
 
+## Deferred work introduced by PR #4 (MiRegistry tracker)
+
+- **MiRegistry banner per-family fetch.** The
+  `MiRegistryWarningBanner` component (added in PR #4) fetches
+  `profile.is_license_exempt` and the user's training entries every
+  time a family detail modal opens. For V1 this is acceptable —
+  Venessa has 14 families and the fetch is small — but at scale,
+  repeat fetches when opening multiple families in succession is
+  wasteful. Future fix: lift the data into a context shared with
+  `MiRegistryPage` so both surfaces hit the network at most once per
+  session.
+
 ## Migration 006 backfill assumption — CDC-primary providers
 
 Migration 006 backfill assumed every active family was private-pay. In

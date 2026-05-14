@@ -73,7 +73,18 @@ export function getActiveModules({ profile, fundingSources } = {}) {
     else if (setting === 'force_off') modules.delete(key)
   }
 
-  if (safeProfile.miregistry_id) modules.add(MODULE_KEYS.MIREGISTRY_TRACKER)
+  // miregistry_tracker: active iff a MiRegistry ID is on file OR the
+  // provider is license-exempt. License-exempt providers get the
+  // tracker even before they enter their ID so the empty-state page
+  // can prompt them for it (chicken-and-egg: without auto-activation,
+  // a brand-new license-exempt provider would never see the screen
+  // that asks for the ID). See miregistry_tracker_spec.md § 4.
+  if (
+    safeProfile.miregistry_id ||
+    safeProfile.is_license_exempt === true
+  ) {
+    modules.add(MODULE_KEYS.MIREGISTRY_TRACKER)
+  }
   if (safeProfile.michigan_license_number) modules.add(MODULE_KEYS.LICENSED_COMPLIANCE)
   if (safeProfile.is_license_exempt) modules.add(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)
   if (settings.cacfp === true) modules.add(MODULE_KEYS.CACFP)

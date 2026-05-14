@@ -110,15 +110,24 @@ modified by this PR.
 alter table public.profiles
   add column if not exists miregistry_current_level text
     check (miregistry_current_level in ('level_1', 'level_2')),
-  add column if not exists miregistry_level_2_expires_on date;
+  add column if not exists miregistry_level_2_expires_on    date,
+  add column if not exists miregistry_level_last_updated_at timestamptz;
 ```
 
-Both are nullable; meaningful only for license-exempt providers.
+All three are nullable; meaningful only for license-exempt providers.
 `miregistry_current_level` defaults to `null` (provider hasn't
 self-attested to a level yet). The handbook says the source of truth
 for the expiration date is the MiRegistry LEP Training Record — we
 store what the provider transcribes from MiRegistry, not a derived
 value.
+
+`miregistry_level_last_updated_at` is a dedicated timestamp (not a
+reuse of `profiles.updated_at`) because the row-level `updated_at`
+changes for unrelated edits — fixing a phone number would otherwise
+falsely refresh the "Last updated by you on" display in § 3.2 and
+make a stale level/expiration look freshly synced. Application code
+sets this column only when the level/expiration fields are written
+via the Update from MiRegistry modal.
 
 ### 2.3 Deprecation: `profiles.annual_training_completion_date`
 
@@ -393,9 +402,11 @@ providers who haven't yet entered their ID.
 The handbook says "each year by December 16" — the cycle is **calendar
 year**. An entry with `source = 'annual_ongoing'` and `completed_on`
 between Jan 1 and Dec 16 of year Y satisfies the deadline for year Y.
-An entry completed Dec 17–31 does **not** satisfy that year (account
-already closed) but does satisfy the next year's deadline if the
-provider's account is reactivated.
+An entry completed Dec 17–31 of year Y satisfies **neither** year Y
+(the account is already closed) **nor** year Y+1 (which requires its
+own training completed within year Y+1). Providers in this state need
+to reapply with MDHHS before they can resume billing; once reapplied,
+the next year's clock starts fresh.
 
 For V1, only the current year's deadline status is surfaced. Past
 years are visible in the entries list but not in the status card.

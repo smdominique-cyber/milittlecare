@@ -24,6 +24,7 @@ import SubscriptionPage from '@/pages/SubscriptionPage'
 import HowMoneyWorksPage from '@/pages/HowMoneyWorksPage'
 import BusinessInfoPage from '@/pages/BusinessInfoPage'
 import StaffPage from '@/pages/StaffPage'
+import MiRegistryPage from '@/pages/MiRegistryPage'
 import ContactPage from '@/pages/ContactPage'
 import PrivacyPage from '@/pages/PrivacyPage'
 import TermsPage from '@/pages/TermsPage'
@@ -98,6 +99,7 @@ export default function App() {
                   <Route path="how-money-works" element={<HowMoneyWorksPage />} />
                   <Route path="business-info" element={<BusinessInfoPage />} />
                   <Route path="staff" element={<StaffPage />} />
+                  <Route path="miregistry" element={<MiRegistryPage />} />
                   <Route path="contact" element={<ContactPage />} />
                   <Route path="admin" element={<AdminPage />} />
                 </Route>
