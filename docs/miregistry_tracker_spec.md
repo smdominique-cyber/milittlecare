@@ -402,9 +402,11 @@ providers who haven't yet entered their ID.
 The handbook says "each year by December 16" — the cycle is **calendar
 year**. An entry with `source = 'annual_ongoing'` and `completed_on`
 between Jan 1 and Dec 16 of year Y satisfies the deadline for year Y.
-An entry completed Dec 17–31 does **not** satisfy that year (account
-already closed) but does satisfy the next year's deadline if the
-provider's account is reactivated.
+An entry completed Dec 17–31 of year Y satisfies **neither** year Y
+(the account is already closed) **nor** year Y+1 (which requires its
+own training completed within year Y+1). Providers in this state need
+to reapply with MDHHS before they can resume billing; once reapplied,
+the next year's clock starts fresh.
 
 For V1, only the current year's deadline status is surfaced. Past
 years are visible in the entries list but not in the status card.
