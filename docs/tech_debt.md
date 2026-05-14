@@ -88,7 +88,7 @@ tables (`children`, `families`, `invoice_items`, `profiles`) are present
 with their current production schema. It does not attempt to backfill the
 missing migration history.
 
-## Deferred work introduced by this PR
+## Deferred work introduced by PR #1 (funding source scaffolding)
 
 - **Inline styles in `src/components/funding/`.** `FundingSourceList.jsx`
   and `FundingSourceForm.jsx` use inline `style={{...}}` props for layout
@@ -108,6 +108,33 @@ missing migration history.
   Overview tab.** Two surfaces edit the same underlying `families.*`
   columns. Consolidate when refactoring invoice generation to read
   from funding sources only.
+
+## Deferred work introduced by PR #2 (funding document vault)
+
+- **Single `busy` flag per `FundingDocumentSlot`.** A slot's busy state
+  disables every action button across all of its rows during any in-flight
+  operation. The visible effect is on the `'other'` multi-doc slot: while
+  one document uploads or replaces, the View/Replace/Remove buttons on
+  every other Other doc in the same slot are disabled. Acceptable for V1
+  given typical low-doc-count usage. Future fix: per-row busy state in
+  the multi-doc list.
+- **Duplicate `is_license_exempt` fetch.** The `enrollment_agreement`
+  variant of `FundingDocumentSlot` re-fetches
+  `profiles.is_license_exempt` even though the parent `FundingSourceForm`
+  has already loaded it for CDC validation. One extra round-trip per CDC
+  source open. Pass it down as a prop on the next refactor.
+- **No retention-date editor in V1.** `funding_documents.retention_until`
+  is editable per row at the SQL layer and via a future support tool, but
+  the slot UI shows it display-only. Surface as an inline editor (with
+  confirmation dialog) when a real provider request justifies the
+  affordance — most providers will never need to touch it.
+- **Best-effort cleanup on `FundingDocumentSlot` Replace failure.** The
+  Replace flow wraps its compensating writes (un-archive the old row,
+  delete the orphan storage object) in `.catch(() => {})` so a cleanup
+  failure doesn't mask the original error. Trade-off: a cascading
+  failure could leave the old metadata row archived and/or the new
+  storage object orphaned, requiring manual reconciliation. Future fix:
+  log cleanup failures to a server-side queue with periodic review.
 
 ## Migration 006 backfill assumption — CDC-primary providers
 
