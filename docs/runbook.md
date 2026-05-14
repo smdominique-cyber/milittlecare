@@ -46,3 +46,18 @@ Verification (`information_schema.columns` for the new column):
 | archived_by | uuid      | YES         |
 
 Exact match against expected output. No deviations.
+
+### 2026-05-13 — Migration 008: funding document vault
+
+Applied to production:
+
+- `008_funding_documents.sql` — created `funding_documents` table, `funding_document_type` enum (`dhs_198`, `enrollment_agreement`, `other`), four indexes (including the partial-unique `funding_documents_one_active_per_type` that excludes `'other'`), RLS policies (select/insert/update only — no delete; soft-delete via `archived_at`), the private `funding-documents` storage bucket, and three storage policies (insert/select/delete; objects are immutable). Storage RLS reuses the `(storage.foldername(name))[1]` template from `002`. Storage path layout: `<user_id>/<funding_source_id>/<uuid>.<ext>`.
+
+Verification:
+
+- `funding_documents` table has 16 columns (14 design columns plus `created_at` / `updated_at`).
+- `archived_at`, `archived_by`, `uploaded_by_user_id`, and `file_size_bytes` (`bigint`) all present.
+- `retention_until` default resolves to `(current_date + interval '4 years')::date` as expected.
+- Bucket row exists with `public = false`. Confirmed private.
+
+No deviations from migration text. No backfill (no pre-existing documents).

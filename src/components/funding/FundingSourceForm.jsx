@@ -8,6 +8,7 @@ import { Info, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import HelpTooltip from '@/components/ui/HelpTooltip'
+import FundingDocumentSlot from '@/components/funding/FundingDocumentSlot'
 
 // -----------------------------------------------------------------------------
 // Constants
@@ -139,10 +140,12 @@ const FIELD_HELP = {
     'Check this if you’ve never billed CDC before. MDHHS will send you a ' +
     'separate Provider PIN letter — you’ll need it to log into I-Billing. ' +
     'If you’ve already received your PIN, leave this unchecked.',
-  enrollment_agreement_doc:
-    'Coming soon — store the signed Enrollment Agreement here.',
-  dhs_198_doc: 'Coming soon — store the signed DHS-198 here.',
 }
+
+const DOCUMENTS_GATED_MESSAGE =
+  'Save this funding source first, then come back to attach the DHS-198, ' +
+  'Enrollment Agreement, and any other supporting documents. We need to ' +
+  'save the row before we can pin documents to it.'
 
 const SAVE_ERROR_GENERIC =
   'Couldn’t save. Try again, or email support@milittlecare.com if it keeps happening.'
@@ -609,6 +612,8 @@ export default function FundingSourceForm({
               form={form}
               setDetail={setDetail}
               visibleErrors={visibleErrors}
+              isEditing={isEditing}
+              existingSourceId={existingSource?.id}
             />
           )}
 
@@ -990,7 +995,13 @@ function PrivatePayFields({ form, setDetail, visibleErrors }) {
 // CDC Scholarship fields
 // -----------------------------------------------------------------------------
 
-function CDCScholarshipFields({ form, setDetail, visibleErrors }) {
+function CDCScholarshipFields({
+  form,
+  setDetail,
+  visibleErrors,
+  isEditing,
+  existingSourceId,
+}) {
   const d = form.details || {}
 
   return (
@@ -1161,15 +1172,24 @@ function CDCScholarshipFields({ form, setDetail, visibleErrors }) {
 
       <SectionHeader>Documents</SectionHeader>
 
-      <FieldGroup
-        label="Enrollment Agreement document"
-        helpText={FIELD_HELP.enrollment_agreement_doc}
-      >
-        <input className="field-input" type="text" disabled placeholder="Coming soon" />
-      </FieldGroup>
-      <FieldGroup label="DHS-198 document" helpText={FIELD_HELP.dhs_198_doc}>
-        <input className="field-input" type="text" disabled placeholder="Coming soon" />
-      </FieldGroup>
+      {!isEditing || !existingSourceId ? (
+        <Notice text={DOCUMENTS_GATED_MESSAGE} />
+      ) : (
+        <>
+          <FundingDocumentSlot
+            fundingSourceId={existingSourceId}
+            documentType="dhs_198"
+          />
+          <FundingDocumentSlot
+            fundingSourceId={existingSourceId}
+            documentType="enrollment_agreement"
+          />
+          <FundingDocumentSlot
+            fundingSourceId={existingSourceId}
+            documentType="other"
+          />
+        </>
+      )}
     </>
   )
 }
