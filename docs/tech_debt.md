@@ -151,6 +151,25 @@ Knowledge for the rule that codifies this. Future backfills that need
 to choose a funding type should flag rows for human review rather than
 default to `private_pay`.
 
+## Planned deprecations (foreshadowed by approved specs)
+
+- **`profiles.annual_training_completion_date`** — added by migration
+  `004_provider_program_settings.sql` as a single-date "latest annual
+  training completion" column. The MiRegistry tracker spec (`docs/
+  miregistry_tracker_spec.md` § 2.3) replaces it with the
+  `miregistry_training_entries` table as the source of truth for
+  every annual ongoing training event (with full history per year,
+  rather than the single overwriteable date). Action plan:
+
+  1. The MiRegistry tracker implementation PR stops all new write
+     paths to this column.
+  2. A later cleanup PR drops the column. Until then, the column
+     remains in the schema as a no-op for any backward-compatibility
+     read paths.
+
+  Do not add new write paths to this column. Read paths should
+  migrate to query `miregistry_training_entries` directly.
+
 ## Conventions introduced by this PR (apply to all future migrations)
 
 - **Soft delete on audit-relevant tables: `archived_at timestamptz`.**
