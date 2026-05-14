@@ -61,3 +61,21 @@ Verification:
 - Bucket row exists with `public = false`. Confirmed private.
 
 No deviations from migration text. No backfill (no pre-existing documents).
+
+### 2026-05-14 — Migration 009: MiRegistry training entries + profiles columns
+
+Applied to production:
+
+- `009_miregistry_training_entries.sql` — created `miregistry_training_entries` table, `miregistry_training_source` enum (`leppt`, `annual_ongoing`, `level_2_approved`, `other`), two indexes (`miregistry_entries_user_completed_idx` and `miregistry_entries_user_source_idx`, both partial WHERE `archived_at IS NULL`), RLS policies (select/insert/update only — no delete; soft-delete via `archived_at`), and the `set_updated_at` trigger. Added three new columns to `profiles` for the manually-transcribed Training Level state: `miregistry_current_level` (text, constrained to `'level_1' | 'level_2' | NULL` via `profiles_miregistry_level_values` check), `miregistry_level_2_expires_on` (date), `miregistry_level_last_updated_at` (timestamptz). All three nullable; meaningful only for license-exempt providers.
+
+Verification:
+
+- `miregistry_training_entries` table created with 12 columns; soft-delete pair (`archived_at`, `archived_by`) and audit columns (`created_at`, `updated_at`) all present.
+- `miregistry_training_source` enum exists with the four expected values.
+- `profiles` gained the three `miregistry_*` columns (in addition to the existing `miregistry_id` from migration 004).
+- `profiles_miregistry_level_values` check constraint applied; rejects values outside the allowed set.
+
+Non-changes worth noting:
+
+- `profiles.annual_training_completion_date` is intentionally untouched. It enters its deprecated phase with this PR's implementation; a follow-up cleanup PR drops the column once write paths are removed (per `docs/tech_debt.md` § Planned deprecations).
+- No backfill — no existing training entries to migrate.
