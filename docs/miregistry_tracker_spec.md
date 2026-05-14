@@ -110,15 +110,24 @@ modified by this PR.
 alter table public.profiles
   add column if not exists miregistry_current_level text
     check (miregistry_current_level in ('level_1', 'level_2')),
-  add column if not exists miregistry_level_2_expires_on date;
+  add column if not exists miregistry_level_2_expires_on    date,
+  add column if not exists miregistry_level_last_updated_at timestamptz;
 ```
 
-Both are nullable; meaningful only for license-exempt providers.
+All three are nullable; meaningful only for license-exempt providers.
 `miregistry_current_level` defaults to `null` (provider hasn't
 self-attested to a level yet). The handbook says the source of truth
 for the expiration date is the MiRegistry LEP Training Record — we
 store what the provider transcribes from MiRegistry, not a derived
 value.
+
+`miregistry_level_last_updated_at` is a dedicated timestamp (not a
+reuse of `profiles.updated_at`) because the row-level `updated_at`
+changes for unrelated edits — fixing a phone number would otherwise
+falsely refresh the "Last updated by you on" display in § 3.2 and
+make a stale level/expiration look freshly synced. Application code
+sets this column only when the level/expiration fields are written
+via the Update from MiRegistry modal.
 
 ### 2.3 Deprecation: `profiles.annual_training_completion_date`
 
