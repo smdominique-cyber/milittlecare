@@ -11,9 +11,22 @@ export default function LoginPage() {
 
   const from = location.state?.from?.pathname || null
 
-  const [tab, setTab] = useState('login')
+  // When the user arrives here from a parent or staff invite-accept
+  // page, the location state carries the invitation's recipient_email.
+  // We pre-fill + lock the email field, default to the signup tab, and
+  // pass emailRedirectTo on the signup so the confirmation email lands
+  // them back on the originating /invite/<token> or /staff-invite/<token>.
+  // (The from.pathname above is the single source of truth for where
+  // to return — same string works for both flows.)
+  const inviteEmail = location.state?.inviteEmail || null
 
-  const [form, setForm] = useState({ email: '', password: '', fullName: '' })
+  const [tab, setTab] = useState(inviteEmail ? 'signup' : 'login')
+
+  const [form, setForm] = useState({
+    email: inviteEmail || '',
+    password: '',
+    fullName: '',
+  })
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState(null)
 
@@ -104,11 +117,20 @@ export default function LoginPage() {
     setLoading(true)
     setMessage(null)
 
-    const { error } = await supabase.auth.signUp({
+    const signUpOptions = {
       email: form.email,
       password: form.password,
       options: { data: { full_name: form.fullName } },
-    })
+    }
+    if (from) {
+      // Send the email-confirmation click back to wherever the user
+      // started — for invitation flows that's /invite/<token> or
+      // /staff-invite/<token>; the user lands authenticated and can
+      // complete acceptance under their own session.
+      signUpOptions.options.emailRedirectTo =
+        `${window.location.origin}${from}`
+    }
+    const { error } = await supabase.auth.signUp(signUpOptions)
 
     setLoading(false)
     if (error) {
@@ -116,7 +138,9 @@ export default function LoginPage() {
     } else {
       setMessage({
         type: 'success',
-        text: 'Almost there! Check your email to confirm your account, then come back to sign in.',
+        text: inviteEmail
+          ? 'Almost there! Check your email to confirm. The confirmation link will bring you back to your invitation.'
+          : 'Almost there! Check your email to confirm your account, then come back to sign in.',
       })
     }
   }
@@ -206,6 +230,7 @@ export default function LoginPage() {
                   placeholder="you@example.com"
                   value={form.email}
                   onChange={set('email')}
+                  disabled={!!inviteEmail}
                 />
               </div>
               <div className="form-field">
@@ -262,6 +287,7 @@ export default function LoginPage() {
                   placeholder="you@example.com"
                   value={form.email}
                   onChange={set('email')}
+                  disabled={!!inviteEmail}
                 />
               </div>
               <div className="form-field">

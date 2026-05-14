@@ -1,117 +1,147 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { Shield, CheckCircle, AlertCircle, Loader, Lock } from 'lucide-react'
+import { Shield, CheckCircle, AlertCircle, Loader, LogOut, UserPlus, LogIn } from 'lucide-react'
 import '@/styles/parent.css'
+
+// Phases:
+//   loading       — still fetching invitation preview and/or auth state
+//   invalid       — invitation token is bad / expired / revoked
+//   unauthed      — caller is signed out; needs to sign up or sign in
+//   wrong_account — caller is signed in as a different email than the invitation
+//   form          — caller is signed in with the matching email; show the accept button
+//   accepting     — accept request in flight
+//   done          — accepted, redirecting to /parent
+//
+// Background: this page used to issue a verifyOtp call against a magic
+// link returned by accept-invitation.js, which silently swapped the
+// browser's session to the invited identity. That swap exposed
+// cross-tenant data when the wrong logged-in user clicked an invitation
+// link. The new flow REQUIRES the caller's existing session to match
+// the invitation's recipient_email — no OTP swap, no session takeover.
+// See incident notes for hotfix/invitation-session-validation.
 
 export default function InviteAcceptPage() {
   const { token } = useParams()
   const navigate = useNavigate()
-  const [phase, setPhase] = useState('loading')  // loading | invalid | form | accepting | done | error
+
+  const [phase, setPhase] = useState('loading')
   const [error, setError] = useState(null)
   const [invitation, setInvitation] = useState(null)
+  const [sessionEmail, setSessionEmail] = useState(null)
   const [fullName, setFullName] = useState('')
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
 
+  // Fetch invitation preview AND current auth state in parallel.
   useEffect(() => {
     if (!token) {
       setPhase('invalid')
       return
     }
-    fetchInvitationPreview()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token])
 
-  async function fetchInvitationPreview() {
-    try {
-      const resp = await fetch('/api/invitation-preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token }),
-      })
-      const data = await resp.json()
-      if (!resp.ok) {
-        setError(data.error || 'Invalid invitation')
-        setPhase('invalid')
+    let cancelled = false
+    let inv = null
+    let sess = null
+
+    const loadInvitation = async () => {
+      try {
+        const resp = await fetch('/api/invitation-preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        })
+        const data = await resp.json()
+        if (!resp.ok) {
+          if (!cancelled) {
+            setError(data.error || 'Invalid invitation')
+            setPhase('invalid')
+          }
+          return null
+        }
+        return data
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message)
+          setPhase('invalid')
+        }
+        return null
+      }
+    }
+
+    const loadSession = async () => {
+      const { data } = await supabase.auth.getSession()
+      return data?.session?.user?.email || null
+    }
+
+    Promise.all([loadInvitation(), loadSession()]).then(([invData, email]) => {
+      if (cancelled) return
+      inv = invData
+      sess = email
+      if (!inv) return  // already set phase=invalid above
+      setInvitation(inv)
+      setSessionEmail(sess)
+      setFullName(inv.recipient_name || '')
+
+      if (!sess) {
+        setPhase('unauthed')
         return
       }
-      setInvitation(data)
-      setFullName(data.recipient_name || '')
+      const a = String(sess).toLowerCase().trim()
+      const b = String(inv.recipient_email || '').toLowerCase().trim()
+      if (a !== b) {
+        setPhase('wrong_account')
+        return
+      }
       setPhase('form')
-    } catch (err) {
-      setError(err.message)
-      setPhase('invalid')
-    }
+    })
+
+    return () => { cancelled = true }
+  }, [token])
+
+  const goToSignup = () => {
+    // Hand off to LoginPage with the invite context. LoginPage's
+    // existing `from` redirect brings them back here after signup +
+    // email confirmation; emailRedirectTo on the signup call points
+    // the confirmation email's link back at the same /invite/<token>.
+    navigate('/login', {
+      state: {
+        from: { pathname: `/invite/${token}` },
+        inviteEmail: invitation.recipient_email,
+      },
+    })
+  }
+
+  const signOutAndRetry = async () => {
+    await supabase.auth.signOut()
+    // Stay on the same page; useEffect re-runs on token change is not
+    // triggered, so we manually reset state to re-render as unauthed.
+    setSessionEmail(null)
+    setPhase('unauthed')
   }
 
   const handleAccept = async () => {
     setError(null)
-
-    // Password is now REQUIRED for all parent invite acceptances.
-    if (!password || password.length < 8) {
-      setError('Please choose a password of at least 8 characters.')
-      return
-    }
-    if (password !== confirmPassword) {
-      setError("Passwords don't match. Please re-enter.")
-      return
-    }
     if (!fullName.trim()) {
       setError('Please enter your name.')
       return
     }
-
     setPhase('accepting')
-
     try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        setError('Your session expired. Sign in again to accept.')
+        setPhase('unauthed')
+        return
+      }
       const resp = await fetch('/api/accept-invitation', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
         body: JSON.stringify({ token, full_name: fullName }),
       })
       const data = await resp.json()
       if (!resp.ok) throw new Error(data.error || 'Failed to accept invitation')
-
-      // Sign in via OTP verification
-      let signedInViaOtp = false
-      if (data.auto_signin_token && data.email) {
-        const { error: otpErr } = await supabase.auth.verifyOtp({
-          email: data.email,
-          token_hash: data.auto_signin_token,
-          type: 'email',
-        })
-        if (!otpErr) {
-          signedInViaOtp = true
-        }
-      }
-
-      // Set the password while we're signed in
-      if (signedInViaOtp) {
-        const { error: pwErr } = await supabase.auth.updateUser({ password })
-        if (pwErr) {
-          // The account is created and they're signed in, but password didn't stick.
-          // They can set it from the dashboard banner. Log it but don't block them.
-          console.warn('Password set failed:', pwErr.message)
-        } else {
-          // Mark has_password=true so login flow knows
-          const { data: { user } } = await supabase.auth.getUser()
-          if (user) {
-            await supabase
-              .from('parent_profiles')
-              .update({ has_password: true })
-              .eq('id', user.id)
-          }
-        }
-      }
-
-      // OTP failed — fall back to magic link redirect. In this path the password
-      // we collected does NOT get applied because the page reloads. Parent will
-      // see the "set a password" banner on dashboard.
-      if (!signedInViaOtp && data.magic_link) {
-        window.location.href = data.magic_link
-        return
-      }
 
       setPhase('done')
       setTimeout(() => navigate('/parent'), 1200)
@@ -120,6 +150,8 @@ export default function InviteAcceptPage() {
       setPhase('form')
     }
   }
+
+  // ── Render ────────────────────────────────────────────────────────
 
   if (phase === 'loading') {
     return (
@@ -147,6 +179,56 @@ export default function InviteAcceptPage() {
     )
   }
 
+  if (phase === 'unauthed') {
+    return (
+      <div className="parent-shell">
+        <div className="parent-card">
+          <div className="parent-brand">
+            <div className="parent-brand-mark">🏠</div>
+            <div>
+              <div className="parent-brand-name">MI Little Care</div>
+              <div className="parent-brand-tag">FAMILY PORTAL</div>
+            </div>
+          </div>
+          <h2 style={{ marginTop: 12 }}>
+            <strong>{invitation?.provider_name || 'Your provider'}</strong> invited you
+            to manage <strong>{invitation?.family_name || 'your family'}</strong>
+          </h2>
+          <p style={{ color: 'var(--clr-ink-mid)' }}>
+            Create an account or sign in to accept. We'll use the email this
+            invitation was sent to: <strong>{invitation?.recipient_email}</strong>.
+          </p>
+          <button className="parent-cta" onClick={goToSignup}>
+            <UserPlus size={16} /> Create account or sign in
+          </button>
+          <div className="parent-trust-row">
+            <Shield size={14} />
+            <span>Secured by Stripe. Your card details are never seen or stored by MI Little Care.</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (phase === 'wrong_account') {
+    return (
+      <div className="parent-shell">
+        <div className="parent-card">
+          <div className="parent-icon error"><AlertCircle size={28} /></div>
+          <h2>You're signed in with a different account</h2>
+          <p>
+            This invitation is for <strong>{invitation?.recipient_email}</strong>,
+            but you're currently signed in as <strong>{sessionEmail}</strong>.
+            Sign out and click the invitation link again with the right account.
+          </p>
+          <button className="parent-cta" onClick={signOutAndRetry}>
+            <LogOut size={16} /> Sign out
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   if (phase === 'done') {
     return (
       <div className="parent-shell">
@@ -159,12 +241,8 @@ export default function InviteAcceptPage() {
     )
   }
 
-  const canSubmit =
-    phase !== 'accepting' &&
-    fullName.trim() &&
-    password.length >= 8 &&
-    password === confirmPassword
-
+  // phase === 'form' or 'accepting'
+  const accepting = phase === 'accepting'
   return (
     <div className="parent-shell">
       <div className="parent-card">
@@ -177,11 +255,13 @@ export default function InviteAcceptPage() {
         </div>
 
         <h2 style={{ marginTop: 12 }}>
-          <strong>{invitation?.provider_name || 'Your provider'}</strong> invited you to manage <strong>{invitation?.family_name || 'your family'}</strong>
+          <strong>{invitation?.provider_name || 'Your provider'}</strong> invited you
+          to manage <strong>{invitation?.family_name || 'your family'}</strong>
         </h2>
 
         <p style={{ color: 'var(--clr-ink-mid)' }}>
-          Accept to view invoices, pay online, manage your contact info, and stay updated on schedule changes.
+          Accept to view invoices, pay online, manage your contact info, and
+          stay updated on schedule changes.
         </p>
 
         <div style={{ marginTop: 20 }}>
@@ -195,51 +275,7 @@ export default function InviteAcceptPage() {
         </div>
 
         <div style={{ marginTop: 6, fontSize: 13, color: 'var(--clr-ink-soft)' }}>
-          Signing in as <strong>{invitation?.recipient_email}</strong>
-        </div>
-
-        {/* Password section — required */}
-        <div style={{
-          marginTop: 20,
-          padding: 16,
-          background: 'var(--clr-cream)',
-          borderRadius: 'var(--radius-md)',
-          border: '1px solid var(--clr-warm-mid)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <Lock size={14} style={{ color: 'var(--clr-sage-dark)' }} />
-            <span style={{ fontSize: '0.9375rem', fontWeight: 500, color: 'var(--clr-ink)' }}>
-              Create a password
-            </span>
-          </div>
-
-          <label className="parent-label" style={{ fontSize: '0.8125rem' }}>Password</label>
-          <input
-            className="parent-input"
-            type="password"
-            autoComplete="new-password"
-            minLength={8}
-            placeholder="At least 8 characters"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={{ marginTop: 0 }}
-          />
-
-          <label className="parent-label" style={{ fontSize: '0.8125rem', marginTop: 10 }}>Confirm password</label>
-          <input
-            className="parent-input"
-            type="password"
-            autoComplete="new-password"
-            minLength={8}
-            placeholder="Type it again"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            style={{ marginTop: 0 }}
-          />
-
-          <p style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-soft)', marginTop: 10, marginBottom: 0, lineHeight: 1.5 }}>
-            You'll sign in with your email and this password from now on. Forgot it later? Use "Forgot password?" on the sign-in page to reset.
-          </p>
+          Signed in as <strong>{sessionEmail}</strong>
         </div>
 
         {error && (
@@ -251,9 +287,11 @@ export default function InviteAcceptPage() {
         <button
           className="parent-cta"
           onClick={handleAccept}
-          disabled={!canSubmit}
+          disabled={accepting || !fullName.trim()}
         >
-          {phase === 'accepting' ? 'Setting up…' : 'Accept invitation'}
+          {accepting ? 'Accepting…' : (
+            <><LogIn size={14} /> Accept invitation</>
+          )}
         </button>
 
         <div className="parent-trust-row">

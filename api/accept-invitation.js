@@ -1,5 +1,21 @@
-// Accepts a family invitation and creates/links the parent account
+// Accepts a family invitation and creates the parent-family link.
 // Required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+//
+// Authorization: requires a Bearer token from a Supabase session whose
+// email matches the invitation's recipient_email (case-insensitive,
+// trimmed). Unauthenticated calls and email mismatches are rejected.
+// The browser session is the source of truth for parent identity.
+//
+// Background (incident 2026-05-14): the previous accept flow looked
+// up the parent user by `admin/users?email=<recipient>`, which on the
+// deployed Supabase Auth version is an unreliable filter — it returns
+// the wrong user some percentage of the time. Combined with a
+// verifyOtp-driven session swap on the client, this corrupted
+// parent_family_links rows for 3 customer families and exposed
+// cross-tenant billing data. The fix removes both: identity is taken
+// from the authenticated session, and no magic-link OTP swap occurs.
+
+import { validateInvitationAccept } from '../src/lib/inviteAuthorization.js'
 
 export const config = { runtime: 'edge' }
 
@@ -18,18 +34,19 @@ async function supabaseRequest(path, method, body) {
   return resp
 }
 
-async function authAdminRequest(path, method, body) {
-  const url = `${process.env.SUPABASE_URL}/auth/v1/${path}`
-  const resp = await fetch(url, {
-    method,
+async function verifySession(authHeader) {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null
+  const token = authHeader.slice(7)
+  const resp = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
     headers: {
       'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
-      'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
     },
-    body: body ? JSON.stringify(body) : undefined,
   })
-  return resp
+  if (!resp.ok) return null
+  const user = await resp.json()
+  if (!user || !user.id || !user.email) return null
+  return { id: user.id, email: user.email }
 }
 
 export default async function handler(req) {
@@ -48,6 +65,10 @@ export default async function handler(req) {
       })
     }
 
+    // Resolve the caller's session. We do this BEFORE any DB lookups
+    // so unauthenticated callers cannot probe token validity.
+    const session = await verifySession(req.headers.get('authorization'))
+
     // Look up the invitation
     const inviteResp = await supabaseRequest(
       `family_invitations?token=eq.${encodeURIComponent(token)}&select=*`,
@@ -61,7 +82,7 @@ export default async function handler(req) {
     }
     const invitation = invitations[0]
 
-    // Check status
+    // Status checks
     if (invitation.status === 'accepted') {
       return new Response(JSON.stringify({
         error: 'This invitation has already been accepted. Please sign in instead.',
@@ -87,60 +108,47 @@ export default async function handler(req) {
       }), { status: 400, headers: { 'Content-Type': 'application/json' } })
     }
 
-    // Check if parent already exists in auth.users by email
-    const usersResp = await authAdminRequest(
-      `admin/users?email=${encodeURIComponent(invitation.recipient_email)}`,
-      'GET'
-    )
-    const usersData = await usersResp.json()
-    let parentUser = null
-    if (usersData.users && usersData.users.length > 0) {
-      parentUser = usersData.users[0]
+    // Authorization gate: require an authenticated session whose email
+    // matches the invitation's recipient. Pure-function so it can be
+    // unit-tested without standing up the edge runtime.
+    const gate = validateInvitationAccept({ session, invitation })
+    if (!gate.ok) {
+      return new Response(JSON.stringify({
+        error: gate.error,
+        code: gate.code,
+      }), { status: gate.status, headers: { 'Content-Type': 'application/json' } })
     }
 
-    // If parent doesn't exist, create them
-    if (!parentUser) {
-      const createResp = await authAdminRequest('admin/users', 'POST', {
-        email: invitation.recipient_email,
-        email_confirm: true,
-        user_metadata: {
-          full_name: full_name || invitation.recipient_name || null,
-          is_parent: true,
-        },
-      })
-      const created = await createResp.json()
-      if (!createResp.ok) {
-        return new Response(JSON.stringify({
-          error: created.message || 'Failed to create parent account',
-        }), { status: 500, headers: { 'Content-Type': 'application/json' } })
-      }
-      parentUser = created
-    }
+    // Parent identity = session identity. No more lookup-by-email
+    // (the previous admin/users?email=... path was unreliable; see
+    // file header).
+    const parentId = session.id
+    const parentEmail = session.email
 
-    // Upsert parent_profile
+    // Upsert parent_profile keyed off the session's user id.
     await supabaseRequest('parent_profiles', 'POST', {
-      id: parentUser.id,
-      email: invitation.recipient_email,
+      id: parentId,
+      email: parentEmail,
       full_name: full_name || invitation.recipient_name || null,
       phone: invitation.recipient_phone || null,
     }).catch(() => {
       // If conflict, update instead
-      return supabaseRequest(`parent_profiles?id=eq.${parentUser.id}`, 'PATCH', {
-        email: invitation.recipient_email,
-        full_name: full_name || invitation.recipient_name || parentUser.user_metadata?.full_name || null,
+      return supabaseRequest(`parent_profiles?id=eq.${parentId}`, 'PATCH', {
+        email: parentEmail,
+        full_name: full_name || invitation.recipient_name || null,
       })
     })
 
     // Create the parent-family link (idempotent)
     const existingLinkResp = await supabaseRequest(
-      `parent_family_links?parent_id=eq.${parentUser.id}&family_id=eq.${invitation.family_id}&select=*`,
+      `parent_family_links?parent_id=eq.${parentId}&family_id=eq.${invitation.family_id}&select=*`,
       'GET'
     )
     const existingLinks = await existingLinkResp.json()
 
     if (!existingLinks || existingLinks.length === 0) {
       await supabaseRequest('parent_family_links', 'POST', {
-        parent_id: parentUser.id,
+        parent_id: parentId,
         family_id: invitation.family_id,
         provider_user_id: invitation.user_id,
         invitation_id: invitation.id,
@@ -162,24 +170,18 @@ export default async function handler(req) {
       {
         status: 'accepted',
         accepted_at: new Date().toISOString(),
-        accepted_by_parent_id: parentUser.id,
+        accepted_by_parent_id: parentId,
       }
     )
 
-    // Generate a magic link sign-in token for immediate authentication
-    const magicResp = await authAdminRequest('admin/generate_link', 'POST', {
-      type: 'magiclink',
-      email: invitation.recipient_email,
-    })
-    const magicData = await magicResp.json()
-
+    // No magic_link / auto_signin_token in the response — the caller
+    // is already authenticated (per the gate above), so the client
+    // navigates to /parent on its own existing session.
     return new Response(JSON.stringify({
       success: true,
-      parent_id: parentUser.id,
-      email: invitation.recipient_email,
+      parent_id: parentId,
+      email: parentEmail,
       family_id: invitation.family_id,
-      magic_link: magicData.properties?.action_link || null,
-      auto_signin_token: magicData.properties?.hashed_token || null,
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   } catch (error) {
     return new Response(JSON.stringify({ error: error.message }), {

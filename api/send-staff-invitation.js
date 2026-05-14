@@ -73,9 +73,14 @@ export default async function handler(req) {
       })
     }
 
+    // Normalize the email so accept-side comparison (session.email vs
+    // invitation.recipient_email, both lowercased + trimmed) lands on
+    // the same value the licensee intends, regardless of casing.
+    const normalizedEmail = String(recipient_email).toLowerCase().trim()
+
     // Check existing pending invite
     const existingResp = await supabaseRequest(
-      `staff_invitations?licensee_id=eq.${licensee.id}&recipient_email=eq.${encodeURIComponent(recipient_email)}&status=eq.pending&select=*`,
+      `staff_invitations?licensee_id=eq.${licensee.id}&recipient_email=eq.${encodeURIComponent(normalizedEmail)}&status=eq.pending&select=*`,
       'GET'
     )
     const existing = await existingResp.json()
@@ -102,7 +107,7 @@ export default async function handler(req) {
       const insertResp = await supabaseRequest('staff_invitations', 'POST', {
         licensee_id: licensee.id,
         recipient_name: recipient_name || null,
-        recipient_email,
+        recipient_email: normalizedEmail,
         intended_role,
         token,
         expires_at: expiresAt,

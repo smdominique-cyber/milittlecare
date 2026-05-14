@@ -69,6 +69,11 @@ export default async function handler(req) {
       })
     }
 
+    // Normalize the email so accept-side comparison (session.email vs
+    // invitation.recipient_email, both lowercased + trimmed) lands on
+    // the same value the provider intends, regardless of casing.
+    const normalizedEmail = String(recipient_email).toLowerCase().trim()
+
     // Verify the family belongs to this provider
     const familyResp = await supabaseRequest(
       `families?id=eq.${family_id}&user_id=eq.${provider.id}&select=*`,
@@ -84,7 +89,7 @@ export default async function handler(req) {
 
     // Check for existing pending invite to same email
     const existingResp = await supabaseRequest(
-      `family_invitations?family_id=eq.${family_id}&recipient_email=eq.${encodeURIComponent(recipient_email)}&status=eq.pending&select=*`,
+      `family_invitations?family_id=eq.${family_id}&recipient_email=eq.${encodeURIComponent(normalizedEmail)}&status=eq.pending&select=*`,
       'GET'
     )
     const existing = await existingResp.json()
@@ -115,7 +120,7 @@ export default async function handler(req) {
           user_id: provider.id,
           family_id,
           recipient_name: recipient_name || null,
-          recipient_email,
+          recipient_email: normalizedEmail,
           recipient_phone: recipient_phone || null,
           token,
           expires_at: expiresAt,
