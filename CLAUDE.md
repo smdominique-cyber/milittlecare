@@ -59,7 +59,7 @@ This product handles real money via CDC scholarship reimbursement to providers a
 
 ## Module Architecture
 
-The app is moving toward a funding-source-driven module activation model where features turn on/off based on which programs a provider's children are funded by. See docs/funding_source_spec.md for the design. The first PR establishes this scaffolding. Subsequent PRs slot in as modules (CDC I-Billing reconciliation, Tri-Share split billing, MDHHS-4025 vault, MiRegistry deadline tracker) without touching each other.
+The app is moving toward a funding-source-driven module activation model where features turn on/off based on which programs a provider's children are funded by. See docs/funding_source_spec.md for the design and current roadmap. Already shipped: scaffolding, funding document vault, MiRegistry deadline tracker. Next up: CDC pay period catalog, attendance foundation, CDC I-Billing reconciliation. Tri-Share split billing is deferred until real demand surfaces — see funding_source_spec.md § Roadmap for rationale.
 
 ## Build Discipline
 

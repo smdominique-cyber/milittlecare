@@ -416,14 +416,54 @@ For consistency across the next 6 months of building:
 
 ---
 
-## After This PR Ships
+## Roadmap (post-scaffolding)
 
-Recommended next-PR order:
+The scaffolding PR shipped. Subsequent PRs are independent and slot
+in as modules. Roadmap reordered 2026-05-15 to prioritize CDC features
+based on Venessa's usage signal and the broader Michigan market shape.
 
-1. **CDC I-Billing reconciliation engine** — generates the per-kid hour totals per pay period, formatted for I-Billing entry, with 10-day absence cap pre-applied. Reads from `funding_sources.type='cdc_scholarship'` and `billing_periods.funding_type='cdc_scholarship'`.
-2. **Tri-Share three-way invoice generator** — same pattern, three line items per period.
-3. **CDC handbook AI assistant** — context-aware (knows the kid's funding source type when answering).
-4. **MDHHS-4025 / Enrollment Agreement document vault** — wires into the existing `Document` table with funding-source linkage.
-5. **MiRegistry deadline tracker** — pure provider-level, doesn't touch funding sources.
+**Shipped:**
 
-Each is independent. Each can be reviewed and shipped in days, not weeks.
+- Funding source scaffolding (data model + module activation)
+- Funding document vault (DHS-198 + Enrollment Agreement uploads with
+  audit retention)
+- License Exempt CDC Scholarship handbook + reference docs in
+  `docs/reference/`
+- MiRegistry deadline tracker (annual deadline countdown + Level 1/2
+  status + entries log)
+
+**Next, in priority order:**
+
+1. **CDC pay period catalog + payment schedule display** (~1 week).
+   Surfaces the published MiLEAP pay period schedule so providers see
+   "what's the current pay period? when's the next one?" without
+   leaving MILittleCare. Foundation for the reconciliation work below.
+2. **Attendance foundation** (~1-2 weeks). Data model for daily
+   attendance per child — prerequisite for CDC I-Billing
+   reconciliation since license-exempt providers bill on actual
+   attended hours, not enrolled hours.
+3. **CDC I-Billing reconciliation view** (~2-3 weeks). Per-kid hour
+   totals per pay period, 10-day absence cap pre-applied, formatted
+   for I-Billing entry. Reads from
+   `funding_sources.type='cdc_scholarship'`,
+   `billing_periods.funding_type='cdc_scholarship'`, and the new
+   attendance data.
+4. **TBD based on Venessa's usage signal.** Prioritize based on real
+   friction Venessa surfaces during the CDC features above. Likely
+   candidates: CDC handbook AI assistant, expanded reporting, billing
+   automation.
+
+**Deferred:**
+
+- **Tri-Share three-way invoice generator.** Revisit when a Tri-Share
+  hub or a Tri-Share-eligible provider creates real demand. Rationale:
+  CDC Scholarship reaches ~98k Michigan kids; Tri-Share reaches
+  ~1-2k. Venessa is CDC-primary with zero Tri-Share families. Building
+  CDC features next directly serves her and the larger market. The
+  Tri-Share data model already exists in `funding_sources` (the
+  scaffolding included the `tri_share` enum value, hub linkage, and
+  three-way split fields), and the Tri-Share docs and references stay
+  in `docs/reference/` for when the program does become relevant.
+
+Each "Next" item is independent. Each can be reviewed and shipped in
+days, not weeks.
