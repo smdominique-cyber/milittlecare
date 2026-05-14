@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useRole } from '@/hooks/useRole'
+import { useActiveModules } from '@/hooks/useActiveModules'
+import { MODULE_KEYS } from '@/lib/modules'
 import { supabase } from '@/lib/supabase'
 import { InstallLink } from '@/components/ui/InstallBanner'
 import {
@@ -21,6 +23,7 @@ import {
   MessageSquare,
   MessageCircle,
   Calendar,
+  GraduationCap,
 } from 'lucide-react'
 
 function getInitials(name) {
@@ -36,6 +39,7 @@ function getInitials(name) {
 export default function Sidebar({ isOpen = false }) {
   const { user, signOut } = useAuth()
   const { role, isLicensee, licenseeId } = useRole()
+  const { modules } = useActiveModules()
   const navigate = useNavigate()
   const [messagingEnabled, setMessagingEnabled] = useState(false)
 
@@ -92,6 +96,12 @@ export default function Sidebar({ isOpen = false }) {
       ],
     },
     {
+      section: 'Compliance',
+      items: [
+        { label: 'MiRegistry', icon: GraduationCap, path: '/miregistry', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.MIREGISTRY_TRACKER },
+      ],
+    },
+    {
       section: 'Settings',
       items: [
         { label: 'Business Info', icon: Building2, path: '/business-info', roles: ['licensee'] },
@@ -108,10 +118,14 @@ export default function Sidebar({ isOpen = false }) {
     navigate('/login', { replace: true })
   }
 
-  // Filter nav by role
+  // Filter nav by role + module activation
   const visibleSections = NAV_ITEMS.map(section => ({
     ...section,
-    items: section.items.filter(item => !item.roles || item.roles.includes(role)),
+    items: section.items.filter(item => {
+      if (item.roles && !item.roles.includes(role)) return false
+      if (item.module && !modules.has(item.module)) return false
+      return true
+    }),
   })).filter(s => s.items.length > 0)
 
   const ROLE_LABELS = {
