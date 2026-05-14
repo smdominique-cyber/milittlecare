@@ -109,6 +109,21 @@ missing migration history.
   columns. Consolidate when refactoring invoice generation to read
   from funding sources only.
 
+## Migration 006 backfill assumption — CDC-primary providers
+
+Migration 006 backfill assumed every active family was private-pay. In
+Venessa's data, 4 families flagged `needs_rate_review=true` are
+actually CDC Scholarship kids. She'll archive the placeholders and
+create proper CDC Scholarship sources once the document vault UI
+ships.
+
+This is also a lesson for future backfills: many providers — especially
+home daycare and license-exempt — have CDC Scholarship as the majority
+of their roster, not the exception. See `CLAUDE.md` § Critical Domain
+Knowledge for the rule that codifies this. Future backfills that need
+to choose a funding type should flag rows for human review rather than
+default to `private_pay`.
+
 ## Conventions introduced by this PR (apply to all future migrations)
 
 - **Soft delete on audit-relevant tables: `archived_at timestamptz`.**

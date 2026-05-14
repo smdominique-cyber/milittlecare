@@ -53,6 +53,7 @@ This product handles real money via CDC scholarship reimbursement to providers a
 - Audit retention: 4 years for licensed providers, longer for license-exempt. Never hard-delete funding or attendance records — use soft delete via archived_at columns.
 - CDC compliance terminology: Use exact MiLEAP terms in user-facing copy. "CDC Scholarship" not "subsidy." "I-Billing" not "billing portal." "MDHHS-4025" not "verification form." "MiRegistry" not "training tracker."
 - Module activation principle: Features hide themselves when not relevant to a provider's active funding mix. A private-pay-only provider should never see the word "CDC" anywhere in the UI. See docs/funding_source_spec.md for the full design.
+- CDC-primary providers are the norm, not the exception: many MILittleCare providers — especially home daycare and license-exempt — have CDC Scholarship as the funding for the MAJORITY of their roster. The hybrid funding model (private_pay per family, CDC/Tri-Share/etc. per child) is correct, but UI and copy must not imply that private_pay is "the default case." Future backfills must not assume a default funding type — flag rows for human review instead of guessing.
 - Real customer in production: Venessa is a live user with real data. Migrations must be reversible; backfills must be reviewed before applying to production data.
 
 ## Module Architecture
