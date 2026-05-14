@@ -9,51 +9,11 @@ import { Archive, Info, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import HelpTooltip from '@/components/ui/HelpTooltip'
-import { SOURCE, todayYMD } from '@/lib/miregistry'
+import { SOURCE, SOURCE_OPTIONS, todayYMD } from '@/lib/miregistry'
 
 // -----------------------------------------------------------------------------
 // Constants
 // -----------------------------------------------------------------------------
-
-const SOURCE_OPTIONS = [
-  {
-    value: SOURCE.LEPPT,
-    label: 'LEPPT (initial training)',
-    help:
-      'The one-time License Exempt Provider Preservice Training. ' +
-      'Required to enroll as a license-exempt CDC provider. Costs ' +
-      '$10. You only complete this once in your career. If you opted ' +
-      'out of the CPR/first-aid portion because you had a current ' +
-      'card, log only the hours you actually completed.',
-  },
-  {
-    value: SOURCE.ANNUAL_ONGOING,
-    label: 'Annual Ongoing Training',
-    help:
-      'The Michigan Ongoing Health & Safety Refresher. Required ' +
-      'every year by December 16. Free. Up to 2 hours of this ' +
-      'training count toward your 10 annual Level 2 hours.',
-  },
-  {
-    value: SOURCE.LEVEL_2_APPROVED,
-    label: 'Level 2 approved training',
-    help:
-      'Any other MiRegistry-approved training that counts toward ' +
-      'your annual 10 hours for Level 2 pay rate. Each session must ' +
-      'be at least 1 hour to count.',
-  },
-  {
-    value: SOURCE.OTHER,
-    label: 'Other',
-    help:
-      'Any training you want a record of that doesn’t fit the ' +
-      'categories above. Doesn’t count toward Level 2 progress.',
-  },
-]
-
-const SOURCE_LABEL_BY_VALUE = Object.fromEntries(
-  SOURCE_OPTIONS.map(o => [o.value, o.label])
-)
 
 // -----------------------------------------------------------------------------
 // Help copy (per CLAUDE.md § Documentation Conventions rule 1)
@@ -685,6 +645,3 @@ const errorBannerStyle = {
   lineHeight: 1.45,
 }
 
-// SOURCE_LABEL_BY_VALUE is exported indirectly for any caller that wants to
-// render a badge for an entry's source. Not used inside this file.
-export { SOURCE_LABEL_BY_VALUE }
