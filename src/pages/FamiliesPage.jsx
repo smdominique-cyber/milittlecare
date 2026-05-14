@@ -10,6 +10,7 @@ import {
 import { getNextInvoicePeriod, describeFrequency, computeInvoiceAmount } from '@/lib/billing'
 import FundingSourceList from '@/components/funding/FundingSourceList'
 import FundingSourceForm from '@/components/funding/FundingSourceForm'
+import MiRegistryWarningBanner from '@/components/miregistry/MiRegistryWarningBanner'
 import '@/styles/families.css'
 
 const STATUS_OPTIONS = [
@@ -721,6 +722,7 @@ function FundingTab({ family, childrenList, onChange }) {
 
   return (
     <>
+      <MiRegistryWarningBanner />
       <FundingSourceList
         familyId={family.id}
         familyName={family.family_name}
