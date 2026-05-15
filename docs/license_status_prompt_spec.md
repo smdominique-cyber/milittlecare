@@ -123,27 +123,27 @@ parenthetical confirmation:
 ### Layout (ASCII mock)
 
 ```
-┌─ One quick question ─────────────────────────────────────────┐
-│                                                               │
-│  You just added a CDC Scholarship funding source. To show     │
-│  you the right tools — including Michigan training deadlines   │
-│  that affect your CDC payments — tell us how your child care   │
-│  operates.                                                     │
-│                                                               │
-│  ( ) I care for children I'm related to or already know,      │
-│      registered with MDHHS   (license-exempt provider)         │
-│      → helper text per § 6                                     │
-│                                                               │
-│  ( ) I hold a Michigan child care license from LARA            │
-│      (licensed provider — Family or Group Child Care Home)     │
-│      → helper text per § 6                                     │
-│                                                               │
-│              [ Save ]      I'm not sure — ask me later         │
-└───────────────────────────────────────────────────────────────┘
+┌─ One quick question ───────────────────────────────────────────┐
+│                                                                  │
+│  You just added a CDC Scholarship funding source. To show you    │
+│  the right tools — including Michigan training deadlines that    │
+│  affect your CDC payments — tell us how your child care works.   │
+│                                                                  │
+│  ( ) I care for children I'm related to or already know,         │
+│      registered with MDHHS   (license-exempt provider)           │
+│      Not licensed by the State of Michigan. This is the          │
+│      most common setup for in-home CDC providers.                │
+│                                                                  │
+│  ( ) I hold a Michigan child care license from LARA              │
+│      (licensed provider — Family or Group Child Care Home)       │
+│      Most centers and some larger home programs are licensed.    │
+│                                                                  │
+│              [ Save ]      I'm not sure — ask me later           │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-`[ Save ]` is disabled until a radio is selected. Helper text is
-abbreviated in the mock — the full copy is in § 6.
+`[ Save ]` is disabled until a radio is selected. The helper text shown
+here is the final copy from § 6.
 
 ---
 
@@ -200,14 +200,12 @@ Draft copy below — same review-before-implement cadence as
 - **Option A label:** "I care for children I'm related to or already know,
   registered with MDHHS" — followed by the parenthetical *(license-exempt
   provider)*.
-  - helper: "I care for children I'm related to or already know, and I'm
-    registered with MDHHS — not licensed by the State. This is the most
-    common setup for in-home CDC providers."
+  - helper: "Not licensed by the State of Michigan. This is the most common
+    setup for in-home CDC providers."
 - **Option B label:** "I hold a Michigan child care license from LARA" —
   followed by the parenthetical *(licensed provider — Family or Group Child
   Care Home)*.
-  - helper: "I hold a Michigan child care license — a Family or Group Child
-    Care Home license from LARA."
+  - helper: "Most centers and some larger home programs are licensed."
 - **Escape CTA:** "I'm not sure — ask me later"
 - **Save confirmation (license-exempt):** "Got it. We've turned on your
   MiRegistry training tracker — find it under Compliance in the sidebar."
