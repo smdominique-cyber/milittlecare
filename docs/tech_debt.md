@@ -74,9 +74,11 @@ additional columns:
 
 1. `pg_dump --schema-only --no-owner` from the production Supabase project.
 2. Diff against `001` + `002` + new migrations from this PR.
-3. Author retroactive migrations (suggested numbering: `010_` onward to
-   leave room) that recreate every missing table and column. Mark each
-   clearly: `-- RETROACTIVE: already present in production as of YYYY-MM-DD`.
+3. Author retroactive migrations — numbered sequentially from the next
+   free migration number at the time the cleanup is done; no migration
+   number range is reserved in advance — that recreate every missing table
+   and column. Mark each clearly: `-- RETROACTIVE: already present in
+   production as of YYYY-MM-DD`.
 4. Verify `supabase db reset` against a fresh project produces a working
    schema and the React app boots without "relation does not exist" errors.
 
@@ -260,3 +262,39 @@ as the verification artifact.
 - **Transactional backfills.** Wrap any backfill INSERT in an explicit
   `begin; ... commit;` so a mid-run error rolls back cleanly. Include a
   trailing `SELECT` that prints row counts for verification.
+
+## Annual CDC pay period catalog update (recurring — every Q4)
+
+`cdc_pay_period_catalog` (to be added by migration
+`010_cdc_pay_period_catalog.sql`, PR #5) holds the MDHHS-published CDC pay
+period schedule. MDHHS publishes a new schedule once per calendar year, so
+the catalog needs one update per year — a standing operational task, not a
+bug.
+
+Procedure, each Q4 (target: October, once MDHHS posts the next year's
+schedule on the Michigan.gov CDC Providers page):
+
+1. Transcribe the new year's 26 periods into a small seed-only migration
+   (next sequential migration number), following the row format in
+   `docs/cdc_pay_periods_spec.md` Appendix A.
+2. Apply it via the Supabase web SQL editor, per the runbook's Migration
+   Application Procedure.
+3. Verify with the `cdc_pay_periods_spec.md` § 7.5 contiguity check —
+   ordered by `start_date`, each period's `start_date` is the previous
+   `end_date` + 1 day, with no gaps or overlaps across the year boundary.
+
+Next due: **Q4 2027**, for the 2027 schedule (`701`–`726`). Until the
+catalog is updated, the CDC Pay Periods page shows the
+schedule-not-published empty state (`cdc_pay_periods_spec.md` § 3.4).
+
+## `src/ReceiptsPage.jsx` not yet relocated to `src/pages/`
+
+`src/ReceiptsPage.jsx` lives at the `src/` root; per `CLAUDE.md`
+§ File Structure it belongs in `src/pages/`. `CLAUDE.md` already flags this
+("should eventually move into `src/pages/`. Not urgent."). Surfaced again
+during PR #5 spec review when placing the new `CdcPayPeriodsPage.jsx`
+correctly under `src/pages/`.
+
+Fix: move the file to `src/pages/ReceiptsPage.jsx` and update its import in
+`src/App.jsx`, as a standalone cleanup PR — not bundled into a feature PR,
+since it is unrelated churn.
