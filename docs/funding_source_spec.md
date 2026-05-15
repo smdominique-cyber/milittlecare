@@ -467,3 +467,6 @@ based on Venessa's usage signal and the broader Michigan market shape.
 
 Each "Next" item is independent. Each can be reviewed and shipped in
 days, not weeks.
+## Related strategy
+
+See [strategy.md](./strategy.md) for the long-term positioning context this spec operates within, including the state-modernization hedge that prioritizes compliance intelligence over workflow mimicry.
