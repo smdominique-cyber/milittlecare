@@ -148,6 +148,30 @@ missing migration history.
   `MiRegistryPage` so both surfaces hit the network at most once per
   session.
 
+## License-exempt provider self-identification is invisible
+
+The MiRegistry tracker activates on `profile.is_license_exempt === true`,
+but providers have no UI surface that asks them this question. A
+license-exempt provider can set up MILittleCare, add CDC funding sources
+for their kids, and never discover the MiRegistry tracker exists because
+the activation field stays `null`.
+
+Fix: when a provider creates their first CDC Scholarship funding source on
+any child, prompt them with a modal asking whether they're license-exempt
+or licensed. Store the answer on `profiles.is_license_exempt`. The same
+prompt should fire if they edit/replace a funding source and still have no
+answer recorded.
+
+Future: licensed providers' answer should also activate (eventually)
+licensed-provider continuing education tracking (LARA rules, separate from
+the MiRegistry tracker, separate spec).
+
+Surfaced 2026-05-15 by Seth during PR #4 production testing — he correctly
+noted that adding CDC funding sources for his kids should have triggered
+the MiRegistry module's relevance somehow. The activation rule itself is
+correct (license status is a provider attribute, not a per-child
+attribute); the gap is in surfacing the question to the provider.
+
 ## Migration 006 backfill assumption — CDC-primary providers
 
 Migration 006 backfill assumed every active family was private-pay. In
