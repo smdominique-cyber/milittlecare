@@ -323,8 +323,20 @@ Level 1/2 card, no Hours-toward-Level-2 card. The status badges in the
 sidebar are also suppressed for licensed providers.
 
 Licensed providers have their own continuing-education requirements
-(LARA-administered, separate from MiRegistry levels). Modeling those
-is a V2 spec.
+(LARA-administered, separate from MiRegistry levels). More fundamentally,
+this tracker models *one auth user tracking their own training* — which
+does not fit a licensed provider at all. A licensed provider (e.g. a
+Family Child Care Home licensee) must track training for **every staff
+member** under their license — assistants, substitutes, anyone providing
+care — with role-dependent requirements that LARA inspects for. The V1
+stripped-down view above only narrows the self-tracking page; it does not
+address staff training tracking.
+
+Properly supporting licensed providers needs a **separate spec**. The
+likely shape is **Model B — a licensee dashboard that aggregates staff
+compliance** (a per-staff role-aware requirement matrix with due dates and
+a status rollup), but it is currently unbuilt. See `docs/tech_debt.md`
+§ "Staff training tracking for licensed providers is unmodeled".
 
 ### 3.5 Edge cases the UI must handle
 

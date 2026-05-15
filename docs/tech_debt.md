@@ -174,6 +174,32 @@ the MiRegistry module's relevance somehow. The activation rule itself is
 correct (license status is a provider attribute, not a per-child
 attribute); the gap is in surfacing the question to the provider.
 
+## Staff training tracking for licensed providers is unmodeled
+
+The MiRegistry tracker (PR #4) assumes one auth user = one provider
+tracking their own training. This works for license-exempt providers
+(single individual, no staff).
+
+It does NOT work for licensed providers (e.g. Family Child Care Home
+licensees like Venessa). Licensed providers must track training for every
+staff member under their license — assistants, substitutes, anyone
+providing care. LARA requires this and inspects for it. Training
+requirements differ by role and are different from license-exempt
+requirements (administered by LARA, not MDHHS CDC).
+
+Current schema implication: staff invited via `staff_invitations` get
+their own `auth.users` / profile rows. The MiRegistry page would activate
+for them only if they had a `miregistry_id` set on their own profile.
+There's no surface where the licensee can see aggregated staff compliance,
+no role-aware training requirement matrix, no concept that "Maria (staff
+at Venessa's home) needs initial orientation + annual H&S + CPR by Dec 1."
+
+This is a real gap, not a polish item. It's potentially a meaningful
+product wedge for licensed providers — possibly more valuable than CDC pay
+period catalog (PR #5).
+
+Out of scope for this PR; surfaced 2026-05-15 by Seth.
+
 ## Migration 006 backfill assumption — CDC-primary providers
 
 Migration 006 backfill assumed every active family was private-pay. In
