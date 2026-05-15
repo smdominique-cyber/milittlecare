@@ -77,7 +77,12 @@ The modal fires when **all** of the following hold:
 1. The provider has just created a **CDC Scholarship** funding source
    (`type === 'cdc_scholarship'`), and
 2. `profile.is_license_exempt IS NULL`, and
-3. `profile.role === 'licensee'` (see § 7 — staff never see this).
+3. The provider is a **licensee** — `useRole().isLicensee` is true, checked
+   **at the call site** (see § 7). Role is derived from `staff_memberships`,
+   not `profiles.role`; staff never see this modal.
+
+Conditions 1–2 are the **pure helper** `shouldFireLicenseStatusPrompt`;
+condition 3 is a separate call-site check (§ 9 decisions 2 and 7).
 
 ### Hook point
 
@@ -179,9 +184,15 @@ this introduces the first `profiles` write on that page — a minor new
 pattern, **not a new page**.
 
 Minimal addition: a single labeled control that shows the current answer
-and lets the provider switch it, **folded into an existing `BusinessInfoPage`
-tab** (§ 9 decision 1) — not a new tab. The exact tab is chosen with Seth
-before implementation, after reviewing the current tab structure together.
+and lets the provider switch it, on a **new "Licensing" tab on
+`BusinessInfoPage`** (§ 9 decision 1). Pre-implementation review found the
+page's five existing tabs (Hours, Holidays & Closures, Payment & Fees,
+Emergency Info, Parent Messages) are all parent-portal operational content
+with no natural home for a provider-identity field — hence a dedicated tab.
+The "Licensing" tab is the home for license-status today and the natural
+future home for other provider-identity / compliance fields —
+`miregistry_id`, `michigan_license_number`, `michigan_provider_id` — when
+those need edit surfaces in later PRs.
 
 Changing the value here re-runs module activation — see § 7 for
 consequences.
@@ -249,10 +260,10 @@ correctly with no special case. (Matches the stated lean.)
 
 **Staff users must never see this modal.** A user invited through
 `staff_invitations` gets their own `profiles` row with a non-`licensee`
-`role`. License status is a licensee-level question. The fire condition
-includes `role === 'licensee'` (via the existing `useRole` hook). Staff
-generally shouldn't be creating CDC funding sources anyway, but the role
-gate makes the modal correct regardless of who reaches the form.
+`role`. License status is a licensee-level question. The caller gates the modal on
+`useRole().isLicensee` (see § 9 decision 7). Staff generally shouldn't be
+creating CDC funding sources anyway, but the role gate makes the modal
+correct regardless of who reaches the form.
 
 **Provider repeatedly picks "ask me later."** Acceptable — `null` is a
 valid resting state; the app simply keeps the MiRegistry module off and
@@ -270,8 +281,8 @@ who never answers is deferred to V2 — see § 9 decision 5.
   Vitest — so any CDC-source-creation path can reuse it (§ 9 decision 2).
 - The prompt modal on first (and re-prompted) CDC Scholarship source
   creation, per § 3–4.
-- The `BusinessInfoPage` edit affordance, per § 5 — folded into an existing
-  tab, placement chosen with Seth before implementation (§ 9 decision 1).
+- The `BusinessInfoPage` edit affordance, per § 5 — a new "Licensing" tab
+  (§ 9 decision 1).
 - Module activation continues to read `is_license_exempt` exactly as today.
   **No change to `src/lib/modules.js`.**
 
@@ -291,17 +302,23 @@ who never answers is deferred to V2 — see § 9 decision 5.
 
 Resolved in spec review on 2026-05-15:
 
-1. **Settings affordance placement.** Fold the license-status control into
-   an **existing `BusinessInfoPage` tab** — not a new tab. The natural
-   placement is picked with Seth before implementation, by reviewing the
-   current `BusinessInfoPage` tab structure together — not chosen blind.
+1. **Settings affordance placement.** Add a new **"Licensing" tab** to
+   `BusinessInfoPage`. Pre-implementation review found the page's five
+   existing tabs are all parent-portal operational content, with no natural
+   home for a provider-identity field — so a dedicated tab is the right
+   call. The "Licensing" tab houses license-status today and is the natural
+   home for `miregistry_id`, `michigan_license_number`, and
+   `michigan_provider_id` edit surfaces in future PRs.
 
 2. **Shared fire-condition helper.** V1 hooks only the `FundingSourceForm`
    save path, but the fire-condition logic is extracted into a shared
    helper — `shouldFireLicenseStatusPrompt({ profile, savedSource })` in
    `src/lib/licenseStatusPrompt.js` — so future CDC-source-creation paths
-   (bulk import, etc.) reuse it without duplicating logic. Small refactor
-   taken now.
+   (bulk import, etc.) reuse it without duplicating logic. The helper is a
+   pure function; its signature stays `{ profile, savedSource }` with **no
+   `isLicensee` parameter**. The role gate is a separate call-site concern
+   (see decision 7) — the caller checks `useRole().isLicensee` before
+   invoking the helper.
 
 3. **Option labels lead with plain language.** Keep the term
    "license-exempt," but each radio label leads with the plain-language
@@ -326,9 +343,14 @@ Resolved in spec review on 2026-05-15:
    confirmation copy is "Got it — thanks. That helps us show you the right
    tools." — it does not promise unbuilt features.
 
-7. **Role gate.** The modal fires only for `profile.role === 'licensee'`,
-   via the existing `useRole` hook. **Before implementation:** read the
-   `useRole` hook, confirm `'licensee'` is the exact role string, and list
-   the full set of `profiles.role` values used across the codebase so the
-   strict-equality gate provably excludes staff. If anything varies from
-   `'licensee'`, surface it rather than locking it in blind.
+7. **Role gate.** The modal fires only for licensees, gated on
+   **`useRole().isLicensee`** at the call site — *not* `profiles.role`.
+   Pre-implementation review of `useRole` (`src/hooks/useRole.jsx`) found:
+   role is derived from the `staff_memberships` table (a user with no
+   active membership defaults to `licensee`), **not** from `profiles.role`
+   — so `profiles.role` must not be used as the gate. The four role values
+   are `'licensee'`, `'adult_staff'`, `'assistant'`, `'view_only'`;
+   `'licensee'` is correct for the owner, and `useRole()` already exposes
+   the `isLicensee` boolean for the caller to use directly. The gate is
+   necessary, not redundant: `adult_staff` holds the `manage_families`
+   permission and can also reach `FundingSourceForm`.
