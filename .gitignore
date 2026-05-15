@@ -38,3 +38,6 @@ answers.txt
 decision.txt
 schema.txt
 .claude/
+
+# Supabase CLI cache
+supabase/.temp/
