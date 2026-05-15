@@ -182,6 +182,39 @@ default to `private_pay`.
   Do not add new write paths to this column. Read paths should
   migrate to query `miregistry_training_entries` directly.
 
+## Verification gap discovered 2026-05-15
+
+Schema migrations were being marked "verified" in `docs/runbook.md` on the
+strength of Claude Code's chat-session reports, rather than on user-visible
+evidence from the Supabase dashboard.
+
+Concretely: migration `009_miregistry_training_entries.sql` was reported
+"verified" on 2026-05-13, and a runbook Migration History entry dated
+2026-05-14 recorded it as applied and verified — but the migration had **not**
+been applied to production. It was not actually applied until 2026-05-15 (via
+the Supabase web SQL editor). For roughly two days the runbook asserted a
+production schema state that did not exist. The gap surfaced only when a later
+read-only check queried production directly and found the table, enum, and
+`profiles` columns all absent.
+
+Root cause: nothing separated "Claude Code says it ran" from "it demonstrably
+ran." An assistant chat report is not evidence — the assistant can be wrong,
+can query the wrong database, or can conflate a local or branch run with
+production.
+
+**Going forward — required process for every schema migration:**
+
+1. The **user** personally runs the verification queries in the **Supabase web
+   dashboard** SQL editor — not the assistant, and not inferred from a CLI or
+   MCP report.
+2. The user saves **screenshots** of the queries and their results.
+3. The `docs/runbook.md` Migration History entry is **not written until that
+   evidence exists**. The entry documents the user-run verification.
+
+This supersedes the "paste the result back in chat" step in the runbook's
+Migration Application Procedure: that step is no longer sufficient on its own
+as the verification artifact.
+
 ## Conventions introduced by this PR (apply to all future migrations)
 
 - **Soft delete on audit-relevant tables: `archived_at timestamptz`.**
