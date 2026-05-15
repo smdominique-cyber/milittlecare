@@ -72,6 +72,7 @@ OFFER (instead of software demo):
 
 GOAL (realistic):
 One coordinator informally recommending MILittleCare to their providers. NOT statewide approval, NOT partnership agreements, NOT vendor approval lists. Those come after traction.
+See [funding_source_spec.md](./funding_source_spec.md) for the program-aware compliance state model that underlies this strategy.
 
 OPENING EMAIL STRUCTURE:
 1. Acknowledge their operational workload (specific, not generic)
