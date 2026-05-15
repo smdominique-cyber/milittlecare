@@ -174,6 +174,18 @@ the MiRegistry module's relevance somehow. The activation rule itself is
 correct (license status is a provider attribute, not a per-child
 attribute); the gap is in surfacing the question to the provider.
 
+## License status indefinitely null
+
+`profiles.is_license_exempt` can sit at `null` indefinitely if a provider
+repeatedly picks "I'm not sure — ask me later" in the license-status prompt
+(see `docs/license_status_prompt_spec.md` §§ 3–4). A provider parked in
+`null` never gets the MiRegistry tracker.
+
+If real-life usage shows providers doing this repeatedly without ever
+answering, add a one-time gentle dashboard banner prompting them to answer.
+Defer until we have signal that this is a real pattern — surfaced as
+OQ5 in the license-status prompt spec and deliberately deferred to V2.
+
 ## Staff training tracking for licensed providers is unmodeled
 
 The MiRegistry tracker (PR #4) assumes one auth user = one provider
