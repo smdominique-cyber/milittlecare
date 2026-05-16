@@ -336,3 +336,25 @@ correctly under `src/pages/`.
 Fix: move the file to `src/pages/ReceiptsPage.jsx` and update its import in
 `src/App.jsx`, as a standalone cleanup PR — not bundled into a feature PR,
 since it is unrelated churn.
+
+## ESLint configuration is missing from the repo
+
+`package.json`'s `lint` script references ESLint, but no config file is
+committed — no `.eslintrc.*`, no `eslint.config.*`, no flat config
+anywhere. Running `npm run lint` fails with "ESLint couldn't find a
+configuration file."
+
+Discovered 2026-05-15 during PR #5 implementation (license-status prompt
+modal). Pre-existing; same class of out-of-band gap as the 26 production
+tables without migration files.
+
+Fix: pick the ESLint version we're standardizing on (ESLint 8 with
+`.eslintrc.json`, or ESLint 9+ with `eslint.config.js` — match what
+`package.json`'s `eslint` dependency declares), and commit the config with
+the React plugins already in the project (`eslint-plugin-react`,
+`eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`) plus
+`eslint-plugin-jsx-a11y` for accessibility linting. Verify `npm run lint`
+runs clean against current `main` before merging.
+
+Out of scope for the license-status prompt PR; surfaced here so it's not
+lost.
