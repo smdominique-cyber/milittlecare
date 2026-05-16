@@ -7,8 +7,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { Info, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
+import { useRole } from '@/hooks/useRole'
+import { shouldFireLicenseStatusPrompt } from '@/lib/licenseStatusPrompt'
 import HelpTooltip from '@/components/ui/HelpTooltip'
 import FundingDocumentSlot from '@/components/funding/FundingDocumentSlot'
+import LicenseStatusPromptModal from '@/components/funding/LicenseStatusPromptModal'
 
 // -----------------------------------------------------------------------------
 // Constants
@@ -337,6 +340,7 @@ export default function FundingSourceForm({
   onSaved,
 }) {
   const { user } = useAuth()
+  const { isLicensee } = useRole()
   const isEditing = !!existingSource
 
   const [type, setType] = useState(existingSource?.type || '')
@@ -355,6 +359,10 @@ export default function FundingSourceForm({
   const [saving, setSaving] = useState(false)
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const [saveError, setSaveError] = useState(null)
+  // When a brand-new CDC source is created by an unanswered licensee, this
+  // modal takes over the mount before the form closes — see
+  // docs/license_status_prompt_spec.md § 3.
+  const [licensePromptOpen, setLicensePromptOpen] = useState(false)
 
   // Snapshot the initial form state at mount so we can detect dirty
   // changes on cancel without re-prompting users who just viewed and closed.
@@ -433,11 +441,11 @@ export default function FundingSourceForm({
   // sees current form state. Pattern reusable for any modal.
   useEffect(() => {
     const onKey = e => {
-      if (e.key === 'Escape') handleCancel()
+      if (e.key === 'Escape' && !licensePromptOpen) handleCancel()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [handleCancel])
+  }, [handleCancel, licensePromptOpen])
 
   const handleSave = async () => {
     setSubmitAttempted(true)
@@ -495,14 +503,39 @@ export default function FundingSourceForm({
         if (famErr) throw famErr
       }
 
-      onSaved?.()
-      onClose?.()
+      // A brand-new CDC Scholarship source is the moment to ask an
+      // unanswered licensee about their license status (spec § 3). The
+      // role check is this call site's job (§ 9 decision 7); the helper
+      // stays pure.
+      const promptLicenseStatus =
+        !isEditing &&
+        isLicensee &&
+        shouldFireLicenseStatusPrompt({
+          profile: { is_license_exempt: isLicenseExempt },
+          savedSource: { type },
+        })
+
+      if (promptLicenseStatus) {
+        // Defer onSaved/onClose — onSaved unmounts this form via the
+        // parent's closeForm(). The license modal runs them on close.
+        setLicensePromptOpen(true)
+      } else {
+        onSaved?.()
+        onClose?.()
+      }
     } catch (err) {
       console.error('FundingSourceForm: save failed', err)
       setSaveError(SAVE_ERROR_GENERIC)
     } finally {
       setSaving(false)
     }
+  }
+
+  // License-status modal resolved (answered or "ask me later"). Run the
+  // deferred parent callbacks: refresh the funding list, then close.
+  const handleLicensePromptClose = () => {
+    onSaved?.()
+    onClose?.()
   }
 
   const headerTitle = isEditing
@@ -514,6 +547,10 @@ export default function FundingSourceForm({
 
   const visibleErrors = submitAttempted ? errors : {}
   const errorMessages = Object.values(visibleErrors)
+
+  if (licensePromptOpen) {
+    return <LicenseStatusPromptModal onClose={handleLicensePromptClose} />
+  }
 
   return (
     <div className="modal-overlay" onClick={handleCancel}>
