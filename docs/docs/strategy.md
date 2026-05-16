@@ -79,3 +79,33 @@ OPENING EMAIL STRUCTURE:
 2. Demonstrate Michigan-specific understanding (cite a real handbook rule)
 3. Position as provider infrastructure, not childcare software
 4. Ask for feedback, NOT partnership
+Update docs/strategy.md to add a section about onboarding as architecture:
+
+## Onboarding as architecture (not polish)
+
+MILittleCare has 6-8 structural-identity fields the system needs to know about a provider to activate the right modules and show the right tools:
+- License status (license-exempt vs licensed)
+- MiRegistry ID (license-exempt providers)
+- Michigan license number / provider ID (licensed providers)
+- CDC participation
+- Tri-Share participation
+- CACFP / food program participation
+- Number of kids currently enrolled
+- Typical care hours
+
+Right now each field has its own discovery moment (or none). The license-status prompt (PR #5) was a workaround for the most urgent case. The structural fix is a first-login onboarding wizard that captures these once and lets every downstream feature work without per-field discovery patches.
+
+Prioritization implication: the onboarding wizard should land earlier in the roadmap than originally scoped — likely PR #7 or PR #8 territory rather than PR #19. Each new module shipped before the wizard exists creates another retrofit case for the wizard to handle later.
+
+V1 onboarding scope:
+- Conversational tone, one question per screen
+- Captures all 8 structural-identity fields
+- Skippable but with persistent "Finish your setup" prompt
+- Outputs: profile fields filled, modules activated, dashboard shows next-step prompts based on what's missing
+- Explicitly NOT: a tutorial, a video, a mandatory wall
+
+The wizard also serves customer acquisition: a good first-login experience is what providers expect from professional software and a meaningful differentiator from "early-stage product."
+
+Update docs/funding_source_spec.md and docs/license_status_prompt_spec.md to note that the onboarding wizard, once built, is the canonical place these structural-identity values are captured. The inline prompts and module-gated empty states are V1 workarounds.
+
+Commit directly to main as "Promote onboarding wizard from V3 to near-term roadmap" — doc-only.
