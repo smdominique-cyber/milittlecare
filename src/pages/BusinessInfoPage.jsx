@@ -5,7 +5,7 @@ import { notifyStateChange } from '@/lib/notifications'
 import {
   Clock, Calendar, DollarSign, Phone, AlertTriangle,
   Plus, X, Save, Trash2, ChevronDown, ChevronRight, Check,
-  MessageCircle, Info,
+  MessageCircle, Info, ScrollText,
 } from 'lucide-react'
 import '@/styles/business-info.css'
 
@@ -138,16 +138,23 @@ export default function BusinessInfoPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
+  // profiles row — the Licensing tab is the first surface on this page to
+  // read/write profiles. It is the intended home for future
+  // provider-identity / compliance fields (miregistry_id,
+  // michigan_license_number, michigan_provider_id) when those need edit
+  // surfaces — see docs/license_status_prompt_spec.md § 9 decision 1.
+  const [profile, setProfile] = useState(null)
 
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
     if (!user) return
     setLoading(true)
-    const [hoursResp, closuresResp, policyResp] = await Promise.all([
+    const [hoursResp, closuresResp, policyResp, profileResp] = await Promise.all([
       supabase.from('business_hours').select('*').eq('user_id', user.id),
       supabase.from('closures').select('*').eq('user_id', user.id).order('start_date'),
       supabase.from('business_policies').select('*').eq('user_id', user.id).maybeSingle(),
+      supabase.from('profiles').select('is_license_exempt').eq('id', user.id).maybeSingle(),
     ])
 
     const hoursMap = {}
@@ -164,6 +171,7 @@ export default function BusinessInfoPage() {
     setHours(hoursMap)
     setClosures(closuresResp.data || [])
     setPolicies(policyResp.data || { user_id: user.id, payment_methods: {} })
+    setProfile(profileResp.data || null)
     setLoading(false)
   }
 
@@ -324,6 +332,40 @@ export default function BusinessInfoPage() {
     setSaving(false)
   }
 
+  // First profiles write on this page. Switching an already-set value
+  // shows a window.confirm spelling out the MiRegistry module consequence
+  // (docs/license_status_prompt_spec.md § 7); first-time set does not.
+  const saveLicenseStatus = async (isLicenseExempt) => {
+    const previous = profile?.is_license_exempt
+    const isSwitch =
+      (previous === true || previous === false) && previous !== isLicenseExempt
+    if (isSwitch) {
+      const confirmMsg = previous === true
+        ? LICENSE_SWITCH_CONFIRM.exemptToLicensed
+        : LICENSE_SWITCH_CONFIRM.licensedToExempt
+      if (!window.confirm(confirmMsg)) return
+    }
+    setSaving(true)
+    setMessage(null)
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ is_license_exempt: isLicenseExempt })
+        .eq('id', user.id)
+      if (error) throw error
+      setMessage({
+        type: 'success',
+        text: isLicenseExempt
+          ? '✓ Saved. Refresh your browser to see the MiRegistry tracker in your sidebar.'
+          : '✓ Saved.',
+      })
+      await loadAll()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+    setSaving(false)
+  }
+
   if (loading) {
     return (
       <div style={{ padding: 'var(--space-12)', textAlign: 'center' }}>
@@ -338,6 +380,17 @@ export default function BusinessInfoPage() {
     { id: 'policies', label: 'Payment & Fees', icon: DollarSign, done: policies.policies_set },
     { id: 'emergency', label: 'Emergency Info', icon: AlertTriangle, done: policies.emergency_set },
     { id: 'messaging', label: 'Parent Messages', icon: MessageCircle, done: !!policies.messaging_enabled },
+    {
+      id: 'licensing',
+      label: 'Licensing',
+      icon: ScrollText,
+      // "Done" once the provider has answered either way. Not `!== null`:
+      // during load `profile` is null and the value reads `undefined`,
+      // which `!== null` would wrongly mark done.
+      done:
+        profile?.is_license_exempt === true ||
+        profile?.is_license_exempt === false,
+    },
   ]
 
   const paymentMethods = policies.payment_methods || {}
@@ -785,6 +838,14 @@ export default function BusinessInfoPage() {
           )}
         </div>
       )}
+
+      {activeSection === 'licensing' && (
+        <LicensingSection
+          currentValue={profile?.is_license_exempt ?? null}
+          onSave={saveLicenseStatus}
+          saving={saving}
+        />
+      )}
     </>
   )
 }
@@ -982,4 +1043,133 @@ function ClosureItem({ closure, onDelete, recurring, muted }) {
       </button>
     </div>
   )
+}
+
+// -----------------------------------------------------------------------------
+// Licensing tab — license-status control (profiles.is_license_exempt)
+// -----------------------------------------------------------------------------
+
+const LICENSE_SWITCH_CONFIRM = {
+  exemptToLicensed:
+    'Switching to licensed will hide the MiRegistry tracker. Any MiRegistry ' +
+    'trainings you’ve logged will be kept — not deleted — but they won’t ' +
+    'appear in your sidebar unless you switch back or add a MiRegistry ID. ' +
+    'Continue?',
+  licensedToExempt:
+    'Switching to license-exempt will turn on the MiRegistry tracker — ' +
+    'you’ll find it in the Compliance section of your sidebar. Continue?',
+}
+
+// Presentational — mirrors the ClosuresSection pattern (data + handlers in
+// as props). Copy is intentionally identical to LicenseStatusPromptModal so
+// the provider sees the same wording on both surfaces.
+function LicensingSection({ currentValue, onSave, saving }) {
+  // currentValue: true (license-exempt) | false (licensed) | null (unanswered)
+  const [choice, setChoice] = useState(currentValue)
+
+  const answered = choice === true || choice === false
+  const dirty = choice !== currentValue
+
+  return (
+    <div className="bi-section">
+      <div className="bi-section-header">
+        <h3>Provider Type</h3>
+        <p>
+          Whether you’re license-exempt or licensed shapes which Michigan
+          compliance tools MILittleCare shows you. Update this here if your
+          status ever changes.
+        </p>
+      </div>
+
+      <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+        <legend
+          style={{
+            padding: 0,
+            marginBottom: 8,
+            fontWeight: 500,
+            color: 'var(--clr-ink)',
+          }}
+        >
+          Which describes your child care?
+        </legend>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <label style={licenseRadioStyle(choice === true)}>
+            <input
+              type="radio"
+              name="license_status"
+              checked={choice === true}
+              onChange={() => setChoice(true)}
+              disabled={saving}
+              style={{ marginTop: 3, flexShrink: 0 }}
+            />
+            <span>
+              <strong>
+                I care for children I’m related to or already know,
+                registered with MDHHS
+              </strong>{' '}
+              <span style={licenseParenStyle}>(license-exempt provider)</span>
+              <span style={licenseSubStyle}>
+                Not licensed by the State of Michigan. This is the most
+                common setup for in-home CDC providers.
+              </span>
+            </span>
+          </label>
+          <label style={licenseRadioStyle(choice === false)}>
+            <input
+              type="radio"
+              name="license_status"
+              checked={choice === false}
+              onChange={() => setChoice(false)}
+              disabled={saving}
+              style={{ marginTop: 3, flexShrink: 0 }}
+            />
+            <span>
+              <strong>I hold a Michigan child care license from LARA</strong>{' '}
+              <span style={licenseParenStyle}>
+                (licensed provider — Family or Group Child Care Home)
+              </span>
+              <span style={licenseSubStyle}>
+                Most centers and some larger home programs are licensed.
+              </span>
+            </span>
+          </label>
+        </div>
+      </fieldset>
+
+      <button
+        className="bi-save-btn"
+        onClick={() => onSave(choice)}
+        disabled={!answered || !dirty || saving}
+      >
+        <Save size={14} /> {saving ? 'Saving…' : 'Save provider type'}
+      </button>
+    </div>
+  )
+}
+
+function licenseRadioStyle(selected) {
+  return {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: '10px 12px',
+    border: `1px solid ${selected ? 'var(--clr-sage)' : 'var(--clr-warm-mid)'}`,
+    borderRadius: 'var(--radius-md)',
+    cursor: 'pointer',
+    background: selected ? 'var(--clr-cream)' : 'transparent',
+  }
+}
+
+const licenseSubStyle = {
+  display: 'block',
+  marginTop: 2,
+  fontSize: '0.8125rem',
+  color: 'var(--clr-ink-soft)',
+  lineHeight: 1.45,
+  fontWeight: 400,
+}
+
+const licenseParenStyle = {
+  fontWeight: 400,
+  color: 'var(--clr-ink-soft)',
 }
