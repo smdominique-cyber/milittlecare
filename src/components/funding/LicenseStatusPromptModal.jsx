@@ -13,8 +13,8 @@ import { useAuth } from '@/hooks/useAuth'
 // post-save path — see that file and § 3 of the spec.
 
 const CONFIRM_LICENSE_EXEMPT =
-  'Got it. Look for the new MiRegistry entry in your sidebar under ' +
-  'Compliance — that’s where you log your annual training and track the ' +
+  'Got it. Refresh your browser to see the new MiRegistry entry in your ' +
+  'sidebar — that’s where you log your annual training and track the ' +
   'December 16 deadline.'
 
 const CONFIRM_LICENSED =
