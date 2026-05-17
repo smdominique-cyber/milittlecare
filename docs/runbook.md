@@ -14,6 +14,22 @@ All schema migrations are currently applied manually. Until automated migration 
 
 Rollback follows the same pattern in reverse: open the migration's commented `DOWN MIGRATION` section, uncomment, paste, run. Always rollback the latest applied migration first and walk backwards in number order.
 
+### Operational note — the web SQL Editor mangles long statements
+
+⚠️ **The Supabase web SQL Editor cannot reliably execute long single
+statements.** Observed during migration 010 application on 2026-05-17: long
+`INSERT` statements (26 rows per `VALUES` clause, ~1500+ chars) get wrapped
+into multiple physical lines and the editor runs only a fragment, producing
+a `syntax error` on the truncated portion. The editor handles short
+single-line statements fine.
+
+For future migrations: either break long seed inserts into many short
+statements (4–5 rows each), apply via the direct Supabase connection (MCP
+path), or test the editor's behavior with a small sample first before
+assuming a complex migration will land. The `Success. No rows returned`
+message can fire on a fragment that did nothing — verification queries
+against the actual table state are the only reliable confirmation.
+
 ## Migration History
 
 ### 2026-05-13 — Migrations 003-006: funding-source scaffolding
@@ -131,14 +147,23 @@ Non-changes worth noting:
   `docs/tech_debt.md` § Planned deprecations).
 - No backfill — no existing training entries to migrate.
 
-### Migration 010: CDC pay period catalog — ⚠️ PENDING PRODUCTION APPLICATION
+### 2026-05-17 — Migration 010: CDC pay period catalog
 
-**This entry is a draft.** Migration `010_cdc_pay_period_catalog.sql` has
-**not** been applied to production. This placeholder records what the
-migration does and how to verify it; the final Migration History entry is
-**written only after Seth applies it via the Supabase web SQL editor and
-personally verifies the result in the dashboard** (Migration Application
-Procedure step 4 — user-visible dashboard evidence is the artifact).
+Applied to production on **2026-05-17** by Seth, via **two channels**
+(forced by the web SQL Editor bug recorded in the operational note above):
+
+- **DDL** — the `cdc_pay_period_catalog` table, the
+  `cdc_pay_period_catalog_year_start_idx` index, `enable row level
+  security`, and the single SELECT policy — applied through the **Supabase
+  web SQL Editor** as four separate single-line statements.
+- **The 52 seed rows** — the 2025 schedule (501–526) and the 2026 schedule
+  (601–626) — applied via the **direct Supabase connection (MCP path)**,
+  because the web SQL Editor corrupted the long multi-row `INSERT`
+  statements (~1500+ chars each). See the operational note in the Migration
+  Application Procedure section above.
+
+Not applied via the `supabase` CLI — this project has no CLI migration
+ledger (`supabase_migrations.schema_migrations` does not exist).
 
 What the migration creates:
 
@@ -149,49 +174,27 @@ What the migration creates:
 - One index, `cdc_pay_period_catalog_year_start_idx` on
   `(schedule_year, start_date)`. The `unique (schedule_year, period_number)`
   constraint provides a second index.
-- RLS: enabled, with a single SELECT policy for `authenticated`. **No
+- RLS enabled, with a single SELECT policy for `authenticated`. **No
   insert/update/delete policies** — the catalog is seeded by migration only.
-- Inline seed of **52 rows**: the 2025 schedule (period numbers 501–526)
-  and the 2026 schedule (601–626), transcribed from
-  `docs/cdc_pay_periods_spec.md` Appendix A.
+- 52 seed rows: the 2025 schedule (period numbers 501–526) and the 2026
+  schedule (601–626), transcribed from `docs/cdc_pay_periods_spec.md`
+  Appendix A.
 
 No dependency on migration 009. Independent of `billing_periods` (migration
 003), which this migration deliberately leaves untouched.
 
-Expected verification queries (to be run by Seth in the Supabase dashboard
-SQL editor, with screenshots saved before the final entry is written):
+Verification — four queries run by Seth in the Supabase web SQL editor on
+**2026-05-17**, all passed:
 
-1. Table exists:
-   ```sql
-   SELECT table_name FROM information_schema.tables
-   WHERE table_schema = 'public' AND table_name = 'cdc_pay_period_catalog';
-   ```
-   → expect 1 row.
-
-2. Row count is 52, split 26 / 26 by year:
-   ```sql
-   SELECT schedule_year, count(*)
-   FROM public.cdc_pay_period_catalog
-   GROUP BY schedule_year ORDER BY schedule_year;
-   ```
-   → expect `2025 | 26` and `2026 | 26`.
-
-3. Contiguity — no gaps or overlaps (spec § 7.5). Ordered by `start_date`,
-   every period's `start_date` is the previous period's `end_date + 1`:
-   ```sql
-   SELECT period_number, start_date,
-          lag(end_date) OVER (ORDER BY start_date) AS prev_end
-   FROM public.cdc_pay_period_catalog
-   ORDER BY start_date;
-   ```
-   → every row except the first must have `start_date = prev_end + 1`.
-
-4. RLS is on with a select-only policy:
-   ```sql
-   SELECT cmd, roles FROM pg_policies
-   WHERE schemaname = 'public' AND tablename = 'cdc_pay_period_catalog';
-   ```
-   → expect exactly one row, `cmd = SELECT`, `roles = {authenticated}`.
+1. **Table exists** — `information_schema.tables` returns
+   `public.cdc_pay_period_catalog`. ✓
+2. **Row count** — 52 rows total, 26 per `schedule_year` (2025 and 2026). ✓
+3. **Contiguity** (spec § 7.5) — ordered by `start_date`, every period's
+   `start_date` equals the previous period's `end_date + 1`; the
+   gap/overlap query returned 0 rows. ✓
+4. **RLS** — row level security enabled, exactly one policy:
+   `cmd = SELECT`, `roles = {authenticated}`, no insert/update/delete
+   policies. ✓
 
 Rollback: uncomment the `DOWN MIGRATION` block at the foot of the migration
 file (drop policy → drop index → drop table). Dropping the table removes all
