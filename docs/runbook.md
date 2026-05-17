@@ -130,3 +130,69 @@ Non-changes worth noting:
   cleanup PR drops the column once write paths are removed (per
   `docs/tech_debt.md` § Planned deprecations).
 - No backfill — no existing training entries to migrate.
+
+### Migration 010: CDC pay period catalog — ⚠️ PENDING PRODUCTION APPLICATION
+
+**This entry is a draft.** Migration `010_cdc_pay_period_catalog.sql` has
+**not** been applied to production. This placeholder records what the
+migration does and how to verify it; the final Migration History entry is
+**written only after Seth applies it via the Supabase web SQL editor and
+personally verifies the result in the dashboard** (Migration Application
+Procedure step 4 — user-visible dashboard evidence is the artifact).
+
+What the migration creates:
+
+- `cdc_pay_period_catalog` table — a **statewide** reference table (no
+  `user_id`) holding the MDHHS-published CDC Payment Schedule. Modelled on
+  `tri_share_hubs` (migration 003): readable by every authenticated user,
+  never written from the app.
+- One index, `cdc_pay_period_catalog_year_start_idx` on
+  `(schedule_year, start_date)`. The `unique (schedule_year, period_number)`
+  constraint provides a second index.
+- RLS: enabled, with a single SELECT policy for `authenticated`. **No
+  insert/update/delete policies** — the catalog is seeded by migration only.
+- Inline seed of **52 rows**: the 2025 schedule (period numbers 501–526)
+  and the 2026 schedule (601–626), transcribed from
+  `docs/cdc_pay_periods_spec.md` Appendix A.
+
+No dependency on migration 009. Independent of `billing_periods` (migration
+003), which this migration deliberately leaves untouched.
+
+Expected verification queries (to be run by Seth in the Supabase dashboard
+SQL editor, with screenshots saved before the final entry is written):
+
+1. Table exists:
+   ```sql
+   SELECT table_name FROM information_schema.tables
+   WHERE table_schema = 'public' AND table_name = 'cdc_pay_period_catalog';
+   ```
+   → expect 1 row.
+
+2. Row count is 52, split 26 / 26 by year:
+   ```sql
+   SELECT schedule_year, count(*)
+   FROM public.cdc_pay_period_catalog
+   GROUP BY schedule_year ORDER BY schedule_year;
+   ```
+   → expect `2025 | 26` and `2026 | 26`.
+
+3. Contiguity — no gaps or overlaps (spec § 7.5). Ordered by `start_date`,
+   every period's `start_date` is the previous period's `end_date + 1`:
+   ```sql
+   SELECT period_number, start_date,
+          lag(end_date) OVER (ORDER BY start_date) AS prev_end
+   FROM public.cdc_pay_period_catalog
+   ORDER BY start_date;
+   ```
+   → every row except the first must have `start_date = prev_end + 1`.
+
+4. RLS is on with a select-only policy:
+   ```sql
+   SELECT cmd, roles FROM pg_policies
+   WHERE schemaname = 'public' AND tablename = 'cdc_pay_period_catalog';
+   ```
+   → expect exactly one row, `cmd = SELECT`, `roles = {authenticated}`.
+
+Rollback: uncomment the `DOWN MIGRATION` block at the foot of the migration
+file (drop policy → drop index → drop table). Dropping the table removes all
+52 seeded rows; no separate DELETE is needed.

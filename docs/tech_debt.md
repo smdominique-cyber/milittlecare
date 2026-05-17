@@ -358,3 +358,26 @@ runs clean against current `main` before merging.
 
 Out of scope for the license-status prompt PR; surfaced here so it's not
 lost.
+
+## Deferred work introduced by PR #6 (CDC pay period catalog)
+
+- **Local-date helpers are now duplicated.** `src/lib/cdcPayPeriods.js`
+  re-implements `todayYMD()` and the `Date.UTC`-based day-difference helper
+  that already exist in `src/lib/miregistry.js`. `miregistry.js` already
+  foreshadowed this ("extract a shared util when this multiplies further")
+  — it has now multiplied. Extracting a shared `src/lib/dates.js` was kept
+  out of PR #6's scope because it would touch `miregistry.js` (and its
+  tests) unrelated to the pay-period feature. Fix: lift `todayYMD`,
+  `daysBetweenYMD`, and `nextDayYMD` into one date util and have both
+  modules import it, as a standalone cleanup PR.
+- **No render tests for the CDC pay period UI.** `CdcPayPeriodsPage.jsx`,
+  `PayPeriodTable.jsx`, and `PayPeriodCard.jsx` have no component tests —
+  the pure helpers in `cdcPayPeriods.js` are covered by Vitest, the React
+  surfaces are not. Same gap as PRs #1, #2, #4. Add when React Testing
+  Library is approved and installed; cover loading / error /
+  schedule-not-published / populated states, the year selector, the
+  narrow-width card fallback, and the module-gate redirect.
+- **`useIsNarrow` is page-local.** `CdcPayPeriodsPage.jsx` defines a small
+  `matchMedia`-based hook for the ≤640px table→card switch. If a second
+  surface needs viewport-width detection, lift it into
+  `src/hooks/useMediaQuery.js` rather than copy it.
