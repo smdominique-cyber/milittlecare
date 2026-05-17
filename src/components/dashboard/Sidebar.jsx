@@ -23,6 +23,7 @@ import {
   MessageSquare,
   MessageCircle,
   Calendar,
+  CalendarClock,
   GraduationCap,
 } from 'lucide-react'
 
@@ -99,6 +100,7 @@ export default function Sidebar({ isOpen = false }) {
       section: 'Compliance',
       items: [
         { label: 'MiRegistry', icon: GraduationCap, path: '/miregistry', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.MIREGISTRY_TRACKER },
+        { label: 'CDC Pay Periods', icon: CalendarClock, path: '/cdc-pay-periods', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.CDC },
       ],
     },
     {
