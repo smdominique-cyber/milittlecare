@@ -41,7 +41,8 @@ const HEADER_HELP =
   'A CDC pay period is the 14-day window of care you bill to MDHHS ' +
   'through I-Billing — there are 26 a year. MILittleCare shows the ' +
   'schedule and counts down your deadlines for reference; you still ' +
-  'submit your billing in I-Billing.'
+  'submit your billing in I-Billing. Billing must be submitted within ' +
+  '90 days of care, or that period’s payment is permanently lost.'
 
 const FOOTER_NOTE =
   'This schedule is published by MDHHS. MILittleCare shows it for ' +
