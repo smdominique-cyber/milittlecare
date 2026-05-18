@@ -714,3 +714,52 @@ export function buildProfileUpdate({ profile = {}, event, now } = {}) {
   }
   return { update, nextProfile: { ...p, ...update } }
 }
+
+// -----------------------------------------------------------------------------
+// Dashboard progress summary
+// -----------------------------------------------------------------------------
+
+/**
+ * Dashboard-facing summary of a provider's onboarding state, derived
+ * from their profile row. Drives the completion card and the next-step
+ * prompt (spec § 3.3):
+ *
+ *   - completed         the wizard ran to the end (completed_at set)
+ *   - dismissed         the provider used "finish later" at least once
+ *   - started           the wizard has been engaged with at all
+ *   - stepsResolved     how many of the 8 steps are answered or skipped
+ *   - totalSteps        8 (STEPS_PER_PROVIDER)
+ *   - outstandingFields step keys worth a post-completion nudge — ones
+ *                       the provider skipped whose canonical field is
+ *                       still empty. A gate answered "no" is NOT here:
+ *                       it leaves the program_settings key absent by
+ *                       design (see docs/tech_debt.md), but it is not in
+ *                       `skipped`, so intersecting with `skipped`
+ *                       excludes it and avoids a false nag.
+ *
+ * @param {object} [profile]   A profiles row.
+ * @returns {object}
+ */
+export function getOnboardingProgress(profile = {}) {
+  const p = profile || {}
+  const blob = p.onboarding_state || {}
+  const answers = reconstructAnswers(p)
+  const skipped = Array.isArray(blob.skipped) ? blob.skipped : []
+  const sequence = getStepSequence(answers)
+
+  const stepsResolved = sequence.filter(
+    step =>
+      Object.prototype.hasOwnProperty.call(answers, step) || skipped.includes(step),
+  ).length
+
+  const outstandingFields = getMissingFields(p).filter(f => skipped.includes(f))
+
+  return {
+    completed: !!blob.completed_at,
+    dismissed: !!blob.dismissed_at,
+    started: stepsResolved > 0 || blob.last_step != null,
+    stepsResolved,
+    totalSteps: STEPS_PER_PROVIDER,
+    outstandingFields,
+  }
+}

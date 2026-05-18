@@ -17,6 +17,7 @@ import {
   reconstructAnswers,
   isDraftSubmittable,
   buildProfileUpdate,
+  getOnboardingProgress,
 } from './onboarding'
 
 // -----------------------------------------------------------------------------
@@ -659,5 +660,75 @@ describe('buildProfileUpdate', () => {
     expect(nextProfile.id).toBe('u1')
     expect(nextProfile.is_license_exempt).toBe(true)
     expect(nextProfile.onboarding_state.last_step).toBe('miregistry_id')
+  })
+})
+
+// -----------------------------------------------------------------------------
+// getOnboardingProgress — dashboard summary
+// -----------------------------------------------------------------------------
+
+describe('getOnboardingProgress', () => {
+  it('reports a blank profile as not started, not completed', () => {
+    const p = getOnboardingProgress({})
+    expect(p.completed).toBe(false)
+    expect(p.dismissed).toBe(false)
+    expect(p.started).toBe(false)
+    expect(p.stepsResolved).toBe(0)
+    expect(p.totalSteps).toBe(8)
+    expect(p.outstandingFields).toEqual([])
+  })
+
+  it('counts resolved steps for a wizard in progress', () => {
+    // license_status answered, miregistry_id skipped — two steps resolved.
+    const p = getOnboardingProgress({
+      is_license_exempt: true,
+      onboarding_state: { last_step: 'cdc', skipped: ['miregistry_id'] },
+    })
+    expect(p.started).toBe(true)
+    expect(p.completed).toBe(false)
+    expect(p.stepsResolved).toBe(2)
+  })
+
+  it('treats a dismissed-at-step-1 provider as started', () => {
+    const p = getOnboardingProgress({
+      onboarding_state: { last_step: 'license_status', dismissed_at: '2026-05-18T00:00:00Z' },
+    })
+    expect(p.started).toBe(true)
+    expect(p.dismissed).toBe(true)
+  })
+
+  it('reports completed when completed_at is set', () => {
+    const p = getOnboardingProgress({
+      is_license_exempt: true,
+      onboarding_state: { completed_at: '2026-05-18T00:00:00Z', skipped: [] },
+    })
+    expect(p.completed).toBe(true)
+  })
+
+  it('lists a skipped, still-empty field as outstanding', () => {
+    const p = getOnboardingProgress({
+      is_license_exempt: true,
+      miregistry_id: null,
+      onboarding_state: {
+        completed_at: '2026-05-18T00:00:00Z',
+        skipped: ['miregistry_id'],
+      },
+    })
+    expect(p.outstandingFields).toContain('miregistry_id')
+  })
+
+  it('does NOT list a gate answered "no" as outstanding', () => {
+    // cdc answered "no" -> program_settings.cdc absent (looks "missing"),
+    // but it is not in skipped[], so it is not an outstanding field.
+    const p = getOnboardingProgress({
+      is_license_exempt: true,
+      miregistry_id: 'MR-1',
+      onboarding_state: {
+        completed_at: '2026-05-18T00:00:00Z',
+        skipped: [],
+        gate_answers: { cdc: 'no', tri_share: 'no', gsrp: 'no' },
+      },
+    })
+    expect(p.outstandingFields).toEqual([])
   })
 })
