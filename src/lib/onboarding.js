@@ -466,10 +466,11 @@ function gateTarget(field, isYes) {
  *   { store, field, value }        — set this field to this value
  *   { store, field, remove: true } — ensure this field is absent
  *
- * where `store` is 'profile' (a profiles column), 'program_settings' (a
- * key inside profiles.program_settings), or 'onboarding_state' (a key
- * inside profiles.onboarding_state). The wizard applies these the moment
- * an answer is confirmed (spec § 9 decision 2).
+ * where `store` is 'profile' (a profiles column) or 'program_settings'
+ * (a key inside profiles.program_settings). The wizard applies these the
+ * moment an answer is confirmed (spec § 9 decision 2). Wizard bookkeeping
+ * — profiles.onboarding_state, including gate_answers — is handled
+ * separately by buildProfileUpdate, not here.
  *
  * Returns [] for a null/undefined answer (a skipped question writes
  * nothing) and for an unknown question key.
@@ -506,15 +507,11 @@ export function getWriteTargets(questionKey, answer) {
     case 'gsrp':
       return [gateTarget('gsrp', answer === YES_NO.YES)]
 
-    case 'tri_share': {
-      const out = [gateTarget('tri_share', answer === TRI_SHARE_ANSWER.YES)]
-      // "Never heard of it" stores the same gate state as "no" but is
-      // also recorded as a product-analytics signal (§ 9 decision 9).
-      if (answer === TRI_SHARE_ANSWER.NEVER_HEARD) {
-        out.push({ store: 'onboarding_state', field: 'tri_share_never_heard', value: true })
-      }
-      return out
-    }
+    case 'tri_share':
+      // "No" and "never heard of it" both leave the gate key absent; the
+      // distinct "never heard of it" signal (§ 9 decision 9) is preserved
+      // in onboarding_state.gate_answers — see buildProfileUpdate.
+      return [gateTarget('tri_share', answer === TRI_SHARE_ANSWER.YES)]
 
     case 'cacfp': {
       // answer: 'yes' | 'no'  OR  { participates: 'yes'|'no', sponsor? }
@@ -540,4 +537,180 @@ export function getWriteTargets(questionKey, answer) {
     default:
       return []
   }
+}
+
+// -----------------------------------------------------------------------------
+// Resume / hydration
+// -----------------------------------------------------------------------------
+
+/**
+ * Reconstruct the wizard's `answers` map from a persisted profile so a
+ * provider resuming the wizard sees earlier answers pre-filled, including
+ * on Back-navigation (spec § 3.4).
+ *
+ * Most answers reconstruct unambiguously from canonical columns. The
+ * three participation gates (cdc / tri_share / gsrp) cannot — a "no"
+ * leaves the program_settings key absent, identical to "never answered"
+ * (§ 9 decision 13) — so those are read from the wizard's own
+ * bookkeeping, `profiles.onboarding_state.gate_answers`.
+ *
+ * @param {object} [profile]   A profiles row (with program_settings and
+ *                             onboarding_state).
+ * @returns {object}           Map of step key -> answer.
+ */
+export function reconstructAnswers(profile = {}) {
+  const p = profile || {}
+  const settings = p.program_settings || {}
+  const gate = (p.onboarding_state && p.onboarding_state.gate_answers) || {}
+  const answers = {}
+
+  if (p.is_license_exempt === true) answers.license_status = LICENSE_STATUS.EXEMPT
+  else if (p.is_license_exempt === false) answers.license_status = LICENSE_STATUS.LICENSED
+
+  if (p.miregistry_id) answers.miregistry_id = p.miregistry_id
+
+  if (p.michigan_license_number) {
+    answers.license_number = { license_number: p.michigan_license_number }
+    if (p.michigan_provider_id) answers.license_number.provider_id = p.michigan_provider_id
+  }
+
+  for (const key of ['cdc', 'tri_share', 'gsrp']) {
+    if (gate[key] !== undefined) answers[key] = gate[key]
+  }
+
+  if (settings.cacfp === true) {
+    answers.cacfp = settings.cacfp_sponsor
+      ? { participates: YES_NO.YES, sponsor: settings.cacfp_sponsor }
+      : { participates: YES_NO.YES }
+  } else if (settings.cacfp === false) {
+    answers.cacfp = { participates: YES_NO.NO }
+  }
+
+  if (settings.onboarding_child_count !== undefined) {
+    answers.child_count = settings.onboarding_child_count
+  }
+  if (settings.onboarding_care_hours !== undefined) {
+    answers.care_hours = settings.onboarding_care_hours
+  }
+
+  return answers
+}
+
+/**
+ * Whether the in-progress draft for a question is complete enough to
+ * confirm with Continue. A draft that is not submittable can still be
+ * Skipped — nothing is mandatory (spec § 3.1) — so this only gates the
+ * Continue button, never Skip.
+ *
+ * @param {object} question   A QUESTION_CATALOG entry.
+ * @param {*}      draft      The in-progress answer.
+ * @returns {boolean}
+ */
+export function isDraftSubmittable(question, draft) {
+  if (!question) return false
+
+  if (question.kind === 'choice') {
+    // cacfp carries a follow-up; the participation choice is what gates
+    // Continue (the sponsor text is optional).
+    if (question.followUp) return !!(draft && draft.participates)
+    return draft !== null && draft !== undefined && draft !== ''
+  }
+
+  if (question.kind === 'text') {
+    return typeof draft === 'string' && draft.trim() !== ''
+  }
+
+  // compound — every non-optional field must hold a non-empty value.
+  return (question.fields || [])
+    .filter(f => !f.optional)
+    .every(f => {
+      const v = draft && draft[f.name]
+      return typeof v === 'string' && v.trim() !== ''
+    })
+}
+
+// -----------------------------------------------------------------------------
+// Write payload
+// -----------------------------------------------------------------------------
+
+/** Current time as an ISO string; isolated so tests can inject `now`. */
+function nowIso() {
+  return new Date().toISOString()
+}
+
+/**
+ * Build the `profiles` update payload for one wizard event, plus the
+ * resulting profile snapshot. Pure and deterministic — pass `now` to
+ * freeze the timestamp in tests.
+ *
+ * The single returned `update` object always carries the full
+ * `program_settings` and `onboarding_state` blobs (the wizard owns both
+ * during onboarding) plus any changed top-level columns, so each wizard
+ * step is one Supabase round-trip.
+ *
+ * Supported events:
+ *   { type: 'answer',  stepKey, answer }   confirm an answer
+ *   { type: 'skip',    stepKey }           skip a question
+ *   { type: 'dismiss', currentStep }       "finish later"
+ *
+ * For an answer/skip that resolves the final step, `completed_at` is
+ * stamped in the same write (spec § 4.2 — completion = reaching the end).
+ *
+ * @returns {{ update: object, nextProfile: object }}
+ */
+export function buildProfileUpdate({ profile = {}, event, now } = {}) {
+  const p = profile || {}
+  const ts = now || nowIso()
+  const programSettings = { ...(p.program_settings || {}) }
+  const prevBlob = p.onboarding_state || {}
+  const onboardingState = {
+    version: ONBOARDING_STATE_VERSION,
+    completed_at: prevBlob.completed_at ?? null,
+    dismissed_at: prevBlob.dismissed_at ?? null,
+    last_step: prevBlob.last_step ?? null,
+    skipped: Array.isArray(prevBlob.skipped) ? [...prevBlob.skipped] : [],
+    gate_answers: { ...(prevBlob.gate_answers || {}) },
+  }
+  const columns = {}
+
+  if (event.type === 'answer') {
+    const { stepKey, answer } = event
+    for (const t of getWriteTargets(stepKey, answer)) {
+      if (t.store === 'profile') {
+        columns[t.field] = t.value
+      } else if (t.store === 'program_settings') {
+        if (t.remove) delete programSettings[t.field]
+        else programSettings[t.field] = t.value
+      }
+    }
+    if (['cdc', 'tri_share', 'gsrp'].includes(stepKey)) {
+      onboardingState.gate_answers[stepKey] = answer
+    }
+    onboardingState.skipped = onboardingState.skipped.filter(k => k !== stepKey)
+    const answers = { ...reconstructAnswers(p), [stepKey]: answer }
+    const next = getNextStep(stepKey, answers)
+    onboardingState.last_step = next || stepKey
+    if (next === null) onboardingState.completed_at = onboardingState.completed_at || ts
+  } else if (event.type === 'skip') {
+    const { stepKey } = event
+    if (!onboardingState.skipped.includes(stepKey)) {
+      onboardingState.skipped.push(stepKey)
+    }
+    delete onboardingState.gate_answers[stepKey]
+    const answers = reconstructAnswers(p)
+    delete answers[stepKey]
+    const next = getNextStep(stepKey, answers)
+    onboardingState.last_step = next || stepKey
+    if (next === null) onboardingState.completed_at = onboardingState.completed_at || ts
+  } else if (event.type === 'dismiss') {
+    onboardingState.dismissed_at = ts
+    onboardingState.last_step = event.currentStep || onboardingState.last_step
+  }
+
+  const update = {
+    ...columns,
+    program_settings: programSettings,
+    onboarding_state: onboardingState,
+  }
+  return { update, nextProfile: { ...p, ...update } }
 }

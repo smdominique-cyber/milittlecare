@@ -14,6 +14,9 @@ import {
   isComplete,
   getMissingFields,
   getWriteTargets,
+  reconstructAnswers,
+  isDraftSubmittable,
+  buildProfileUpdate,
 } from './onboarding'
 
 // -----------------------------------------------------------------------------
@@ -381,10 +384,11 @@ describe('getWriteTargets', () => {
     ])
   })
 
-  it('maps Tri-Share "never heard of it" to the no-state plus an onboarding_state signal', () => {
+  it('maps Tri-Share "never heard of it" to the same gate removal as "no"', () => {
+    // The distinct "never heard of it" signal is preserved in
+    // onboarding_state.gate_answers by buildProfileUpdate, not here.
     expect(getWriteTargets('tri_share', TRI_SHARE_ANSWER.NEVER_HEARD)).toEqual([
       { store: 'program_settings', field: 'tri_share', remove: true },
-      { store: 'onboarding_state', field: 'tri_share_never_heard', value: true },
     ])
   })
 
@@ -426,5 +430,234 @@ describe('getWriteTargets', () => {
 
   it('returns [] for an unknown question key', () => {
     expect(getWriteTargets('mystery', 'yes')).toEqual([])
+  })
+})
+
+// -----------------------------------------------------------------------------
+// reconstructAnswers — resume hydration
+// -----------------------------------------------------------------------------
+
+describe('reconstructAnswers', () => {
+  it('returns an empty map for a blank profile', () => {
+    expect(reconstructAnswers({})).toEqual({})
+    expect(reconstructAnswers(null)).toEqual({})
+  })
+
+  it('reconstructs a license-exempt provider with a MiRegistry ID', () => {
+    expect(reconstructAnswers({ is_license_exempt: true, miregistry_id: 'MR-1' }))
+      .toEqual({ license_status: LICENSE_STATUS.EXEMPT, miregistry_id: 'MR-1' })
+  })
+
+  it('reconstructs a licensed provider with license and provider numbers', () => {
+    expect(reconstructAnswers({
+      is_license_exempt: false,
+      michigan_license_number: 'DC-99',
+      michigan_provider_id: 'PRV-7',
+    })).toEqual({
+      license_status: LICENSE_STATUS.LICENSED,
+      license_number: { license_number: 'DC-99', provider_id: 'PRV-7' },
+    })
+  })
+
+  it('reads the three participation gates from onboarding_state.gate_answers', () => {
+    const answers = reconstructAnswers({
+      is_license_exempt: true,
+      program_settings: { cdc: 'force_on' },
+      onboarding_state: {
+        gate_answers: { cdc: 'yes', tri_share: 'never_heard', gsrp: 'no' },
+      },
+    })
+    expect(answers.cdc).toBe('yes')
+    expect(answers.tri_share).toBe(TRI_SHARE_ANSWER.NEVER_HEARD)
+    expect(answers.gsrp).toBe('no')
+  })
+
+  it('does not infer a gate answer when gate_answers has no entry', () => {
+    // program_settings.cdc force_on but no gate_answers -> not reconstructed.
+    const answers = reconstructAnswers({ program_settings: { cdc: 'force_on' } })
+    expect(answers.cdc).toBeUndefined()
+  })
+
+  it('reconstructs CACFP from the canonical boolean, with the sponsor', () => {
+    expect(reconstructAnswers({
+      program_settings: { cacfp: true, cacfp_sponsor: 'Great Lakes CACFP' },
+    }).cacfp).toEqual({ participates: 'yes', sponsor: 'Great Lakes CACFP' })
+
+    expect(reconstructAnswers({ program_settings: { cacfp: true } }).cacfp)
+      .toEqual({ participates: 'yes' })
+
+    expect(reconstructAnswers({ program_settings: { cacfp: false } }).cacfp)
+      .toEqual({ participates: 'no' })
+  })
+
+  it('reconstructs the soft-context buckets', () => {
+    const answers = reconstructAnswers({
+      program_settings: { onboarding_child_count: '4_6', onboarding_care_hours: '50_plus' },
+    })
+    expect(answers.child_count).toBe('4_6')
+    expect(answers.care_hours).toBe('50_plus')
+  })
+})
+
+// -----------------------------------------------------------------------------
+// isDraftSubmittable
+// -----------------------------------------------------------------------------
+
+describe('isDraftSubmittable', () => {
+  const choice = getQuestion('cdc')
+  const cacfp = getQuestion('cacfp')
+  const text = getQuestion('miregistry_id')
+  const compound = getQuestion('license_number')
+
+  it('requires a selection for a plain choice question', () => {
+    expect(isDraftSubmittable(choice, null)).toBe(false)
+    expect(isDraftSubmittable(choice, YES_NO.YES)).toBe(true)
+  })
+
+  it('requires the participation choice (not the sponsor) for cacfp', () => {
+    expect(isDraftSubmittable(cacfp, null)).toBe(false)
+    expect(isDraftSubmittable(cacfp, { sponsor: 'x' })).toBe(false)
+    expect(isDraftSubmittable(cacfp, { participates: YES_NO.YES })).toBe(true)
+  })
+
+  it('requires non-empty text for a text question', () => {
+    expect(isDraftSubmittable(text, null)).toBe(false)
+    expect(isDraftSubmittable(text, '')).toBe(false)
+    expect(isDraftSubmittable(text, '   ')).toBe(false)
+    expect(isDraftSubmittable(text, 'MR-1')).toBe(true)
+  })
+
+  it('requires every non-optional field for a compound question', () => {
+    // license_number is required, provider_id is optional.
+    expect(isDraftSubmittable(compound, null)).toBe(false)
+    expect(isDraftSubmittable(compound, { provider_id: 'PRV-7' })).toBe(false)
+    expect(isDraftSubmittable(compound, { license_number: 'DC-99' })).toBe(true)
+  })
+
+  it('returns false for a missing question', () => {
+    expect(isDraftSubmittable(null, 'anything')).toBe(false)
+  })
+})
+
+// -----------------------------------------------------------------------------
+// buildProfileUpdate — the write payload
+// -----------------------------------------------------------------------------
+
+describe('buildProfileUpdate', () => {
+  const NOW = '2026-05-18T12:00:00.000Z'
+
+  it('writes a profile column and advances last_step for a non-gate answer', () => {
+    const { update } = buildProfileUpdate({
+      profile: {},
+      event: { type: 'answer', stepKey: 'license_status', answer: LICENSE_STATUS.LICENSED },
+      now: NOW,
+    })
+    expect(update.is_license_exempt).toBe(false)
+    expect(update.onboarding_state.version).toBe(1)
+    expect(update.onboarding_state.last_step).toBe('license_number')
+    expect(update.onboarding_state.completed_at).toBeNull()
+  })
+
+  it('records a gate "yes" in both program_settings and gate_answers', () => {
+    const { update } = buildProfileUpdate({
+      profile: { onboarding_state: { last_step: 'cdc' } },
+      event: { type: 'answer', stepKey: 'cdc', answer: YES_NO.YES },
+      now: NOW,
+    })
+    expect(update.program_settings.cdc).toBe('force_on')
+    expect(update.onboarding_state.gate_answers.cdc).toBe('yes')
+    expect(update.onboarding_state.last_step).toBe('tri_share')
+  })
+
+  it('records a gate "no" as an absent key but a stored gate_answer', () => {
+    const { update } = buildProfileUpdate({
+      profile: { program_settings: { cdc: 'force_on' } },
+      event: { type: 'answer', stepKey: 'cdc', answer: YES_NO.NO },
+      now: NOW,
+    })
+    expect('cdc' in update.program_settings).toBe(false)
+    expect(update.onboarding_state.gate_answers.cdc).toBe('no')
+  })
+
+  it('keeps Tri-Share "never heard" distinct in gate_answers', () => {
+    const { update } = buildProfileUpdate({
+      profile: {},
+      event: { type: 'answer', stepKey: 'tri_share', answer: TRI_SHARE_ANSWER.NEVER_HEARD },
+      now: NOW,
+    })
+    expect('tri_share' in update.program_settings).toBe(false)
+    expect(update.onboarding_state.gate_answers.tri_share).toBe('never_heard')
+  })
+
+  it('stamps completed_at when an answer resolves the final step', () => {
+    const { update } = buildProfileUpdate({
+      profile: { is_license_exempt: true },
+      event: { type: 'answer', stepKey: 'care_hours', answer: 'under_20' },
+      now: NOW,
+    })
+    expect(update.onboarding_state.completed_at).toBe(NOW)
+  })
+
+  it('adds a skipped step and advances last_step', () => {
+    const { update } = buildProfileUpdate({
+      profile: { onboarding_state: { skipped: [] } },
+      event: { type: 'skip', stepKey: 'cdc' },
+      now: NOW,
+    })
+    expect(update.onboarding_state.skipped).toContain('cdc')
+    expect(update.onboarding_state.last_step).toBe('tri_share')
+  })
+
+  it('stamps completed_at when a skip resolves the final step', () => {
+    const { update } = buildProfileUpdate({
+      profile: { is_license_exempt: true },
+      event: { type: 'skip', stepKey: 'care_hours' },
+      now: NOW,
+    })
+    expect(update.onboarding_state.completed_at).toBe(NOW)
+  })
+
+  it('stamps dismissed_at and parks last_step on the current step for a dismiss', () => {
+    const { update } = buildProfileUpdate({
+      profile: {},
+      event: { type: 'dismiss', currentStep: 'gsrp' },
+      now: NOW,
+    })
+    expect(update.onboarding_state.dismissed_at).toBe(NOW)
+    expect(update.onboarding_state.last_step).toBe('gsrp')
+  })
+
+  it('preserves existing program_settings keys and skipped entries', () => {
+    const { update } = buildProfileUpdate({
+      profile: {
+        program_settings: { tri_share: 'force_on', cacfp: true },
+        onboarding_state: { skipped: ['miregistry_id'] },
+      },
+      event: { type: 'answer', stepKey: 'cdc', answer: YES_NO.YES },
+      now: NOW,
+    })
+    expect(update.program_settings.tri_share).toBe('force_on')
+    expect(update.program_settings.cacfp).toBe(true)
+    expect(update.onboarding_state.skipped).toContain('miregistry_id')
+  })
+
+  it('does not overwrite an already-set completed_at', () => {
+    const { update } = buildProfileUpdate({
+      profile: { onboarding_state: { completed_at: '2026-01-01T00:00:00.000Z' } },
+      event: { type: 'answer', stepKey: 'cdc', answer: YES_NO.NO },
+      now: NOW,
+    })
+    expect(update.onboarding_state.completed_at).toBe('2026-01-01T00:00:00.000Z')
+  })
+
+  it('returns a nextProfile snapshot reflecting the update', () => {
+    const { nextProfile } = buildProfileUpdate({
+      profile: { id: 'u1', is_license_exempt: null },
+      event: { type: 'answer', stepKey: 'license_status', answer: LICENSE_STATUS.EXEMPT },
+      now: NOW,
+    })
+    expect(nextProfile.id).toBe('u1')
+    expect(nextProfile.is_license_exempt).toBe(true)
+    expect(nextProfile.onboarding_state.last_step).toBe('miregistry_id')
   })
 })

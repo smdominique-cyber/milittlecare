@@ -143,7 +143,9 @@ Shape of the blob (illustrative — not a contract; the wizard owns it):
   "completed_at": null,    // ISO timestamp when the provider reached the end
   "dismissed_at": null,    // ISO timestamp of the last "finish later"
   "last_step": "cdc",      // resume point — the step key to land on
-  "skipped": ["miregistry_id"]   // step keys the provider explicitly skipped
+  "skipped": ["miregistry_id"],  // step keys the provider explicitly skipped
+  "gate_answers": { "cdc": "yes", "tri_share": "never_heard" }
+                           // raw CDC / Tri-Share / GSRP answers — see below
 }
 ```
 
@@ -159,6 +161,16 @@ Why a JSONB blob and not columns or a table:
 The **answers themselves never live only in the blob** — they write through
 to their canonical columns (§ 2.1) the moment they are confirmed, so a
 half-finished wizard still yields partial, correct module activation.
+
+One deliberate exception, `gate_answers`: the three participation gates
+(CDC, Tri-Share, GSRP) also record their **raw answer** in
+`onboarding_state.gate_answers`. A gate "no" leaves the canonical
+`program_settings` key *absent* (§ 5.2) — the correct module-activation
+signal — but absent is indistinguishable from "never asked". `gate_answers`
+is the wizard's own bookkeeping so it can repaint those screens on resume
+and Back-navigation (§ 3.4); it also keeps Tri-Share's "never heard of it"
+distinct from a plain "no" (§ 9 decision 9). `modules.js` never reads it —
+it remains wizard-only state, consistent with the blob's purpose.
 
 `profiles.onboarding_state` is RLS-covered by the existing `profiles`
 policies (a provider reads/writes only their own row) — no new policy.

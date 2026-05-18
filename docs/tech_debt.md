@@ -394,6 +394,8 @@ lost.
   from the profile alone. This is acceptable for V1, which ships a single
   generic next-step prompt. When V2 adds precise per-field next-step
   prompts (spec § 3.3, § 7.2), "no" on a participation question must be
-  distinguishable from "unanswered" — the disambiguating signal is the
-  wizard's own record (`onboarding_state` answered/skipped lists), so the
-  V2 prompt logic should consult `onboarding_state`, not just the profile.
+  distinguishable from "unanswered" — the disambiguating signal is
+  `onboarding_state.gate_answers` (added in PR #7; it records the raw
+  CDC/Tri-Share/GSRP answer, including a distinct "never heard of it" for
+  Tri-Share). The V2 prompt logic should consult it rather than rely on
+  `getMissingFields`, which inspects the profile alone.

@@ -15,18 +15,22 @@
 --     "completed_at": null,          -- ISO ts, set at the final screen
 --     "dismissed_at": null,          -- ISO ts of the last "finish later"
 --     "last_step": "cdc",            -- resume point (a wizard step key)
---     "skipped": ["miregistry_id"]   -- step keys explicitly skipped
+--     "skipped": ["miregistry_id"],  -- step keys explicitly skipped
+--     "gate_answers": { "cdc": "yes" }  -- raw CDC/Tri-Share/GSRP answers
 --   }
 --
 -- Why a JSONB blob, not columns or a table (spec § 2.3):
 --   - It is wizard bookkeeping, never queried by other features —
 --     exactly the shape JSON is for. program_settings (migration
 --     004) set the precedent.
---   - The wizard ANSWERS are not stored here. Each confirmed
---     answer writes through to its canonical column
---     (profiles.* / profiles.program_settings.*) the moment it is
---     confirmed, so a half-finished wizard still yields correct
---     partial module activation.
+--   - Canonical answers are NOT stored here. Each confirmed answer
+--     writes through to its canonical column (profiles.* /
+--     profiles.program_settings.*) the moment it is confirmed, so a
+--     half-finished wizard still yields correct partial module
+--     activation. The one exception is gate_answers: a "no" to
+--     CDC/Tri-Share/GSRP leaves the program_settings key absent
+--     (correct for activation), so the wizard records the raw answer
+--     here too, purely so it can repaint those screens on resume.
 --   - A table would be over-modelled for one row per provider.
 --
 -- not null default '{}'::jsonb: every existing provider (Venessa
