@@ -1,0 +1,363 @@
+/* ============================================================
+   Onboarding wizard (PR #7)
+
+   Full-screen first-login flow. Lives inside PaywallGate but
+   OUTSIDE DashboardLayout (spec § 4.1) — so it has no sidebar /
+   topbar chrome and styles its own full-viewport shell.
+   ============================================================ */
+
+.onboarding-shell {
+  min-height: 100vh;
+  background: var(--clr-cream);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: var(--space-12) var(--space-4);
+}
+
+.onboarding-shell--center {
+  align-items: center;
+}
+
+.onboarding-card {
+  width: 100%;
+  max-width: 560px;
+  background: var(--clr-white);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-8);
+}
+
+/* ---------- header + progress ---------- */
+
+.onboarding-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-8);
+}
+
+.onboarding-card__brand {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--clr-ink-soft);
+}
+
+.onboarding-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.onboarding-progress__label {
+  font-size: 0.8125rem;
+  color: var(--clr-ink-soft);
+}
+
+.onboarding-progress__track {
+  height: 4px;
+  background: var(--clr-warm-mid);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.onboarding-progress__fill {
+  height: 100%;
+  background: var(--clr-sage);
+  border-radius: var(--radius-full);
+  transition: width var(--duration-base) var(--ease-out);
+}
+
+/* ---------- question ---------- */
+
+.onboarding-question__prompt {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  line-height: 1.3;
+  color: var(--clr-ink);
+  margin-bottom: var(--space-6);
+}
+
+.onboarding-choice__options,
+.onboarding-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---------- choice options ---------- */
+
+.onboarding-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1.5px solid var(--clr-warm-mid);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.onboarding-option:hover {
+  border-color: var(--clr-sage-light);
+}
+
+.onboarding-option.is-selected {
+  border-color: var(--clr-sage);
+  background: var(--clr-sage-pale);
+}
+
+.onboarding-option:focus-within {
+  outline: 2px solid var(--clr-sage);
+  outline-offset: 2px;
+}
+
+/* The native radio is visually hidden but still focusable. */
+.onboarding-option__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.onboarding-option__marker {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  border: 1.5px solid var(--clr-ink-faint);
+  border-radius: var(--radius-full);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.onboarding-option.is-selected .onboarding-option__marker {
+  border: 6px solid var(--clr-sage);
+}
+
+.onboarding-option__text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.onboarding-option__label {
+  font-weight: 500;
+  color: var(--clr-ink);
+}
+
+.onboarding-option__help {
+  font-size: 0.8125rem;
+  color: var(--clr-ink-soft);
+  line-height: 1.5;
+}
+
+/* ---------- text / compound fields ---------- */
+
+.onboarding-followup {
+  margin-top: var(--space-4);
+}
+
+.onboarding-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.onboarding-field__label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--clr-ink-mid);
+}
+
+.onboarding-field__input {
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: 1.5px solid var(--clr-warm-mid);
+  border-radius: var(--radius-sm);
+  background: var(--clr-white);
+  color: var(--clr-ink);
+}
+
+.onboarding-field__input:focus {
+  outline: none;
+  border-color: var(--clr-sage);
+}
+
+/* ---------- "why we ask" ---------- */
+
+.onboarding-question__why {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  background: var(--clr-sage-pale);
+  border-radius: var(--radius-md);
+  font-size: 0.8125rem;
+  color: var(--clr-ink-mid);
+  line-height: 1.5;
+}
+
+.onboarding-question__why-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--clr-sage-dark);
+}
+
+/* ---------- actions ---------- */
+
+.onboarding-error {
+  margin-top: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  background: var(--clr-error-pale);
+  color: var(--clr-error);
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+}
+
+.onboarding-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-8);
+}
+
+.onboarding-actions__right {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.onboarding-btn {
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius-sm);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  transition: background var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
+}
+
+.onboarding-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.onboarding-btn--primary {
+  background: var(--clr-sage);
+  color: var(--clr-white);
+}
+
+.onboarding-btn--primary:not(:disabled):hover {
+  background: var(--clr-sage-dark);
+}
+
+.onboarding-btn--ghost {
+  background: transparent;
+  color: var(--clr-ink-soft);
+}
+
+.onboarding-btn--ghost:not(:disabled):hover {
+  color: var(--clr-ink);
+}
+
+/* ---------- footer ---------- */
+
+.onboarding-card__footer {
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--clr-warm-mid);
+  font-size: 0.8125rem;
+  color: var(--clr-ink-soft);
+}
+
+.onboarding-link {
+  color: var(--clr-sage-dark);
+  font-weight: 500;
+  text-decoration: underline;
+}
+
+.onboarding-link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.onboarding-card__footer-note {
+  color: var(--clr-ink-soft);
+}
+
+/* ---------- status / loading / error screens ---------- */
+
+.onboarding-status {
+  font-size: 0.9375rem;
+  color: var(--clr-ink-soft);
+}
+
+.onboarding-status--error {
+  color: var(--clr-error);
+}
+
+/* ---------- complete screen ---------- */
+
+.onboarding-complete {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-4);
+}
+
+.onboarding-complete__icon {
+  color: var(--clr-success);
+}
+
+.onboarding-complete__heading {
+  font-family: var(--font-display);
+  font-size: 1.625rem;
+  color: var(--clr-ink);
+}
+
+.onboarding-complete__lead {
+  color: var(--clr-ink-mid);
+}
+
+.onboarding-complete__list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.onboarding-complete__list li {
+  padding: var(--space-3) var(--space-4);
+  background: var(--clr-sage-pale);
+  border-radius: var(--radius-sm);
+  color: var(--clr-ink);
+}
+
+.onboarding-complete .onboarding-btn {
+  margin-top: var(--space-2);
+}
+
+@media (max-width: 560px) {
+  .onboarding-card {
+    padding: var(--space-6) var(--space-5);
+  }
+
+  .onboarding-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .onboarding-actions__right {
+    flex-direction: column-reverse;
+  }
+}
