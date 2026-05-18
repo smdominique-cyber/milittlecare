@@ -361,3 +361,120 @@
     flex-direction: column-reverse;
   }
 }
+
+/* ============================================================
+   Dashboard surfaces — completion card + next-step prompt.
+   Rendered inside DashboardLayout (DashboardPage), not the
+   full-screen shell above.
+   ============================================================ */
+
+.onboarding-dashcard,
+.onboarding-nextstep {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-5);
+}
+
+/* Completion card — the standing "finish the wizard" prompt. */
+.onboarding-dashcard {
+  background: var(--clr-sage-pale);
+  border: 1px solid var(--clr-sage-light);
+}
+
+/* Next-step prompt — lighter, post-completion (spec § 3.3). */
+.onboarding-nextstep {
+  background: var(--clr-warm);
+  border: 1px solid var(--clr-warm-mid);
+}
+
+.onboarding-dashcard__icon,
+.onboarding-nextstep__icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+}
+
+.onboarding-dashcard__icon {
+  background: var(--clr-sage);
+  color: var(--clr-white);
+}
+
+.onboarding-nextstep__icon {
+  background: var(--clr-warm-mid);
+  color: var(--clr-ink-mid);
+}
+
+.onboarding-dashcard__body,
+.onboarding-nextstep__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.onboarding-dashcard__title,
+.onboarding-nextstep__title {
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  font-weight: 400;
+  color: var(--clr-ink);
+  margin-bottom: var(--space-1);
+}
+
+.onboarding-dashcard__text,
+.onboarding-nextstep__text {
+  font-size: 0.8125rem;
+  color: var(--clr-ink-mid);
+  line-height: 1.5;
+}
+
+.onboarding-dashcard__cta,
+.onboarding-nextstep__cta {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.onboarding-dashcard__cta {
+  background: var(--clr-sage);
+  color: var(--clr-white);
+}
+
+.onboarding-dashcard__cta:hover {
+  background: var(--clr-sage-dark);
+}
+
+.onboarding-nextstep__cta {
+  background: var(--clr-white);
+  color: var(--clr-sage-dark);
+  border: 1px solid var(--clr-warm-dark);
+}
+
+.onboarding-nextstep__cta:hover {
+  background: var(--clr-cream);
+}
+
+@media (max-width: 560px) {
+  .onboarding-dashcard,
+  .onboarding-nextstep {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .onboarding-dashcard__cta,
+  .onboarding-nextstep__cta {
+    width: 100%;
+    justify-content: center;
+  }
+}
