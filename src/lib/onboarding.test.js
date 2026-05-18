@@ -213,6 +213,24 @@ describe('isComplete', () => {
     expect(isComplete({ ...exemptAllAnswered, miregistry_id: '' }, [])).toBe(false)
   })
 
+  it('falls back to the license-exempt sequence when license_status itself is skipped', () => {
+    // license_status skipped -> absent from answers -> getStepSequence
+    // defaults to the miregistry_id branch. Completion still requires all
+    // 8 steps to be answered-or-skipped.
+    const answers = {
+      cdc: YES_NO.YES,
+      tri_share: TRI_SHARE_ANSWER.NO,
+      gsrp: YES_NO.NO,
+      cacfp: YES_NO.NO,
+      child_count: '4_6',
+      care_hours: 'under_20',
+    }
+    // license_status and miregistry_id are still unresolved -> not complete.
+    expect(isComplete(answers, [])).toBe(false)
+    // Skipping both resolves the full 8-step sequence -> complete.
+    expect(isComplete(answers, ['license_status', 'miregistry_id'])).toBe(true)
+  })
+
   it('checks the licensed branch (license_number, not miregistry_id)', () => {
     const licensed = {
       license_status: LICENSE_STATUS.LICENSED,

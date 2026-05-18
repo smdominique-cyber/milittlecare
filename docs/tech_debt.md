@@ -381,3 +381,19 @@ lost.
   `matchMedia`-based hook for the ≤640px table→card switch. If a second
   surface needs viewport-width detection, lift it into
   `src/hooks/useMediaQuery.js` rather than copy it.
+
+## Deferred work introduced by PR #7 (onboarding wizard)
+
+- **`getMissingFields` cannot distinguish a participation "no" from
+  "unanswered".** `src/lib/onboarding.js#getMissingFields` reports a
+  participation question (`cdc` / `tri_share` / `gsrp`) as missing whenever
+  its `program_settings` key is absent. But a wizard "no" *also* leaves the
+  key absent by design (`onboarding_wizard_spec.md` § 9 decision 13:
+  "no" → absent / `'auto'`, never `'force_off'`). So a provider who
+  answered "no" and a provider who never answered are indistinguishable
+  from the profile alone. This is acceptable for V1, which ships a single
+  generic next-step prompt. When V2 adds precise per-field next-step
+  prompts (spec § 3.3, § 7.2), "no" on a participation question must be
+  distinguishable from "unanswered" — the disambiguating signal is the
+  wizard's own record (`onboarding_state` answered/skipped lists), so the
+  V2 prompt logic should consult `onboarding_state`, not just the profile.
