@@ -199,3 +199,67 @@ Verification — four queries run by Seth in the Supabase web SQL editor on
 Rollback: uncomment the `DOWN MIGRATION` block at the foot of the migration
 file (drop policy → drop index → drop table). Dropping the table removes all
 52 seeded rows; no separate DELETE is needed.
+
+### 2026-05-18 — Migration 011: profiles.onboarding_state column
+
+Applied to production on **2026-05-18** by Seth, via the **Supabase web
+SQL Editor** — a single `ALTER TABLE` statement. The web SQL Editor
+long-statement bug (see the Migration Application Procedure note above)
+does not apply: this is one short single statement, pasted and run
+directly.
+
+Applied ahead of the original plan (which scheduled it for the end of
+PR #7's Phase 3). It was pulled forward so the Phase 2 onboarding-wizard
+write-through could be smoke-tested against production before Phase 3's
+dashboard integration is built on top of it.
+
+What the migration does:
+
+- `011_onboarding_state.sql` — adds a single column,
+  `public.profiles.onboarding_state jsonb not null default '{}'::jsonb`.
+  It is the bookkeeping blob for the first-login onboarding wizard
+  (`docs/onboarding_wizard_spec.md` § 2.3): `version`, `completed_at`,
+  `dismissed_at`, `last_step`, `skipped`. Wizard answers are **not** stored
+  here — each writes through to its canonical column.
+
+Dependencies:
+
+- Sequential after migration `010` (the next free number). No data
+  dependency on `010` or any other migration — this is an isolated
+  column-add on `profiles`.
+
+No backfill statement: the `default '{}'::jsonb` populates every existing
+`profiles` row (Venessa + 2 others) at `ALTER` time. Each then reads as
+"not yet onboarded" (`completed_at` absent), which is the intended
+backfill of structural identity (spec § 4.3).
+
+RLS: no new policy. `onboarding_state` is a new column on `public.profiles`,
+which already has per-provider read/write policies (migration 001); the
+column inherits them.
+
+Editor note: this is a **single short DDL statement**, so the web SQL
+Editor long-statement bug recorded in the Migration Application Procedure
+above does not apply — it can be pasted and run directly.
+
+Verification — two queries run by Seth in the Supabase web SQL Editor on
+**2026-05-18**, both passed:
+
+1. **Column exists with the right type/default** —
+   `select column_name, data_type, is_nullable, column_default
+    from information_schema.columns
+    where table_schema='public' and table_name='profiles'
+      and column_name='onboarding_state';`
+   Returned one row: `onboarding_state | jsonb | NO | '{}'::jsonb`. ✓
+2. **Every existing row is backfilled** —
+   `select count(*) as total,
+           count(*) filter (where onboarding_state = '{}'::jsonb) as empty_blob
+    from public.profiles;`
+   Returned `total = 3`, `empty_blob = 3` — every existing `profiles` row
+   defaults to `{}`. The 3 rows are Venessa + 2 others, matching the
+   expected production state. ✓
+
+Rollback: uncomment the `DOWN MIGRATION` block at the foot of
+`011_onboarding_state.sql` — `alter table public.profiles drop column if
+exists onboarding_state;`. Dropping the column discards any wizard
+bookkeeping written since application; the canonical answer columns
+(`profiles.*`, `program_settings.*`) are unaffected.

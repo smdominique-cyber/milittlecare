@@ -381,3 +381,33 @@ lost.
   `matchMedia`-based hook for the ≤640px table→card switch. If a second
   surface needs viewport-width detection, lift it into
   `src/hooks/useMediaQuery.js` rather than copy it.
+
+## Deferred work introduced by PR #7 (onboarding wizard)
+
+- **`getMissingFields` cannot distinguish a participation "no" from
+  "unanswered".** `src/lib/onboarding.js#getMissingFields` reports a
+  participation question (`cdc` / `tri_share` / `gsrp`) as missing whenever
+  its `program_settings` key is absent. But a wizard "no" *also* leaves the
+  key absent by design (`onboarding_wizard_spec.md` § 9 decision 13:
+  "no" → absent / `'auto'`, never `'force_off'`). So a provider who
+  answered "no" and a provider who never answered are indistinguishable
+  from the profile alone. This is acceptable for V1, which ships a single
+  generic next-step prompt. When V2 adds precise per-field next-step
+  prompts (spec § 3.3, § 7.2), "no" on a participation question must be
+  distinguishable from "unanswered" — the disambiguating signal is
+  `onboarding_state.gate_answers` (added in PR #7; it records the raw
+  CDC/Tri-Share/GSRP answer, including a distinct "never heard of it" for
+  Tri-Share). The V2 prompt logic should consult it rather than rely on
+  `getMissingFields`, which inspects the profile alone.
+
+- **The generic next-step prompt routes everything to Business Info.**
+  `OnboardingNextStepPrompt` (the single generic V1 prompt) links to
+  `/business-info` for every skipped field. That page's "Licensing" tab
+  is a real edit surface for `is_license_exempt` (and the future home for
+  `miregistry_id` / `michigan_license_number`), but the program-
+  participation fields (`program_settings.cdc` / `tri_share` / `gsrp` /
+  `cacfp`) and the soft-context buckets have **no settings UI at all**
+  (`funding_source_spec.md` § 1.1). A provider who skipped those in the
+  wizard has nowhere to set them afterward. Resolve when the richer
+  per-field next-step prompts land (spec § 7.2) — each should route to,
+  or the same PR should build, a real per-field settings surface.

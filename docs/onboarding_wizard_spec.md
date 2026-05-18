@@ -1,8 +1,8 @@
 # MILittleCare: Onboarding Wizard Spec
 
-**Status:** Draft for PR #7. Open questions in § 9 — recommendations given,
-not yet resolved.
-**Goal:** Capture a provider's 6–8 **structural-identity** fields once, at
+**Status:** Approved for PR #7. Decisions recorded in § 9 (spec review
+2026-05-17). Implementation in progress on `feature/onboarding-wizard`.
+**Goal:** Capture a provider's 9 **structural-identity** fields once, at
 first login, so every downstream feature activates the right modules and
 shows the right tools without its own per-field discovery patch.
 
@@ -51,7 +51,7 @@ program — so the features built specifically for them stay invisible.
 
 ### 1.2 The structural-identity insight
 
-There are **8 fields** that define what kind of provider this is. They
+There are **9 fields** that define what kind of provider this is. They
 change rarely (most never, after setup) and they gate everything else:
 
 | # | Field | Canonical home (today) | Applies to |
@@ -61,9 +61,10 @@ change rarely (most never, after setup) and they gate everything else:
 | 3 | Michigan license number / provider ID | `profiles.michigan_license_number`, `michigan_provider_id` | licensed |
 | 4 | CDC participation | `program_settings.cdc` | all |
 | 5 | Tri-Share participation | `program_settings.tri_share` | all |
-| 6 | CACFP / food program participation | `program_settings.cacfp` (+ sponsor — no home yet) | all |
-| 7 | Number of children currently enrolled (rough) | *no home yet* | all |
-| 8 | Typical weekly care hours | *no home yet* | all |
+| 6 | GSRP participation | `program_settings.gsrp` | all |
+| 7 | CACFP / food program participation | `program_settings.cacfp` (+ sponsor — no home yet) | all |
+| 8 | Number of children currently enrolled (rough) | *no home yet* | all |
+| 9 | Typical weekly care hours | *no home yet* | all |
 
 ### 1.3 Why onboarding is architecture, not polish
 
@@ -91,7 +92,7 @@ the 8 fields, plus a persistent (not nagging) reminder to finish.
 
 ### 2.1 Fields that already have a home
 
-Six of the eight write to columns that already exist (`profiles` from
+Seven of the nine write to columns that already exist (`profiles` from
 migrations `001`/`004`, `program_settings` JSON from `004`). The wizard is a
 **writer into existing columns**, not a new system of record:
 
@@ -102,6 +103,7 @@ migrations `001`/`004`, `program_settings` JSON from `004`). The wizard is a
 | Michigan license # / provider ID | `profiles.michigan_license_number`, `michigan_provider_id` |
 | CDC participation | `program_settings.cdc` (`'force_on'` / absent — see § 5) |
 | Tri-Share participation | `program_settings.tri_share` (`'force_on'` / absent) |
+| GSRP participation | `program_settings.gsrp` (`'force_on'` / absent) |
 | CACFP participation | `program_settings.cacfp` (boolean) |
 
 ### 2.2 Fields with no home yet
@@ -113,17 +115,17 @@ Three pieces of data the wizard collects have nowhere to land today:
   context.
 - **Typical weekly care hours** — a rough schedule shape.
 
-These are **soft context**, not yet read by any feature. Recommendation
-(see OQ11): for V1, store them inside the `program_settings` JSON (or the
-new `onboarding_state` blob, § 2.3) rather than promote them to first-class
-`profiles` columns. Promote to typed columns only when a real feature needs
-to query/filter on them — premature columns invite the out-of-band-schema
-problem in `docs/tech_debt.md`.
+These are **soft context**, not yet read by any feature. Per § 9
+decision 11, for V1 they are stored inside the `program_settings` JSON
+(or the new `onboarding_state` blob, § 2.3) rather than promoted to
+first-class `profiles` columns. Promote to typed columns only when a real
+feature needs to query/filter on them — premature columns invite the
+out-of-band-schema problem in `docs/tech_debt.md`.
 
 ### 2.3 New: onboarding completion state
 
 The wizard needs to know whether it has run, where the provider stopped,
-and which questions were skipped. Recommendation: **one new JSONB column**,
+and which questions were skipped. This spec uses **one new JSONB column**,
 not a table.
 
 ```sql
@@ -141,7 +143,9 @@ Shape of the blob (illustrative — not a contract; the wizard owns it):
   "completed_at": null,    // ISO timestamp when the provider reached the end
   "dismissed_at": null,    // ISO timestamp of the last "finish later"
   "last_step": "cdc",      // resume point — the step key to land on
-  "skipped": ["miregistry_id"]   // step keys the provider explicitly skipped
+  "skipped": ["miregistry_id"],  // step keys the provider explicitly skipped
+  "gate_answers": { "cdc": "yes", "tri_share": "never_heard" }
+                           // raw CDC / Tri-Share / GSRP answers — see below
 }
 ```
 
@@ -157,6 +161,16 @@ Why a JSONB blob and not columns or a table:
 The **answers themselves never live only in the blob** — they write through
 to their canonical columns (§ 2.1) the moment they are confirmed, so a
 half-finished wizard still yields partial, correct module activation.
+
+One deliberate exception, `gate_answers`: the three participation gates
+(CDC, Tri-Share, GSRP) also record their **raw answer** in
+`onboarding_state.gate_answers`. A gate "no" leaves the canonical
+`program_settings` key *absent* (§ 5.2) — the correct module-activation
+signal — but absent is indistinguishable from "never asked". `gate_answers`
+is the wizard's own bookkeeping so it can repaint those screens on resume
+and Back-navigation (§ 3.4); it also keeps Tri-Share's "never heard of it"
+distinct from a plain "no" (§ 9 decision 9). `modules.js` never reads it —
+it remains wizard-only state, consistent with the blob's purpose.
 
 `profiles.onboarding_state` is RLS-covered by the existing `profiles`
 policies (a provider reads/writes only their own row) — no new policy.
@@ -175,11 +189,13 @@ policies (a provider reads/writes only their own row) — no new policy.
   *after* the plain-language framing, as confirmation.
 - **Progress is visible** ("Question 3 of 8") but de-emphasised — this is a
   conversation, not a progress bar to grind.
-- **Conditional flow** (OQ8): the license-status answer branches the next
-  question — license-exempt → MiRegistry ID; licensed → Michigan license /
-  provider ID. CDC / Tri-Share / CACFP / capacity questions are common.
-- **Every screen is skippable** (OQ6): "Skip this question" advances without
-  writing; "Finish later" exits the whole wizard. Nothing is mandatory.
+- **Conditional flow** (§ 9 decision 8): the license-status answer
+  branches the next question — license-exempt → MiRegistry ID; licensed
+  → Michigan license / provider ID. CDC / Tri-Share / CACFP / capacity
+  questions are common.
+- **Every screen is skippable** (§ 9 decision 6): "Skip this question"
+  advances without writing; "Finish later" exits the whole wizard.
+  Nothing is mandatory.
 
 ### 3.2 Question screen (ASCII mock)
 
@@ -224,18 +240,18 @@ the **dashboard shows a persistent card** until `completed_at` is set:
 ```
 
 - The card is **persistent, not modal** — it sits on the dashboard, never
-  blocks. It disappears only when the wizard is completed (OQ7).
+  blocks. It disappears only when the wizard is completed (§ 9 decision 7).
 - "Finish setup" reopens the wizard at `onboarding_state.last_step`.
 - Separately, a lighter set of dashboard **next-step prompts** keys off
   *missing answers* ("Add your MiRegistry ID to track your December 16
-  deadline") — distinct from the wizard-completion card (OQ7). V1 may ship
-  just one generic next-step prompt; the richer per-field set is a small
-  follow-on.
+  deadline") — distinct from the wizard-completion card (§ 9 decision 7).
+  V1 may ship just one generic next-step prompt; the richer per-field
+  set is a small follow-on.
 
 ### 3.4 Skip / resume behaviour
 
-- Answers persist per-screen as they are confirmed (OQ2) — leaving and
-  returning never loses entered data.
+- Answers persist per-screen as they are confirmed (§ 9 decision 2) —
+  leaving and returning never loses entered data.
 - Re-entry lands on `last_step`. The provider can use Back to revisit and
   change any earlier answer; changing an answer re-writes its canonical
   column and re-runs module activation (§ 5).
@@ -257,14 +273,19 @@ reviewed in a later cadence — this spec stops at the design-decision level.
 
 The wizard auto-opens when **all** hold:
 
-1. The user is authenticated and **past the paywall gate** (the wizard
-   lives inside the protected dashboard — see OQ12).
-2. `useRole().isLicensee` is true — licensee only (OQ4).
+1. The user is authenticated and **past the paywall gate** (§ 9 decision
+   12). The `/onboarding` route is mounted **inside `PaywallGate` but
+   outside `DashboardLayout`** — a full-screen flow with no sidebar
+   chrome, so a provider mid-wizard never sees navigation for modules
+   they have not yet decided to activate. The original spec did not pin
+   this; it is settled here.
+2. `useRole().isLicensee` is true — licensee only (§ 9 decision 4).
 3. `profiles.onboarding_state.completed_at` is null.
 4. `onboarding_state.dismissed_at` is null **for this session** — once a
    provider clicks "Finish later", the wizard does not auto-reopen for the
    rest of that session; it auto-opens again on the next fresh login until
-   completed. (Auto-reopen cadence is OQ-adjacent; see OQ7.)
+   completed (§ 9 decision 7: auto-reopen once per fresh login session,
+   no more).
 
 When (3) holds but the wizard is not auto-showing (dismissed this session),
 the § 3.3 dashboard card is the standing entry point.
@@ -277,7 +298,7 @@ question either answered or explicitly skipped. "Completed" therefore means
 who skips three questions still completes the wizard; the dashboard
 completion card clears; the lighter next-step prompts (§ 3.3) pick up the
 still-missing fields. Keeping these two notions separate is deliberate — see
-OQ7.
+§ 9 decision 7.
 
 ### 4.3 Existing providers
 
@@ -289,13 +310,13 @@ disruptive.
 
 ### 4.4 When the wizard does NOT fire
 
-- Staff / non-licensee roles — never (§ OQ4, OQ5).
+- Staff / non-licensee roles — never (§ 9 decisions 4 and 5).
 - Parent-portal users — never (separate auth surface entirely).
 - A provider who completed it — never again automatically. It remains
-  reachable for re-review only if a settings entry point is added (OQ-
-  adjacent; not required for V1).
+  reachable for re-review only if a settings entry point is added — a V2
+  item per § 7.2, not required here.
 - It does **not** re-fire because a structural field was later cleared
-  (e.g. `is_license_exempt` reset to null) — see OQ3.
+  (e.g. `is_license_exempt` reset to null) — see § 9 decision 3.
 
 ---
 
@@ -318,9 +339,10 @@ Mapping from wizard answers to activation inputs:
 | MiRegistry ID entered | `miregistry_id` set → reinforces `miregistry_tracker` |
 | CDC = yes | `program_settings.cdc = 'force_on'` → activates `cdc` |
 | Tri-Share = yes | `program_settings.tri_share = 'force_on'` → activates `tri_share` |
+| GSRP = yes | `program_settings.gsrp = 'force_on'` → activates `gsrp` |
 | CACFP = yes | `program_settings.cacfp = true` → activates `cacfp` |
 
-### 5.2 `force_on` vs `auto` — a real decision (OQ13)
+### 5.2 `force_on` vs `auto` (§ 9 decision 13)
 
 `program_settings.{cdc,tri_share,gsrp}` accept `'auto' | 'force_on' |
 'force_off'`. A brand-new provider says "yes, I take CDC" in the wizard
@@ -328,12 +350,12 @@ Mapping from wizard answers to activation inputs:
 `'auto'`, the CDC module would still be off and they could not find the CDC
 tooling needed to add that first source.
 
-Recommendation: a wizard **"yes"** sets `'force_on'` (module on now, so the
-provider can reach the feature); a wizard **"no"** leaves the key **absent**
-(i.e. `'auto'`), **never** `'force_off'`. `'force_off'` would suppress the
-module even after the provider later adds a real funding source of that
-type — wrong. `'auto'` lets reality (an actual funding source) still turn
-the module on. See OQ13.
+Per § 9 decision 13, a wizard **"yes"** sets `'force_on'` (module on now,
+so the provider can reach the feature); a wizard **"no"** leaves the key
+**absent** (i.e. `'auto'`), **never** `'force_off'`. `'force_off'` would
+suppress the module even after the provider later adds a real funding
+source of that type — wrong. `'auto'` lets reality (an actual funding
+source) still turn the module on.
 
 ### 5.3 Relationship to per-feature activation
 
@@ -355,8 +377,9 @@ field, earlier and in context**.
 
 ### 6.1 V1 — coexist, do not delete
 
-Recommendation: in PR #7's V1, the wizard and the PR #5 modal **coexist**.
-They do not conflict — both gate on `is_license_exempt IS NULL`:
+Per § 9 decision 10, in PR #7's V1 the wizard and the PR #5 modal
+**coexist**. They do not conflict — both gate on `is_license_exempt IS
+NULL`:
 
 - A provider who **completes** the wizard answers the license-status
   question there; `is_license_exempt` is no longer null; the PR #5 modal
@@ -383,8 +406,8 @@ Whether to eventually retire the PR #5 *modal* depends on data: if telemetry
 after the wizard ships shows the wizard reliably captures license status
 (few providers reach CDC-source-creation still null), the modal can be
 removed as redundant. If skip rates are high, it stays as cheap insurance
-(~3 files, harmless). Recommendation: **keep it until there is data**;
-revisit in a V2 review. Deprecation timing is OQ10-adjacent — see OQ10.
+(~3 files, harmless). Per § 9 decision 10, the modal is **kept until
+post-launch telemetry exists**; deprecation is revisited in a V2 review.
 
 `docs/strategy.md` already directs that `funding_source_spec.md` and
 `license_status_prompt_spec.md` be annotated to name the wizard as the
@@ -404,8 +427,8 @@ edits in the same PR (per `CLAUDE.md` § Documentation Conventions rule 3).
    which step is next given current answers, whether the wizard is
    complete, which structural fields are still missing. Vitest-tested, the
    way `modules.js` / `cdcPayPeriods.js` are.
-3. The wizard surface — a dedicated `/onboarding` route (OQ1) with one
-   component per question screen, conditional flow, skip/resume.
+3. The wizard surface — a dedicated `/onboarding` route (§ 9 decision 1)
+   with one component per question screen, conditional flow, skip/resume.
 4. Write-through: each confirmed answer writes its canonical column (§ 2.1)
    and the wizard updates `onboarding_state`.
 5. Dashboard persistent completion card + at least one generic next-step
@@ -426,10 +449,10 @@ PR #5 modal (§ 6).
   still-missing structural field, rather than one generic card.
 - **Promote soft-context fields to typed columns** — kid count, care hours,
   CACFP sponsor — once a capacity / scheduling / food-program feature
-  actually consumes them (§ 2.2, OQ11).
+  actually consumes them (§ 2.2, § 9 decision 11).
 - **License-status modal deprecation** — decided on telemetry (§ 6.3).
 - **A staff "welcome" surface** — if invited staff turn out to need any
-  first-run orientation, a minimal non-structural version (OQ5).
+  first-run orientation, a minimal non-structural version (§ 9 decision 5).
 - **Re-review entry point** — let a provider re-open the wizard from
   settings to revise structural identity in one place.
 
@@ -583,10 +606,10 @@ draft § 9 were resolved; the recommendations carried.
 | MI license / provider ID | screen 2b (licensed) | `michigan_license_number`, `michigan_provider_id` | `licensed_compliance` |
 | CDC participation | screen 3 | `program_settings.cdc` | `cdc` |
 | Tri-Share participation | screen 4 | `program_settings.tri_share` | `tri_share` |
-| GSRP participation (OQ14) | screen 5 | `program_settings.gsrp` | `gsrp` |
+| GSRP participation | screen 5 | `program_settings.gsrp` | `gsrp` |
 | CACFP participation | screen 6 | `program_settings.cacfp` (+ sponsor text) | `cacfp` |
 | Children enrolled (rough) | screen 7 | `program_settings` / `onboarding_state` | — (context only) |
 | Typical care hours | screen 8 | `program_settings` / `onboarding_state` | — (context only) |
 
-Eight or nine screens depending on OQ14; the license-status branch means any
-one provider sees eight.
+Nine question screens in the catalog; the license-status branch (screen 2a
+vs 2b) means any one provider sees eight.

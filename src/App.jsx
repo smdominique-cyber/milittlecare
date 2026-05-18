@@ -26,6 +26,7 @@ import BusinessInfoPage from '@/pages/BusinessInfoPage'
 import StaffPage from '@/pages/StaffPage'
 import MiRegistryPage from '@/pages/MiRegistryPage'
 import CdcPayPeriodsPage from '@/pages/CdcPayPeriodsPage'
+import OnboardingPage from '@/pages/OnboardingPage'
 import ContactPage from '@/pages/ContactPage'
 import PrivacyPage from '@/pages/PrivacyPage'
 import TermsPage from '@/pages/TermsPage'
@@ -73,6 +74,19 @@ export default function App() {
 
                 {/* Public landing page */}
                 <Route path="/" element={<LandingPage />} />
+
+                {/* Onboarding wizard — inside PaywallGate but outside
+                    DashboardLayout: full-screen, no sidebar (spec § 4.1). */}
+                <Route
+                  path="/onboarding"
+                  element={
+                    <ProtectedRoute>
+                      <PaywallGate>
+                        <OnboardingPage />
+                      </PaywallGate>
+                    </ProtectedRoute>
+                  }
+                />
 
                 {/* Protected dashboard routes (with paywall gate) */}
                 <Route

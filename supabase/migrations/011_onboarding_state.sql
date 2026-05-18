@@ -1,0 +1,63 @@
+-- ============================================================
+-- MI Little Care — Phase 7: onboarding_state column on profiles
+--
+-- Implements the data model from docs/onboarding_wizard_spec.md
+-- § 2.3 (PR #7 spec; decisions recorded 2026-05-17).
+--
+-- Adds a single JSONB column, public.profiles.onboarding_state,
+-- which the first-login onboarding wizard uses as its bookkeeping
+-- blob: whether the wizard has run, where the provider stopped,
+-- and which questions were skipped. Illustrative shape — the
+-- wizard owns it; this is NOT a DB-enforced contract:
+--
+--   {
+--     "version": 1,                  -- blob schema version
+--     "completed_at": null,          -- ISO ts, set at the final screen
+--     "dismissed_at": null,          -- ISO ts of the last "finish later"
+--     "last_step": "cdc",            -- resume point (a wizard step key)
+--     "skipped": ["miregistry_id"],  -- step keys explicitly skipped
+--     "gate_answers": { "cdc": "yes" }  -- raw CDC/Tri-Share/GSRP answers
+--   }
+--
+-- Why a JSONB blob, not columns or a table (spec § 2.3):
+--   - It is wizard bookkeeping, never queried by other features —
+--     exactly the shape JSON is for. program_settings (migration
+--     004) set the precedent.
+--   - Canonical answers are NOT stored here. Each confirmed answer
+--     writes through to its canonical column (profiles.* /
+--     profiles.program_settings.*) the moment it is confirmed, so a
+--     half-finished wizard still yields correct partial module
+--     activation. The one exception is gate_answers: a "no" to
+--     CDC/Tri-Share/GSRP leaves the program_settings key absent
+--     (correct for activation), so the wizard records the raw answer
+--     here too, purely so it can repaint those screens on resume.
+--   - A table would be over-modelled for one row per provider.
+--
+-- not null default '{}'::jsonb: every existing provider (Venessa
+-- + 2 others, confirmed 2026-05-15) immediately and correctly
+-- reads as "not yet onboarded" — completed_at is absent — so they
+-- get the wizard on next login. This is the intended backfill of
+-- structural identity; no data-migration statement is required,
+-- and the wizard is skippable so it is not disruptive (spec
+-- § 4.3).
+--
+-- RLS: public.profiles already has row-level security with
+-- per-provider read/write policies (migration 001).
+-- onboarding_state is a new column on that same row and inherits
+-- those policies unchanged — a provider reads and writes only
+-- their own onboarding_state. No new policy is created (spec
+-- § 2.3).
+--
+-- No backfill statement: the column default populates every
+-- existing row at ALTER time. This is a single short DDL
+-- statement, so the web SQL Editor long-statement bug recorded in
+-- docs/runbook.md does not apply.
+-- ============================================================
+
+alter table public.profiles
+  add column if not exists onboarding_state jsonb not null default '{}'::jsonb;
+
+-- ============================================================
+-- DOWN MIGRATION (commented; uncomment + run if rollback is needed)
+-- ============================================================
+-- alter table public.profiles drop column if exists onboarding_state;
