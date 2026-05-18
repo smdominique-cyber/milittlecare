@@ -472,121 +472,105 @@ mimicry. This spec's wizard does not.
 
 ---
 
-## 9. Open Questions
+## 9. Decisions Recorded (2026-05-17)
 
-Recommendations are given; none are resolved. Format follows
-`cdc_pay_periods_spec.md` § 9.
+Resolved in spec review on 2026-05-17. All 14 questions raised in the
+draft § 9 were resolved; the recommendations carried.
 
-1. **Modal overlay vs dedicated `/onboarding` route.**
-   *Recommendation: dedicated `/onboarding` route.* A multi-screen flow
-   benefits from a real URL — resumable, deep-linkable from the dashboard
-   "Finish setup" card, browser Back/Forward works, and it is far easier to
-   test than a modal nested inside `DashboardLayout`. A modal is lighter but
-   fits a single question (the PR #5 pattern), not eight.
+1. **Dedicated `/onboarding` route.** Approved. The wizard is a real route,
+   not a modal overlay. A multi-screen flow benefits from a real URL —
+   resumable, deep-linkable from the dashboard "Finish setup" card, browser
+   Back/Forward works, and far easier to test than a modal nested inside
+   `DashboardLayout`. The modal pattern (PR #5) fits a single question, not
+   eight.
 
-2. **Per-answer persistence vs all-or-nothing.**
-   *Recommendation: persist each answer as it is confirmed*, writing through
-   to the canonical column immediately. A half-finished wizard then still
-   yields correct partial module activation, and resume is trivial. The
-   alternative (stage everything, commit at the end) loses all value if the
-   provider drops off — which, for a skippable wizard, many will.
+2. **Per-answer persistence.** Approved. Each answer is written through to
+   its canonical column the moment it is confirmed, not staged for an
+   all-or-nothing commit at the end. A half-finished wizard then still
+   yields correct partial module activation, and resume is trivial. Staging
+   would lose all value when a provider drops off — and for a skippable
+   wizard, many will.
 
-3. **Re-fire if a provider clears a structural field?**
-   *Recommendation: no.* Completion is tracked by
-   `onboarding_state.completed_at`, independent of field values. If a
-   provider later nulls `is_license_exempt`, the PR #5 modal already catches
-   that specific case; re-running the whole 8-question wizard would be
-   disproportionate. Field-level re-capture belongs to the relevant
-   settings surface, not the wizard.
+3. **No re-fire when a structural field is cleared.** Approved. Completion
+   is tracked by `onboarding_state.completed_at`, independent of field
+   values; nulling a structural field later (e.g. `is_license_exempt`) does
+   not re-run the wizard. The PR #5 modal already catches that specific
+   case, and field-level re-capture belongs to the relevant settings
+   surface, not a full 8-question replay.
 
-4. **Role gate — licensee only?**
-   *Recommendation: yes, licensee only*, gated on `useRole().isLicensee`
-   (role derived from `staff_memberships`, not `profiles.role` — same
-   finding as `license_status_prompt_spec.md` § 9.7). Structural identity is
-   a business-level attribute; `adult_staff` / `assistant` / `view_only`
-   never see the wizard.
+4. **Role gate — licensee only.** Approved. The wizard is gated on
+   `useRole().isLicensee` (role derived from `staff_memberships`, not
+   `profiles.role` — same finding as `license_status_prompt_spec.md`
+   § 9.7). Structural identity is a business-level attribute; `adult_staff`
+   / `assistant` / `view_only` never see the wizard.
 
-5. **Do invited staff get a different version?**
-   *Recommendation: no onboarding wizard for staff in V1.* Invited staff
-   come in through the `staff-invite` accept flow and do not configure
-   business identity. Whether they need any first-run orientation at all is
-   genuinely open — deferred to V2 as a possible minimal, non-structural
-   "welcome" surface. Flagged rather than guessed.
+5. **No staff wizard.** Approved. Invited staff get no onboarding wizard in
+   V1; they enter through the `staff-invite` accept flow and do not
+   configure business identity. A minimal non-structural "welcome" surface
+   for staff remains a possible V2 item, out of scope here.
 
-6. **Skip granularity — whole wizard vs per-question.**
-   *Recommendation: both.* A global "Finish later" exits the wizard; a
-   per-screen "Skip this question" advances without writing. Per-question
-   skip is necessary because some questions genuinely do not apply yet —
-   e.g. a brand-new license-exempt provider who has not yet registered with
-   MiRegistry has no ID to enter.
+6. **Skip granularity — both global and per-question.** Approved. A global
+   "Finish later" exits the wizard; a per-screen "Skip this question"
+   advances without writing. Per-question skip is necessary because some
+   questions genuinely do not apply yet — e.g. a brand-new license-exempt
+   provider not yet registered with MiRegistry has no ID to enter.
 
-7. **What clears the dashboard completion card?**
-   *Recommendation: reaching the final wizard screen* (every question
-   answered **or** explicitly skipped) sets `completed_at` and clears the
-   card. "Wizard completed" and "profile fully populated" are deliberately
-   different states: the completion card tracks the former; the lighter
-   per-field next-step prompts (§ 3.3) track the latter. Conflating them
-   would either nag forever (card never clears while any field is blank) or
-   hide real gaps (card clears but prompts never appear). Open sub-question:
-   the auto-reopen cadence for a provider who repeatedly dismisses without
-   completing — recommend auto-open once per login session, no more.
+7. **Completion clears on the final screen; auto-reopen once per session.**
+   Approved. Reaching the final wizard screen (every question answered
+   **or** explicitly skipped) sets `completed_at` and clears the dashboard
+   completion card. "Wizard completed" and "profile fully populated" stay
+   deliberately distinct states — the completion card tracks the former,
+   the per-field next-step prompts (§ 3.3) track the latter. For a provider
+   who repeatedly dismisses without completing, the wizard auto-reopens
+   once per fresh login session, no more.
 
-8. **Conditional branching on the license-status answer.**
-   *Recommendation: yes.* License-exempt → ask MiRegistry ID; licensed →
-   ask Michigan license number / provider ID. The other questions (CDC,
-   Tri-Share, CACFP, capacity, hours) are common to both paths. This keeps
-   each provider from being asked about fields that cannot apply to them.
+8. **Conditional branching on the license-status answer.** Approved.
+   License-exempt → ask MiRegistry ID; licensed → ask Michigan license
+   number / provider ID. The remaining questions (CDC, Tri-Share, CACFP,
+   capacity, hours) are common to both paths, so no provider is asked about
+   fields that cannot apply to them.
 
-9. **Tri-Share "never heard of it" as a distinct answer.**
-   The strategic framing lists Tri-Share as "yes / no / never heard of it".
-   *Recommendation: offer all three options*, but map "never heard of it"
-   to the **same stored state as "no"** (`program_settings.tri_share`
-   absent / `'auto'`). Record the "never heard of it" choice itself in
-   `onboarding_state` as a product-analytics signal and a future hook for a
-   "what is Tri-Share?" explainer. Do not build the explainer in V1.
+9. **Three Tri-Share options.** Approved. The wizard offers "yes / no /
+   never heard of it". "Never heard of it" maps to the **same stored state
+   as "no"** (`program_settings.tri_share` absent / `'auto'`), but the
+   "never heard of it" choice itself is recorded in `onboarding_state` as a
+   product-analytics signal and a future hook for a "what is Tri-Share?"
+   explainer. The explainer is not built in V1.
 
-10. **CACFP "handled by a sponsor — which one?" storage, and modal
-    deprecation timing.** Two linked unknowns.
-    *Recommendation (storage):* capture the sponsor as **free text** in
-    `program_settings` (or `onboarding_state`) for V1. There is **no CACFP
-    sponsor directory** in the system and building one is out of scope — a
-    structured FK is not justified yet. *Recommendation (PR #5 modal
-    deprecation):* keep the modal until post-launch telemetry shows the
-    wizard reliably captures license status; revisit in a V2 review (§ 6.3).
+10. **CACFP sponsor as free text; PR #5 modal kept until telemetry.**
+    Approved. The CACFP sponsor name is captured as **free text** in
+    `program_settings` (or `onboarding_state`) for V1 — there is no CACFP
+    sponsor directory in the system and a structured FK is not justified
+    yet. The PR #5 license-status modal is kept until post-launch telemetry
+    shows the wizard reliably captures license status; deprecation is
+    revisited in a V2 review (§ 6.3).
 
-11. **Where do kid count and care hours live?**
-    *Recommendation: store in `program_settings` (or `onboarding_state`) as
-    soft context for V1*; do not create typed `profiles` columns until a
-    capacity / scheduling feature consumes them. Premature columns are
-    exactly the out-of-band-schema pattern `tech_debt.md` warns about. Flag:
-    the "rough" precision of these answers (a range? an exact number?) is
-    itself unspecified — recommend coarse buckets (e.g. "1–3, 4–6, 7–12,
+11. **Kid count and care hours as soft context, in coarse buckets.**
+    Approved. These answers are stored in `program_settings` (or
+    `onboarding_state`) as soft context for V1; no typed `profiles` columns
+    are created until a capacity / scheduling feature consumes them
+    (premature columns are the out-of-band-schema pattern `tech_debt.md`
+    warns against). The answers use coarse buckets (e.g. "1–3, 4–6, 7–12,
     12+") so the data is honest about being approximate.
 
-12. **Onboarding vs the paywall gate.**
-    The wizard lives inside the protected dashboard, which sits behind
-    `PaywallGate`. *Recommendation: onboarding runs after the paywall gate*
-    — a provider who is locked out for non-payment does not need structural
-    setup yet; a trialing or active provider does. This is the simplest
-    placement and needs confirmation only because trial/paywall timing
-    interacts with "first login".
+12. **Onboarding runs after the paywall gate.** Approved. The wizard lives
+    inside the protected dashboard, behind `PaywallGate`. A provider locked
+    out for non-payment does not need structural setup yet; a trialing or
+    active provider does. This is the simplest placement and consistent
+    with how trial/paywall timing interacts with "first login".
 
-13. **`force_on` vs `auto` for declared program participation.**
-    *Recommendation: a wizard "yes" sets `program_settings.<program> =
-    'force_on'`; a wizard "no" leaves the key absent (`'auto'`), never
-    `'force_off'`.* Rationale in § 5.2: `force_on` gives the provider the
-    on-ramp to the feature before any funding source exists; `'auto'` for
-    "no" preserves the ability of a real future funding source to turn the
-    module on. Worth an explicit decision because it is a subtle, load-
-    bearing default.
+13. **Wizard "yes" sets `force_on`; "no" leaves the key absent.** Approved.
+    A wizard "yes" sets `program_settings.<program> = 'force_on'`; a wizard
+    "no" leaves the key absent (`'auto'`), never `'force_off'`. Per § 5.2,
+    `force_on` gives the provider the on-ramp to the feature before any
+    funding source exists, while `'auto'` for "no" preserves the ability of
+    a real future funding source to turn the module on.
 
-14. **GSRP — is it a wizard question?**
-    The strategic framing names CDC, Tri-Share, and CACFP but not GSRP,
-    though `program_settings.gsrp` exists and `modules.js` gates a GSRP
-    module. *Recommendation: include a GSRP yes/no question* for parity
-    with the other programs, unless Seth deliberately wants it excluded
-    from V1 scope. Flagged because the field count ("6–8") leaves it
-    genuinely ambiguous whether GSRP is in or out.
+14. **GSRP is a wizard question.** Approved. A GSRP yes/no question is
+    included for parity with CDC, Tri-Share, and CACFP — `program_settings.gsrp`
+    exists and `modules.js` gates a GSRP module. The strategic framing named
+    the other three but not GSRP; the review resolved the ambiguity in
+    favour of inclusion.
 
 ---
 
