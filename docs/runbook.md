@@ -200,17 +200,18 @@ Rollback: uncomment the `DOWN MIGRATION` block at the foot of the migration
 file (drop policy → drop index → drop table). Dropping the table removes all
 52 seeded rows; no separate DELETE is needed.
 
-### 2026-05-18 — Migration 011: profiles.onboarding_state column — PENDING PRODUCTION APPLICATION
+### 2026-05-18 — Migration 011: profiles.onboarding_state column
 
-> ⚠️ **Status: PENDING PRODUCTION APPLICATION.** This migration ships on
-> branch `feature/onboarding-wizard` (PR #7) and has **not** been applied
-> to production. It is applied at the **end of Phase 3, immediately before
-> merge**, following the Migration Application Procedure above — including
-> the user-visible dashboard verification convention (`CLAUDE.md` §
-> Critical Domain Knowledge: Seth runs the verification queries in the
-> Supabase web SQL Editor and saves a screenshot). This entry is completed
-> with the actual verification output at that time; until then the numbers
-> below are *expected*, not confirmed.
+Applied to production on **2026-05-18** by Seth, via the **Supabase web
+SQL Editor** — a single `ALTER TABLE` statement. The web SQL Editor
+long-statement bug (see the Migration Application Procedure note above)
+does not apply: this is one short single statement, pasted and run
+directly.
+
+Applied ahead of the original plan (which scheduled it for the end of
+PR #7's Phase 3). It was pulled forward so the Phase 2 onboarding-wizard
+write-through could be smoke-tested against production before Phase 3's
+dashboard integration is built on top of it.
 
 What the migration does:
 
@@ -240,21 +241,22 @@ Editor note: this is a **single short DDL statement**, so the web SQL
 Editor long-statement bug recorded in the Migration Application Procedure
 above does not apply — it can be pasted and run directly.
 
-Expected verification (to be run by Seth in the Supabase web SQL Editor at
-application time, then recorded here):
+Verification — two queries run by Seth in the Supabase web SQL Editor on
+**2026-05-18**, both passed:
 
 1. **Column exists with the right type/default** —
    `select column_name, data_type, is_nullable, column_default
     from information_schema.columns
     where table_schema='public' and table_name='profiles'
       and column_name='onboarding_state';`
-   Expected: one row — `jsonb`, `is_nullable = NO`,
-   `column_default = '{}'::jsonb`.
+   Returned one row: `onboarding_state | jsonb | NO | '{}'::jsonb`. ✓
 2. **Every existing row is backfilled** —
    `select count(*) as total,
            count(*) filter (where onboarding_state = '{}'::jsonb) as empty_blob
     from public.profiles;`
-   Expected: `empty_blob = total` (all existing providers default to `{}`).
+   Returned `total = 3`, `empty_blob = 3` — every existing `profiles` row
+   defaults to `{}`. The 3 rows are Venessa + 2 others, matching the
+   expected production state. ✓
 
 Rollback: uncomment the `DOWN MIGRATION` block at the foot of
 `011_onboarding_state.sql` — `alter table public.profiles drop column if
