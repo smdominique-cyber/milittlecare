@@ -553,117 +553,111 @@ is the usual one: do not drift into "we file your licensing paperwork."
 
 ---
 
-## 9. Open Questions
+## 9. Decisions Recorded (2026-05-17)
 
-Recommendations are given; none are resolved. Format follows
-`cdc_pay_periods_spec.md` § 9.
+Resolved in spec review on 2026-05-17. Of the 16 questions raised in the
+draft § 9, twelve are resolved as decisions and four (OQ12–OQ15) remain
+flagged regulatory unknowns to verify before the affected § 7 values are
+implemented.
 
-1. **One table or polymorphic on `miregistry_training_entries`?**
-   *Recommendation: a separate `staff_training_records` table* (§ 2.3) —
-   different categories, an `expires_on` column with no MiRegistry analogue,
-   and a different RLS shape (licensee read). Polymorphism would force
-   regime-specific nullable columns onto one table.
+1. **Separate `staff_training_records` table.** Approved. Staff training
+   records live in their own table (§ 2.3), not polymorphically on
+   `miregistry_training_entries` — different categories, an `expires_on`
+   column with no MiRegistry analogue, and a different RLS shape (licensee
+   read). Polymorphism would force regime-specific nullable columns onto
+   one table.
 
-2. **Model A / B / C.**
-   *Recommendation: Model B* (§ 2.2) — person-owned records plus a licensee
-   aggregate dashboard. Matches reality (training follows the person across
-   employers; MiRegistry accounts are per-individual) and gives the
-   regulator-facing oversight. A and C are rejected with reasons in § 2.2.
+2. **Model B.** Approved. Person-owned records plus a licensee aggregate
+   dashboard (§ 2.2). Training follows the person across employers,
+   MiRegistry accounts are per-individual, and the licensee gets the
+   regulator-facing oversight. Models A and C are rejected for the reasons
+   in § 2.2.
 
-3. **Do staff get write access to their own records, or is it read-only to
-   them?** *Recommendation: staff can add/edit their own records*, since
-   the record is theirs and they hold the certificate. But this is genuinely
-   open — some licensees will want sole control of what counts. Tie-break
-   with OQ4/OQ5.
+3. **Staff have write access to their own records.** Approved. Staff can
+   add and edit their own training records — the record is theirs and they
+   hold the certificate. Read-only-to-staff was the alternative; resolved
+   together with OQ4/OQ5 in favour of staff write access.
 
-4. **Who performs data entry — staff, licensee, or both?**
-   *Recommendation: both* — staff may enter their own; the licensee may
-   enter on a staff member's behalf (common when onboarding someone who
-   isn't logged in yet). `entered_by` records which. RLS must then permit a
-   licensee insert/update on a member's records; write the policy for the
-   chosen answer, not both.
+4. **Both staff and licensee can enter data.** Approved. Staff may enter
+   their own records; the licensee may enter on a staff member's behalf
+   (common when onboarding someone not yet logged in). `entered_by` records
+   which. RLS permits a licensee insert/update on a member's records.
 
-5. **Does the licensee see a staff-entered record immediately, or is there
-   an approval/verification step?** *Recommendation: immediate visibility,
-   no approval gate in V1.* An approval workflow is real (the licensee is
-   accountable and may want to verify a certificate) but adds a state
-   machine; defer to V2. `entered_by` already lets the UI show "entered by
-   the staff member" vs "entered by you" so the licensee can eyeball it.
+5. **No approval gate in V1; immediate visibility.** Approved. A
+   staff-entered record is visible to the licensee immediately, with no
+   approval/verification step. An approval workflow is real but adds a
+   state machine — deferred to V2. `entered_by` lets the UI distinguish
+   "entered by the staff member" from "entered by you" so the licensee can
+   eyeball it.
 
-6. **No staff yet — show the feature?** *Recommendation: yes* (§ 4.1) — the
-   licensee is themselves a tracked caregiver, and it is where they will add
-   staff. "No staff" is an empty state.
+6. **Feature shows even with no staff.** Approved (§ 4.1). The licensee is
+   themselves a tracked caregiver, and the dashboard is where they add
+   staff. "No staff" is simply an empty state.
 
-7. **Retention when a staff member leaves (membership revoked).**
-   *Recommendation: never hard-delete; the record stays person-owned and
-   persists.* The licensee should keep read access to a former staff
-   member's records for the regulator's look-back window — but the **exact
-   retention period and whether a departed person's licensee-visibility
-   should end** are regulatory unknowns (§ 7.2). Recommend: keep former
-   staff in an "archived caregivers" section of the dashboard; confirm the
-   retention period before writing any purge logic. Flagged.
+7. **Never hard-delete; archived caregivers section; retention TBD.**
+   Approved with one item still open. When a staff member leaves
+   (membership revoked) the record is never hard-deleted — it stays
+   person-owned and persists, and former staff move to an "archived
+   caregivers" section of the dashboard. The **exact retention period**,
+   and whether a departed person's licensee-visibility should eventually
+   end, remain regulatory unknowns (§ 7.2); confirm the retention period
+   before any purge logic is written.
 
-8. **Staff working at multiple licensed homes.**
-   *Recommendation: person-keyed records (`user_id`) handle this cleanly* —
-   one CPR record, visible to every licensee with an active membership for
-   that person. Open sub-question: should each licensee see *all* the
-   person's records or only categories relevant to their home? Recommend
-   *all* for V1 (simpler, and training is not sensitive); revisit if a
-   provider objects.
+8. **Person-keyed records; licensees see all of a person's records in V1.**
+   Approved. Records are keyed on `user_id`, so staff working at multiple
+   licensed homes have one CPR record visible to every licensee with an
+   active membership for that person. For V1 each licensee sees **all** of
+   the person's records (simpler, and training is not sensitive); revisit
+   only if a provider objects.
 
-9. **Requirement catalog — seeded table or JS constant?**
-   *Recommendation: a seeded catalog table* (`lara_training_requirements`),
-   parallel to `cdc_pay_period_catalog` — so confirmed values land as a
-   data update, not a deploy, and can carry effective-dated rule changes. A
-   JS constant is acceptable for the very first placeholder set if it ships
-   faster; convert to a table before real values are entered.
+9. **Seeded catalog table for the requirement catalog.** Approved. The
+   requirement catalog is a seeded table (`lara_training_requirements`),
+   parallel to `cdc_pay_period_catalog`, so confirmed values land as a data
+   update rather than a deploy and can carry effective-dated rule changes.
+   A JS constant is not used, even for the first placeholder set.
 
-10. **Module key — new `STAFF_TRAINING` or reuse `LICENSED_COMPLIANCE`?**
-    *Recommendation: a new `STAFF_TRAINING` key* keyed on
-    `is_license_exempt === false` (§ 5.1). `LICENSED_COMPLIANCE` stays as
-    the broader space; a dedicated key keeps activation legible as more
-    licensed features arrive.
+10. **New `STAFF_TRAINING` module key.** Approved. A new `STAFF_TRAINING`
+    key keyed on `is_license_exempt === false` (§ 5.1), rather than reusing
+    `LICENSED_COMPLIANCE`. `LICENSED_COMPLIANCE` stays as the broader space;
+    a dedicated key keeps activation legible as more licensed features
+    arrive.
 
-11. **Deprecate the MiRegistry licensed-provider stripped-down view?**
-    *Recommendation: yes* — once Staff Training ships, route licensed
-    providers here and retire `miregistry_tracker_spec.md` § 3.4's degraded
-    view, updating that spec in the same PR. Confirm there is no licensed
-    provider relying on the MiRegistry page for a personal MiRegistry ID
-    they entered.
+11. **Deprecate the MiRegistry § 3.4 stripped-down view when this ships.**
+    Approved. Once Staff Training ships, licensed providers are routed here
+    and `miregistry_tracker_spec.md` § 3.4's degraded view is retired, with
+    that spec updated in the same PR. Confirm no licensed provider relies on
+    the MiRegistry page for a personal MiRegistry ID they entered.
 
-12. **License-exempt providers who have helpers.**
-    *Recommendation: out of scope for V1; flagged, not guessed* (§ 4.3).
-    Whether a license-exempt CDC provider with helpers has MDHHS training
-    obligations for those helpers is a regulatory unknown the repo cannot
-    answer. V1 serves licensed providers only.
+12. **License-exempt providers with helpers — out of scope for V1.**
+    *Flagged — regulatory unknown.* Whether a license-exempt CDC provider
+    with helpers has MDHHS training obligations for those helpers is a
+    regulatory unknown the repo cannot answer (§ 4.3). V1 serves licensed
+    providers only; the question is flagged, not guessed.
 
-13. **The actual role × category requirement matrix.**
-    *No recommendation — regulatory unknown* (§ 6, § 7.2). The matrix must
-    be filled from Michigan licensing rules / a consultant. V1 builds the
-    engine and ships a labelled placeholder (§ 7.3).
+13. **Role × category requirement matrix — regulatory unknown.** *Flagged.*
+    The actual matrix must be filled from Michigan licensing rules or a
+    consultant (§ 6, § 7.2). V1 builds the engine and ships a labelled
+    placeholder (§ 7.3); the matrix is not invented.
 
-14. **Minor (14–17) assistants — reduced or age-gated requirements?**
-    *No recommendation — regulatory unknown.* The `is_18_or_older` flag on
-    `staff_memberships` is available to drive any age-conditional rule once
-    the rule is known. Flagged.
+14. **Minor (14–17) assistant rules — regulatory unknown.** *Flagged.*
+    Whether minor assistants have reduced or age-gated requirements is
+    unknown. The `is_18_or_older` flag on `staff_memberships` is available
+    to drive any age-conditional rule once the rule is confirmed.
 
-15. **Which department administers licensed-home training rules, and the
-    current rule citations.** *Recommendation: confirm before any § 7 value
-    is implemented.* The task brief says "LARA," but Michigan moved
-    early-childhood functions into the new **MiLEAP** department in
-    2023–2024 (the CDC program already cites michigan.gov/mileap). The
-    administering body, the current rule numbers, and the public-facing
-    name to use in copy must be verified. Until then this spec uses "LARA"
-    as a placeholder label.
+15. **Administering department name (LARA vs MiLEAP) — verify.** *Flagged.*
+    The task brief says "LARA," but Michigan moved early-childhood
+    functions into the new **MiLEAP** department in 2023–2024 (the CDC
+    program already cites michigan.gov/mileap). The administering body, the
+    current rule numbers, and the public-facing name for copy must be
+    verified before any § 7 value is implemented; until then the spec uses
+    "LARA" as a placeholder label.
 
-16. **Interaction with PR #7's onboarding wizard for staff.**
-    PR #7 (`onboarding_wizard_spec.md` § OQ5) deliberately gives staff *no*
-    structural-identity wizard. *Recommendation:* keep that — but when a
-    staff member first logs in, a **lightweight prompt** on
-    `/staff-training` ("add your current training records") is reasonable,
-    distinct from the licensee's structural wizard. Whether to build that
-    prompt in V1 or defer is open; recommend defer to V2 and let the
-    licensee-driven dashboard carry V1.
+16. **Defer the staff first-login prompt to V2.** Approved. Staff still get
+    no structural-identity wizard (consistent with
+    `onboarding_wizard_spec.md` § 9 decision 5). A lightweight prompt on
+    `/staff-training` ("add your current training records") on a staff
+    member's first login is reasonable but is deferred to V2; the
+    licensee-driven dashboard carries V1.
 
 ---
 
