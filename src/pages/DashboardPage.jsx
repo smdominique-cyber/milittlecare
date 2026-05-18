@@ -72,7 +72,7 @@ function categoryClass(cat) {
 
 export default function DashboardPage() {
   const { user } = useAuth()
-  const { licenseeId, isLicensee, role, loading: roleLoading } = useRole()
+  const { licenseeId, isLicensee, role } = useRole()
   const [staffMembership, setStaffMembership] = useState(null)
   const navigate = useNavigate()
   const onboarding = useOnboardingStatus()
@@ -112,37 +112,12 @@ export default function DashboardPage() {
   // sessionStorage flag suppresses re-opens for the rest of the session,
   // including the bounce-back after "finish later".
   useEffect(() => {
-    // ─── TEMP DIAGNOSTIC — PR #7 Phase 3 auto-open triage.
-    //     Remove once the failing condition is identified. ───
-    const sessionFlag = sessionStorage.getItem(ONBOARDING_AUTO_OPEN_KEY)
-    console.log('[auto-open] effect run', {
-      'onboarding.loading': onboarding.loading,
-      'onboarding.progress': onboarding.progress,
-      'progress.completed': onboarding.progress?.completed,
-      isLicensee,
-      role,
-      roleLoading,
-      sessionFlag,
-    })
-    if (onboarding.loading || !onboarding.progress) {
-      console.log('[auto-open] BAIL: onboarding status not ready',
-        { loading: onboarding.loading, hasProgress: !!onboarding.progress })
-      return
-    }
-    if (!isLicensee || onboarding.progress.completed) {
-      console.log('[auto-open] BAIL: not an eligible licensee or already completed',
-        { isLicensee, completed: onboarding.progress.completed })
-      return
-    }
-    if (sessionFlag) {
-      console.log('[auto-open] BAIL: already auto-opened this session')
-      return
-    }
+    if (onboarding.loading || !onboarding.progress) return
+    if (!isLicensee || onboarding.progress.completed) return
+    if (sessionStorage.getItem(ONBOARDING_AUTO_OPEN_KEY)) return
     sessionStorage.setItem(ONBOARDING_AUTO_OPEN_KEY, '1')
-    console.log('[auto-open] FIRING → navigate(/onboarding)')
-    // ─── END TEMP DIAGNOSTIC ───
     navigate('/onboarding')
-  }, [onboarding.loading, onboarding.progress, isLicensee, role, roleLoading, navigate])
+  }, [onboarding.loading, onboarding.progress, isLicensee, navigate])
 
   async function loadAll() {
     if (!licenseeId) return

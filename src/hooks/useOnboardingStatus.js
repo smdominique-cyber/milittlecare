@@ -34,15 +34,6 @@ export function useOnboardingStatus() {
         .eq('id', user.id)
         .maybeSingle()
       if (cancelled) return
-      // ─── TEMP DIAGNOSTIC — PR #7 Phase 3 auto-open triage.
-      //     Remove once the failing condition is identified. ───
-      console.log('[onboarding status] profile fetch result', {
-        error,
-        hasData: !!data,
-        onboarding_state: data ? data.onboarding_state : undefined,
-        derivedProgress: error || !data ? null : getOnboardingProgress(data),
-      })
-      // ─── END TEMP DIAGNOSTIC ───
       // On a fetch error, surface "no progress" rather than blocking the
       // dashboard — the card/prompt simply do not render.
       setState({
