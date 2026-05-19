@@ -110,7 +110,7 @@ catalog." This spec treats it as a first-class feature, not a polish item.
 | Object | Relevant fields | Role here |
 | --- | --- | --- |
 | `profiles` (one per auth user) | `is_license_exempt`, `michigan_license_number`, `michigan_provider_id`, `miregistry_id`, `program_settings` | Licensee identity + activation inputs. Every staff member also has a `profiles` row. |
-| `staff_memberships` | `staff_user_id`, `licensee_id`, `role`, `status`, `is_18_or_older`, `revoked_at` | The roster. One active row per staff member under a licensee. |
+| `staff_memberships` | `staff_user_id`, `licensee_id`, `role`, `status`, `is_18_or_older`, `revoked_at` | The **app-user** staff roster. PR #8's `caregivers` table (§ 2.3) is the separate regulatory roster; the two link via `caregivers.app_user_id`. |
 | `staff_invitations` | `licensee_id`, `recipient_email`, `intended_role`, `status` | How staff are added. |
 | `miregistry_training_entries` | per `user_id`; `source` enum (`leppt`, `annual_ongoing`, …) | The **CDC / license-exempt** training log. Not reused — see § 2.3. |
 
@@ -144,91 +144,69 @@ Model B leaves **two residual questions B does not by itself answer** —
 immediately or after an approval step* — which are real and deferred to
 § 9 (OQ4, OQ5). Picking B does not pre-decide those.
 
-### 2.3 New table: `staff_training_records`
+### 2.3 New tables (migration 012)
 
 MiLEAP licensed-home training is a **different regime** from MiRegistry CDC
-training and gets its **own table** — not a polymorphic extension of
-`miregistry_training_entries` (OQ1). Reasons:
+training and gets its **own tables** — not a polymorphic extension of
+`miregistry_training_entries` (OQ1): different categories, an `expires_on`
+date with no MiRegistry analogue, and a licensee-oversight RLS shape.
 
-- The MiRegistry `source` enum is CDC-specific (`leppt`, `annual_ongoing`
-  meaning the Dec-16 refresher, `level_2_approved`). None map cleanly to
-  the MiLEAP licensed-home categories.
-- These records need an **`expires_on`** date (CPR / first aid expires);
-  MiRegistry entries never expire. Polymorphism would mean columns that are
-  meaningful in only one regime.
-- RLS differs: MiRegistry entries are strictly owner-only; these records
-  must be **readable by the licensee** of the person's active membership
-  (Model B). Different policy shapes on one table is avoidable complexity.
+**A caregiver is not always an app user.** Most drivers and volunteers
+never log in to MILittleCare. Keying training records on `auth.users`
+would silently fail to track half the regulated roles — the "confident
+wrong answer" the build discipline forbids. So PR #8 introduces a
+`caregivers` table: the licensee's regulatory roster, whose rows may or
+may not be linked to an auth user (OQ1, resolved Model B).
 
-The record belongs to the **person**, not to the licensee — so the same CPR
-certification is one record regardless of how many homes the person works
-at (handles multi-home staff naturally, OQ8).
+Migration `012_staff_training.sql` creates four tables — see the migration
+for exact DDL, column comments, and citations:
 
-```sql
--- migration 012_staff_training_records.sql
--- (012 assumes PR #6's 010 and PR #7's 011 land first; otherwise the next
---  free sequential number.)
+- **`caregivers`** — the regulatory roster. `licensee_id` (the owning
+  licensee), `full_name`, optional `email`, `app_user_id` (nullable — set
+  when the caregiver is also an app user), `date_of_hire` (drives the
+  30-/90-day deadline checks), `archived_at` soft delete.
+- **`caregiver_regulatory_roles`** — many-to-many `caregiver → regulatory
+  role` (§ 6.1). A person may hold several roles; obligations roll up
+  strictest-wins (§ 6.3). Driver-only attributes `driver_ratio_counted`
+  and `driver_has_unsupervised_access` are CHECK-scoped to driver rows.
+- **`staff_training_records`** — the per-caregiver training log, keyed on
+  `caregiver_id`. One CPR record is one row regardless of how many homes
+  the person works at (multi-home staff, OQ8). Provenance via `entered_by`
+  (§ 9 decisions 4 & 5). Soft delete via `archived_at`.
+- **`health_safety_updates`** — per-licensee R 400.1924(11) update
+  notices (§ 7.1, OQ2).
 
-create type public.staff_training_category as enum (
-  'new_hire_training',                    -- R 400.1923 — 14 mandated topics, 90-day deadline
-  'cpr_first_aid',                        -- R 400.1920(3) / 1921(3) — expiring certification
-  'professional_development',             -- R 400.1924 — per-calendar-year clock hours, by role
-  'health_safety_update_acknowledgement', -- R 400.1924(11) — event-driven MiLEAP-notice acknowledgement
-  'miregistry_account',                   -- R 400.1922 — account + non-expired membership + employment entry
-  'background_check_eligibility',         -- R 400.1919 / 1903(1)(r) — eligibility before unsupervised contact
-  'other'                                 -- anything the provider wants on record
-);
+**`staff_memberships` is untouched.** It remains the app-user invitation
+roster; `caregivers` is the regulatory roster. A caregiver who is also an
+app user links the two via `caregivers.app_user_id`
+(≈ `staff_memberships.staff_user_id`).
 
-create table public.staff_training_records (
-  id                  uuid default gen_random_uuid() primary key,
-  user_id             uuid references auth.users(id) on delete cascade not null,
-  category            public.staff_training_category not null,
-  title               text not null,
-  completed_on        date not null,
-  expires_on          date,                    -- null = does not expire
-  hours               numeric(5,2),            -- null where not hour-denominated
-  issuer              text,                    -- e.g. "American Red Cross"
-  reference_code      text,                    -- certificate / MiRegistry event id
-  notes               text,
-  -- Provenance: who entered this row (staff self vs licensee on their
-  -- behalf). Supports the entry-ownership + approval questions (OQ4/OQ5).
-  entered_by          uuid references auth.users(id) on delete set null,
-  archived_at         timestamptz,
-  archived_by         uuid references auth.users(id) on delete set null,
-  created_at          timestamptz not null default now(),
-  updated_at          timestamptz not null default now()
-);
+**Training categories** — the `staff_training_category` enum:
+`new_hire_training`, `cpr_first_aid`, `professional_development`,
+`health_safety_update_acknowledgement`, `miregistry_account`,
+`background_check_eligibility`, `other`.
 
-create index staff_training_records_user_idx
-  on public.staff_training_records (user_id, completed_on desc)
-  where archived_at is null;
+**Status-bearing categories.** `miregistry_account` and
+`background_check_eligibility` carry a status, not just a completion date.
+`staff_training_records` has two nullable enum columns — `miregistry_status`
+(`submitted` / `materials_received` / `awaiting_print` / `current` /
+`expired`) and `background_check_status` (`pending` / `eligible` /
+`ineligible`) — with a CHECK that exactly the column matching the row's
+`category` is populated. Enums, not free text. The MiRegistry-membership
+field model is § 7.1.
 
-create index staff_training_records_user_category_idx
-  on public.staff_training_records (user_id, category, expires_on)
-  where archived_at is null;
-```
+RLS — select / insert / update only, soft delete via `archived_at`
+(matching migrations 003 / 008 / 009). Visibility runs through
+`caregivers`:
 
-RLS — select / insert / update only, soft-delete via `archived_at`
-(matching migrations 003 / 008 / 009). The **non-trivial policy** is the
-licensee read path:
-
-- A user may select / insert / update **their own** records
-  (`auth.uid() = user_id`).
-- A user may **select** records whose `user_id` belongs to a person with an
-  **active `staff_memberships` row pointing at the calling user** as
-  `licensee_id`. This is the Model B oversight read.
-- Per § 9 decision 4, a licensee may also **insert/update** on the records
-  of a staff member with an active `staff_memberships` row pointing at the
-  licensee — `entered_by` records who entered each row.
-
-Two of the enum categories — `miregistry_account` and
-`background_check_eligibility` — are **status-bearing** rather than simple
-completion records (a MiRegistry membership has a status and an expiry; a
-background check has an eligibility determination). `staff_training_records`
-as drawn above has no `status` column; whether these categories carry a
-status via a new column, via `notes`, or via a separate per-person shape is
-a data-model decision deferred to the implementation plan. The
-MiRegistry-membership field model is specified in § 7.1.
+- The caregiver's **licensee** (`caregivers.licensee_id = auth.uid()`) may
+  select / insert / update — the Model B oversight read plus the § 9
+  decision 4 write-on-behalf.
+- A caregiver who is an **app user** (`caregivers.app_user_id =
+  auth.uid()`) may select / insert / update **their own** records (§ 9
+  decision 3). `entered_by` records who entered each row.
+- `caregiver_regulatory_roles` and `health_safety_updates` carry their own
+  licensee-scoped policies (see migration 012).
 
 ### 2.4 Requirement catalog — reference data
 
@@ -237,8 +215,8 @@ data**, structurally like `cdc_pay_period_catalog` (PR #6). Unlike earlier
 drafts, the requirement values are now **verified** — transcribed from
 R 400.1901–1963 in `docs/reference/staff_training_tracking_spec.md`.
 
-- A `training_requirements` catalog — a **seeded table** (§ 9 decision 9),
-  not a JS constant — defines, per `(category, role)`: required? /
+- A `training_requirements` catalog — a **seeded table** (§ 9 decision 9,
+  migration 013), not a JS constant — defines, per `(category, role)`: required? /
   frequency / clock-hours / expiration model, each row carrying its
   `R 400.19xx` citation.
 - The catalog is seeded with the **confirmed** values from § 6 / § 7 — no
@@ -511,8 +489,9 @@ The app's `staff_memberships.role` enum (`licensee` / `adult_staff` /
 "assistant" (strictly 14–15) — and a person may hold more than one
 regulatory role (a staff member who also drives). V1 therefore needs a
 **many-to-many person → regulatory-role** assignment, not a single role
-field. That mapping and the role-assignment surface are a data-model item
-for the implementation plan.
+field. Migration 012's `caregiver_regulatory_roles` table provides that
+assignment (keyed on `caregiver_id`, § 2.3); the licensee assigns roles on
+the roster dashboard (§ 3).
 
 `view_only` users provide no care and carry **no** training obligations
 (confirmed by the `useRole` permission map — no `log_attendance` /
@@ -615,9 +594,10 @@ manually by the licensee — there is no MiRegistry API integration in V1:
    current"; *Expired* does not.
 3. **Membership expiry date** (`expires_on`).
 
-Whether those three live as columns on the person or as a status-bearing
-`miregistry_account` record in `staff_training_records` is a data-model
-decision for the implementation plan (§ 2.3).
+These three are stored as a `staff_training_records` row of category
+`miregistry_account`: the ID in `reference_code`, the status in the
+`miregistry_status` enum column, and the expiry in `expires_on` (§ 2.3,
+migration 012).
 
 ### 7.2 The 2-year on-file → MiRegistry cutover
 
@@ -851,6 +831,7 @@ rule text that drove it:
 | § 9 | OQ7, OQ13, OQ14, OQ15 marked resolved with citations; intro updated to "15 of 16 resolved" | R 400.1906(2); R 400.1919–1924; R 400.1921, R 400.1931(1); R 400.1901–1963 |
 | Appendix | V1-scope table updated — the verified catalog and the many-to-many role assignment now ship in V1; resolved OQs removed from "deferred" | This reconciliation |
 | § 6.2, § 7.3 (follow-up correction) | Driver cells corrected — `miregistry_account` → "—" (R 400.1951(10) extends only R 400.1923 and R 400.1924 to ratio-counted drivers, not R 400.1922); `background_check_eligibility` → "✔ if unsupervised access or ratio-counted"; the matching § 7.3 "silent" line removed | R 400.1951(4) — driver background-check rule, missed in the first requirements transcription |
+| §§ 2.1–2.4, 6.1, 7.1 (implementation reconciliation, 2026-05-18) | Data model reconciled to migrations 012 / 013 — the `caregivers` regulatory roster (OQ1 Model B; a caregiver need not be an app user), `caregiver_regulatory_roles`, records keyed on `caregiver_id`, two status enum columns + CHECK, `health_safety_updates`. The § 2.3 status-storage, § 6.1 role-mapping and § 7.1 MiRegistry-field deferred items are now resolved. | Migrations 012 / 013; product answers to OQ1 / OQ2 |
 
 **Resolved this pass:** OQ7, OQ13, OQ14, OQ15. **Still flagged:** OQ12 —
 license-exempt providers with helpers; out of V1 scope, since the verified
