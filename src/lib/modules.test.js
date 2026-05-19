@@ -158,6 +158,27 @@ describe('getActiveModules', () => {
       expect(modules.has(MODULE_KEYS.STAFF_TRAINING)).toBe(true)
     })
 
+    it('a staff member on a licensee roster activates Staff Training', () => {
+      // The staff member's own profile carries no license status — the
+      // signal is roster membership (a caregivers row owned by their
+      // licensee). See useActiveModules.
+      const modules = getActiveModules({
+        profile: { program_settings: {}, is_license_exempt: null },
+        fundingSources: [],
+        isTrackedStaffCaregiver: true,
+      })
+      expect(modules.has(MODULE_KEYS.STAFF_TRAINING)).toBe(true)
+    })
+
+    it('isTrackedStaffCaregiver false does NOT activate Staff Training', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, is_license_exempt: null },
+        fundingSources: [],
+        isTrackedStaffCaregiver: false,
+      })
+      expect(modules.has(MODULE_KEYS.STAFF_TRAINING)).toBe(false)
+    })
+
     it('is_license_exempt === true does NOT activate Staff Training', () => {
       const modules = getActiveModules({
         profile: { program_settings: {}, is_license_exempt: true },

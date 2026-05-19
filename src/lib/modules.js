@@ -44,12 +44,18 @@ const GATEABLE_MODULE_KEYS = Object.freeze([
  * @param {object[]} args.fundingSources  Flat array of the provider's
  *                                        funding_sources rows (any
  *                                        attachment, family- or child-keyed).
+ * @param {boolean}  args.isTrackedStaffCaregiver
+ *                                        True when the current user is a
+ *                                        caregiver on another provider's
+ *                                        regulatory roster — i.e. a staff
+ *                                        member of a licensed home (see the
+ *                                        staff_training activation below).
  * @returns {Set<string>}
  *
  * A funding source counts as active iff status === 'active' AND
  * archived_at is null.
  */
-export function getActiveModules({ profile, fundingSources } = {}) {
+export function getActiveModules({ profile, fundingSources, isTrackedStaffCaregiver } = {}) {
   // Destructuring defaults only apply to undefined, not null — coerce both.
   const safeProfile = profile || {}
   const safeSources = fundingSources || []
@@ -87,14 +93,27 @@ export function getActiveModules({ profile, fundingSources } = {}) {
     modules.add(MODULE_KEYS.MIREGISTRY_TRACKER)
   }
   // staff_training: the staff-training-tracking feature for LICENSED
-  // providers (PR #8 / docs/staff_training_tracking_spec.md § 5.1).
-  // Keyed on the affirmative "I am a licensed provider" answer
-  // (is_license_exempt === false) — captured at onboarding by PR #5 /
-  // PR #7 — not on michigan_license_number, which a licensed provider
-  // may leave blank for a while. The strict === false check keeps the
-  // feature off for the null (unanswered) and true (license-exempt)
-  // cases (spec § 4.2).
-  if (safeProfile.is_license_exempt === false) modules.add(MODULE_KEYS.STAFF_TRAINING)
+  // providers and the staff who work under them (PR #8 /
+  // docs/staff_training_tracking_spec.md § 5.1, § 4.4). Two paths:
+  //
+  //   - The licensee — the affirmative "I am a licensed provider"
+  //     answer, is_license_exempt === false (captured at onboarding by
+  //     PR #5 / PR #7). Not keyed on michigan_license_number, which a
+  //     licensed provider may leave blank for a while. The strict
+  //     === false check keeps the feature off for the null (unanswered)
+  //     and true (license-exempt) cases (spec § 4.2).
+  //   - A staff member — they carry no license status on their own
+  //     profile, so the signal is roster membership: they appear on a
+  //     licensee's regulatory roster (a public.caregivers row linked by
+  //     app_user_id, owned by a different licensee). V1 is licensee-
+  //     driven (spec § 9 OQ16) — the staff self-view unlocks once the
+  //     licensee adds them to the roster.
+  if (
+    safeProfile.is_license_exempt === false ||
+    isTrackedStaffCaregiver === true
+  ) {
+    modules.add(MODULE_KEYS.STAFF_TRAINING)
+  }
   if (safeProfile.michigan_license_number) modules.add(MODULE_KEYS.LICENSED_COMPLIANCE)
   if (safeProfile.is_license_exempt) modules.add(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)
   if (settings.cacfp === true) modules.add(MODULE_KEYS.CACFP)

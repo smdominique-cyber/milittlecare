@@ -25,6 +25,7 @@ export function useActiveModules() {
   const { user } = useAuth()
   const [profile, setProfile] = useState(null)
   const [fundingSources, setFundingSources] = useState([])
+  const [isTrackedStaffCaregiver, setIsTrackedStaffCaregiver] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -32,6 +33,7 @@ export function useActiveModules() {
     if (!user) {
       setProfile(null)
       setFundingSources([])
+      setIsTrackedStaffCaregiver(false)
       setError(null)
       setLoading(false)
       return
@@ -39,7 +41,7 @@ export function useActiveModules() {
     setLoading(true)
     setError(null)
     try {
-      const [profileResp, sourcesResp] = await Promise.all([
+      const [profileResp, sourcesResp, caregiverResp] = await Promise.all([
         supabase
           .from('profiles')
           .select('program_settings, miregistry_id, michigan_license_number, is_license_exempt')
@@ -53,13 +55,30 @@ export function useActiveModules() {
           .eq('user_id', user.id)
           .eq('status', 'active')
           .is('archived_at', null),
+        // Caregiver roster rows linked to this user — gates the
+        // staff_training module for staff of a licensed home (a row
+        // owned by a different licensee). A licensee's own self-row has
+        // licensee_id === app_user_id and is filtered out below.
+        supabase
+          .from('caregivers')
+          .select('licensee_id')
+          .eq('app_user_id', user.id)
+          .is('archived_at', null),
       ])
 
       if (profileResp.error) throw profileResp.error
       if (sourcesResp.error) throw sourcesResp.error
+      // The caregiver lookup only gates one optional module — a failure
+      // here must not blank the rest of the nav, so it is non-fatal.
+      if (caregiverResp.error) {
+        console.error('useActiveModules: caregiver roster lookup failed', caregiverResp.error)
+      }
 
       setProfile(profileResp.data || null)
       setFundingSources(sourcesResp.data || [])
+      setIsTrackedStaffCaregiver(
+        (caregiverResp.data || []).some(r => r && r.licensee_id !== user.id)
+      )
     } catch (err) {
       console.error('useActiveModules: failed to load funding sources or profile', err)
       setError(err instanceof Error ? err : new Error(String(err)))
@@ -74,8 +93,8 @@ export function useActiveModules() {
   }, [user?.id])
 
   const modules = useMemo(
-    () => getActiveModules({ profile, fundingSources }),
-    [profile, fundingSources]
+    () => getActiveModules({ profile, fundingSources, isTrackedStaffCaregiver }),
+    [profile, fundingSources, isTrackedStaffCaregiver]
   )
 
   return { loading, modules, profile, fundingSources, error, refresh }
