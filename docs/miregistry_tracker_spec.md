@@ -312,6 +312,18 @@ Start with your most recent — older entries can be added afterward."
 
 ### 3.4 Licensed providers
 
+> **DEPRECATED — superseded by Staff Training (PR #8, 2026-05-19).** The
+> stripped-down MiRegistry page view for licensed providers described
+> below is retired. Per `docs/staff_training_tracking_spec.md` § 5.2 and
+> § 9 decision OQ11, a licensed provider's training is now tracked in the
+> Staff Training feature (`MODULE_KEYS.STAFF_TRAINING`, `/staff-training`)
+> — the licensee appears as a caregiver in their own roster, alongside
+> their staff. Each caregiver still needs a personal MiRegistry account /
+> ID (the state registry of record), and `profiles.miregistry_id` still
+> stores it per person — but the licensed-home *tracking UI* is Staff
+> Training, not a degraded MiRegistry page. The text below is kept as the
+> historical record of the V1 interim behaviour.
+
 Per CLAUDE.md's module-activation principle, providers who are not
 license-exempt should not see Level 1/2 / December 16 messaging — those
 rules don't apply to them.

@@ -1,0 +1,347 @@
+/* ============================================================
+   Staff Training Tracking (licensed providers) — PR #8
+   See docs/staff_training_tracking_spec.md § 3.
+   ============================================================ */
+
+.st-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  max-width: 1040px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.st-title {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  color: var(--clr-ink);
+  margin: 0;
+}
+
+.st-subtitle {
+  font-size: 0.875rem;
+  color: var(--clr-ink-soft);
+  margin: 2px 0 0;
+}
+
+.st-loading,
+.st-empty-note {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--clr-ink-soft);
+  line-height: 1.5;
+}
+
+/* ---- Banners ---- */
+.st-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--clr-danger-pale, #fbe9eb);
+  border: 1px solid var(--clr-danger, #b00020);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  color: var(--clr-danger, #b00020);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.st-info-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--clr-cream);
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  color: var(--clr-ink-soft);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+/* ---- Cards / sections ---- */
+.st-card {
+  background: white;
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+.st-section-title {
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  color: var(--clr-ink);
+  margin: 0 0 var(--space-3);
+}
+
+/* ---- Attention list ---- */
+.st-attention {
+  border-color: var(--clr-warn-mid, #e8d196);
+  background: var(--clr-warn-pale, #fdf3d8);
+}
+
+.st-attention-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--clr-warn-ink, #8a6a1a);
+  font-size: 0.9375rem;
+}
+
+.st-attention-list {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.st-attention-list li {
+  font-size: 0.875rem;
+  color: var(--clr-ink);
+  line-height: 1.45;
+}
+
+.st-attention-ok {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9375rem;
+  color: var(--clr-ink-soft);
+}
+
+/* ---- Compliance matrix ---- */
+.st-matrix-wrap {
+  overflow-x: auto;
+}
+
+.st-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.st-matrix th,
+.st-matrix td {
+  border: 1px solid var(--clr-warm-mid);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.st-matrix thead th {
+  background: var(--clr-cream);
+  color: var(--clr-ink-soft);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.st-matrix tbody th {
+  font-weight: 600;
+  color: var(--clr-ink);
+  white-space: nowrap;
+}
+
+.st-caregiver-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--clr-sage-dark);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.st-caregiver-sub {
+  display: block;
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: var(--clr-ink-soft);
+  margin-top: 2px;
+  white-space: normal;
+}
+
+/* ---- Status pills ---- */
+.st-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.st-pill-detail {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--clr-ink-soft);
+}
+
+.st-pill-ok            { background: #e3efe7; color: #3c5c48; }
+.st-pill-expiring_soon { background: var(--clr-warn-pale, #fdf3d8); color: var(--clr-warn-ink, #8a6a1a); }
+.st-pill-expired,
+.st-pill-overdue       { background: var(--clr-danger-pale, #fbe9eb); color: var(--clr-danger, #b00020); }
+.st-pill-pending       { background: #eef1f4; color: #4a5568; }
+.st-pill-missing       { background: #f2efe9; color: var(--clr-ink-soft); }
+.st-pill-not_required  { background: transparent; color: var(--clr-ink-soft); font-weight: 400; }
+
+/* ---- Legend ---- */
+.st-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  font-size: 0.75rem;
+  color: var(--clr-ink-soft);
+}
+
+.st-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ---- Action row ---- */
+.st-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.st-btn-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.5rem 0.875rem;
+  font-size: 0.8125rem;
+  flex: initial;
+}
+
+/* ---- Training log ---- */
+.st-log-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: var(--space-2);
+}
+
+.st-log-name {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  color: var(--clr-ink);
+  margin: 0;
+}
+
+.st-role-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  background: var(--clr-sage-pale);
+  color: var(--clr-sage-dark);
+  border-radius: var(--radius-full);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.st-record-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.st-record {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: white;
+}
+
+.st-record.archived {
+  opacity: 0.6;
+}
+
+.st-record-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.st-record-title {
+  font-weight: 600;
+  color: var(--clr-ink);
+}
+
+.st-record-meta {
+  font-size: 0.8125rem;
+  color: var(--clr-ink-soft);
+  line-height: 1.45;
+}
+
+.st-record-cat {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--clr-ink-soft);
+  font-weight: 600;
+}
+
+.st-link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--clr-sage-dark);
+  cursor: pointer;
+  text-decoration: underline;
+  flex-shrink: 0;
+}
+
+/* ---- Role assignment modal ---- */
+.st-role-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--clr-warm-mid);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.st-role-option.selected {
+  background: var(--clr-cream);
+}
+
+.st-role-driver-attrs {
+  margin: 6px 0 0 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.8125rem;
+  color: var(--clr-ink-soft);
+}
+
+.st-field-error {
+  color: var(--clr-danger, #b00020);
+  font-size: 0.8125rem;
+  margin-top: 4px;
+}

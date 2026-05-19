@@ -186,7 +186,19 @@ answering, add a one-time gentle dashboard banner prompting them to answer.
 Defer until we have signal that this is a real pattern — surfaced as
 OQ5 in the license-status prompt spec and deliberately deferred to V2.
 
-## Staff training tracking for licensed providers is unmodeled
+## Staff training tracking for licensed providers is unmodeled — RESOLVED (PR #8)
+
+> **Resolved by PR #8 (2026-05-19).** The gap described below is closed.
+> Staff training tracking for licensed providers shipped as
+> `docs/staff_training_tracking_spec.md`, migrations `012`/`013`, the
+> `MODULE_KEYS.STAFF_TRAINING` module, `src/lib/staffTraining.js`, and
+> the `/staff-training` page (Model B — a licensee dashboard that
+> aggregates per-caregiver, role-aware compliance). The training
+> requirements are verified against Michigan Administrative Code
+> R 400.1901–1963 (MiLEAP). The one remaining open question — OQ12,
+> license-exempt providers with helpers — is a flagged regulatory
+> unknown, out of V1 scope. The original entry is kept below as the
+> historical record.
 
 The MiRegistry tracker (PR #4) assumes one auth user = one provider
 tracking their own training. This works for license-exempt providers
@@ -411,3 +423,44 @@ lost.
   wizard has nowhere to set them afterward. Resolve when the richer
   per-field next-step prompts land (spec § 7.2) — each should route to,
   or the same PR should build, a real per-field settings surface.
+
+## Deferred work introduced by PR #8 (staff training tracking)
+
+- **Local-date helpers duplicated a third time.** `src/lib/staffTraining.js`
+  re-implements `todayYMD()`, the `Date.UTC`-based day-difference helper,
+  and an `addDaysYMD()` helper that already exist (in part) in
+  `src/lib/miregistry.js` and `src/lib/cdcPayPeriods.js`. The standing
+  fix is unchanged — lift `todayYMD`, `daysBetweenYMD`, `nextDayYMD` /
+  `addDaysYMD` into a shared `src/lib/dates.js` as a standalone cleanup
+  PR (see the PR #6 note above). PR #8 stayed consistent with the
+  existing duplication rather than widening its scope.
+- **No render tests for `src/components/staffTraining/`.** The pure
+  helpers in `staffTraining.js` are covered by Vitest; the five React
+  surfaces (`StaffComplianceMatrix`, `ExpiringSoonList`,
+  `CaregiverTrainingLog`, `TrainingEntryForm`, `RegulatoryRoleAssignment`)
+  and `StaffTrainingPage` have none — same gap as PRs #1, #2, #4, #6.
+  Add when React Testing Library is approved and installed; cover
+  loading / error / empty / populated states, the licensee-vs-staff
+  split, the drill-in, and the entry-form category/status branches.
+- **`useStaffTraining` writes on load.** For a licensee, the hook
+  ensures a self-caregiver row exists (spec § 4.1 — "the licensee is
+  themselves a caregiver") by inserting one on first load if absent.
+  This is a side-effecting read. It is idempotent — the
+  `unique (licensee_id, app_user_id)` constraint rejects a duplicate —
+  but a cleaner home for it is the onboarding wizard or a dedicated
+  provisioning step. Revisit if the page acquires a second data hook.
+- **Multi-home staff have separate caregiver rows.** Records key on
+  `caregiver_id` (migration 012), and a `caregivers` row is per
+  licensee, so a person working at two licensed homes has two caregiver
+  rows and two separate CPR records. Spec § 9 decision 8 envisioned
+  person-keyed records ("one CPR record … regardless of how many
+  homes"); the migration reconciled to `caregiver_id` keying. V1 ships
+  the per-caregiver-row model. Revisit if a real multi-home staff
+  member surfaces — the fix is a person-level join, not a schema
+  rewrite.
+- **Role assignment replaces the whole set.** `RegulatoryRoleAssignment`
+  saves by deleting every `caregiver_regulatory_roles` row for the
+  caregiver and re-inserting the selected set, rather than diffing.
+  Acceptable — the per-caregiver set is at most six rows — but it churns
+  rows and their `created_at`. Diff-and-patch if role history ever
+  needs to be preserved.
