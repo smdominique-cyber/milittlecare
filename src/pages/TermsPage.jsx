@@ -1,3 +1,6 @@
+# Revised TermsPage.jsx (Founder-Protective Draft)
+
+```jsx
 import { Link } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { SUBSCRIPTION_PRICE_DISPLAY } from '@/lib/pricing'
@@ -27,149 +30,399 @@ export default function TermsPage() {
       </Link>
 
       <section className="legal-content">
-        <p style={{ fontSize: '0.875em', color: '#888' }}>Last updated: April 30, 2026</p>
+        <p style={{ fontSize: '0.875em', color: '#888' }}>
+          Last updated: May 19, 2026
+        </p>
 
         <h2>Terms of Service</h2>
 
         <p>
-          These Terms of Service ("Terms") govern your use of MI Little Care ("Service"), operated by Seth Dominique in Michigan, USA.
-          By using the Service, you agree to these Terms.
+          These Terms of Service ("Terms") govern your use of MI Little Care
+          ("MI Little Care," "MILittleCare," "we," "us," or "our"), operated by
+          Seth Dominique in Michigan, USA.
+        </p>
+
+        <p>
+          By creating an account, accessing, or using the Service, you agree to
+          be bound by these Terms. If you do not agree to these Terms, you may
+          not use the Service.
         </p>
 
         <h3>1. Description of Service</h3>
+
         <p>
-          MI Little Care is a software platform designed for home daycare providers in Michigan. It provides tools for:
+          MI Little Care is a software platform designed for Michigan home
+          childcare providers. The Service may include tools related to:
         </p>
+
         <ul>
           <li>Enrollment and family management</li>
-          <li>Billing and invoicing</li>
-          <li>Payment collection via Stripe</li>
-          <li>Receipt tracking and categorization</li>
-          <li>Time/Space ratio calculations</li>
-          <li>Tax reporting summaries</li>
+          <li>Attendance tracking</li>
+          <li>CDC billing and reimbursement tracking</li>
+          <li>Training and licensing deadline tracking</li>
+          <li>Document storage and organization</li>
+          <li>Tax and financial tracking tools</li>
+          <li>Staff management tools</li>
+          <li>Compliance-related dashboards and summaries</li>
         </ul>
 
-        <h3>2. Eligibility</h3>
         <p>
-          You must be at least 18 years old and legally capable of entering into a binding agreement to use the Service.
+          The Service is an administrative and informational tool only. MI Little
+          Care is not a government agency, law firm, accounting firm, tax advisor,
+          licensing authority, or compliance certification service.
         </p>
 
-        <h3>3. Accounts</h3>
-        <ul>
-          <li>You are responsible for maintaining account security</li>
-          <li>You must provide accurate information</li>
-          <li>You are responsible for all activity under your account</li>
-        </ul>
+        <h3>2. No Legal, Regulatory, Tax, or Compliance Advice</h3>
 
-        <h3>4. Subscription and Billing</h3>
-        <ul>
-          <li>Subscription cost: {SUBSCRIPTION_PRICE_DISPLAY}/month</li>
-          <li>Free trial: 30 days (90 days for early users, if applicable)</li>
-          <li>Billing is recurring unless canceled</li>
-          <li>No refunds for unused time</li>
-          <li>Access continues through the end of the paid billing period after cancellation</li>
-        </ul>
-
-        <h3>5. Payments</h3>
         <p>
-          Payments are processed through Stripe. We do not process or store payment credentials.
+          MI Little Care does not provide legal advice, regulatory advice,
+          licensing advice, accounting advice, tax advice, or compliance
+          certification.
         </p>
-        <ul>
-          <li>We are not a payment processor</li>
-          <li>Stripe is responsible for payment processing and compliance</li>
-        </ul>
 
-        <h3>6. Autopay</h3>
         <p>
-          Providers may enable automatic billing for parents. By enabling autopay:
+          Any compliance-related information, reminders, dashboards, health
+          scores, reimbursement calculations, audit-preparation materials,
+          deadline tracking, or summaries provided through the Service are for
+          informational and administrative assistance purposes only.
         </p>
+
+        <p>
+          You remain solely responsible for independently verifying all
+          requirements, deadlines, records, reimbursement submissions, licensing
+          obligations, training requirements, attendance records, and compliance
+          obligations with applicable Michigan laws, regulations, and agency
+          guidance.
+        </p>
+
+        <p>
+          Your use of the Service does not guarantee:
+        </p>
+
         <ul>
-          <li>Parents authorize recurring charges via Stripe</li>
-          <li>Charges are typically processed weekly on Mondays</li>
+          <li>Licensing compliance</li>
+          <li>Audit readiness</li>
+          <li>Successful inspections</li>
+          <li>Approval of reimbursements</li>
+          <li>Avoidance of citations or penalties</li>
+          <li>Accuracy of agency determinations</li>
         </ul>
 
-        <h3>7. User Responsibilities</h3>
+        <h3>3. Eligibility</h3>
+
+        <p>
+          You must be at least 18 years old and legally capable of entering into
+          a binding agreement to use the Service.
+        </p>
+
+        <h3>4. Accounts and Security</h3>
+
+        <ul>
+          <li>You are responsible for maintaining account confidentiality and security</li>
+          <li>You must provide accurate and current information</li>
+          <li>You are responsible for all activity occurring under your account</li>
+          <li>You must promptly notify us of any unauthorized access or security incident</li>
+          <li>You are responsible for managing staff access and permissions within your account</li>
+        </ul>
+
+        <p>
+          We reserve the right to suspend or terminate accounts that present
+          security, legal, operational, or financial risk.
+        </p>
+
+        <h3>5. User Responsibilities</h3>
 
         <h4>Providers</h4>
+
         <ul>
-          <li>Must comply with Michigan licensing requirements (LARA)</li>
-          <li>Are responsible for accuracy of all data entered</li>
-          <li>Are responsible for maintaining proper records</li>
+          <li>Must comply with all applicable childcare laws, regulations, and agency requirements</li>
+          <li>Remain solely responsible for maintaining legally required records</li>
+          <li>Remain solely responsible for all reimbursement submissions and reporting</li>
+          <li>Must independently verify all information generated by the Service</li>
+          <li>Are responsible for the accuracy, legality, and completeness of all uploaded or entered data</li>
+          <li>Are responsible for maintaining any legally required backups or copies of records</li>
+          <li>Are responsible for ensuring staff access permissions are appropriate</li>
         </ul>
 
-        <h4>Parents/Guardians</h4>
+        <h4>Parents and Guardians</h4>
+
         <ul>
           <li>Must provide accurate information about themselves and their children</li>
-          <li>Are responsible for payment obligations</li>
+          <li>Are responsible for payment obligations owed to providers</li>
         </ul>
 
-        <h3>8. Tax Disclaimer</h3>
+        <h3>6. Child and Sensitive Data</h3>
+
         <p>
-          The Service provides tools to assist with financial tracking and Time/Space ratio calculations.
-          We are not a tax advisor and do not provide tax, legal, or accounting advice.
-        </p>
-        <p>
-          You should consult a qualified tax professional for guidance.
+          Providers may upload or store information relating to children,
+          caregivers, attendance, health-related notes, licensing records,
+          training records, and related business records.
         </p>
 
-        <h3>9. Acceptable Use</h3>
-        <p>You agree not to:</p>
+        <p>
+          You represent and warrant that you have all necessary rights,
+          permissions, notices, and consents required to collect, upload,
+          process, store, and share any data submitted to the Service.
+        </p>
+
+        <p>
+          You acknowledge that you, and not MI Little Care, are responsible for
+          determining what information you upload and whether such uploads comply
+          with applicable privacy, childcare, educational, health, or data
+          protection laws.
+        </p>
+
+        <p>
+          MI Little Care is not responsible for verifying parental consent,
+          mandated reporting compliance, licensing compliance, or the legality of
+          records maintained by providers.
+        </p>
+
+        <h3>7. Subscription and Billing</h3>
+
         <ul>
-          <li>Use the Service for illegal purposes</li>
-          <li>Commit fraud or misrepresentation</li>
-          <li>Attempt to access unauthorized data</li>
-          <li>Interfere with system security or operations</li>
+          <li>Subscription cost: {SUBSCRIPTION_PRICE_DISPLAY}/month unless otherwise agreed in writing</li>
+          <li>Free trial: 30 days (or 90 days for eligible early users)</li>
+          <li>Subscriptions automatically renew until canceled</li>
+          <li>No refunds or prorated refunds for partial billing periods</li>
+          <li>Access continues through the end of the current paid billing period after cancellation</li>
+          <li>We may modify pricing, plans, or features with reasonable notice</li>
         </ul>
 
-        <h3>10. Suspension and Termination</h3>
         <p>
-          We may suspend or terminate access if:
+          You authorize recurring charges to your selected payment method until
+          cancellation.
         </p>
+
+        <h3>8. Payments and Third-Party Services</h3>
+
+        <p>
+          Payments are processed through third-party providers including Stripe.
+          We do not directly store full payment card information.
+        </p>
+
+        <p>
+          The Service may rely on third-party infrastructure and services,
+          including hosting, email delivery, payment processing, authentication,
+          analytics, and cloud storage providers.
+        </p>
+
+        <p>
+          We are not responsible for failures, outages, delays, inaccuracies,
+          security incidents, or interruptions caused by third-party providers.
+        </p>
+
+        <h3>9. Regulatory and Third-Party Information Disclaimer</h3>
+
+        <p>
+          The Service may display or reference information derived from
+          third-party sources, including Michigan agencies, reimbursement
+          schedules, licensing rules, training records, and regulatory guidance.
+        </p>
+
+        <p>
+          Such information may change without notice and may contain errors,
+          omissions, delays, inaccuracies, or outdated content.
+        </p>
+
+        <p>
+          You are solely responsible for independently verifying all regulatory,
+          reimbursement, licensing, attendance, training, and compliance-related
+          information before relying on it.
+        </p>
+
+        <h3>10. Acceptable Use</h3>
+
+        <p>You agree not to:</p>
+
+        <ul>
+          <li>Use the Service for unlawful purposes</li>
+          <li>Commit fraud, misrepresentation, or reimbursement abuse</li>
+          <li>Upload unlawful, infringing, or unauthorized data</li>
+          <li>Attempt to access unauthorized systems or data</li>
+          <li>Interfere with system operations or security</li>
+          <li>Reverse engineer or misuse the Service</li>
+        </ul>
+
+        <h3>11. Data, Retention, and Availability</h3>
+
+        <p>
+          Providers remain solely responsible for maintaining all legally
+          required records and backups.
+        </p>
+
+        <p>
+          While we implement reasonable administrative and technical measures,
+          no software platform or internet transmission can be guaranteed fully
+          secure, uninterrupted, or error-free.
+        </p>
+
+        <p>
+          We do not guarantee:
+        </p>
+
+        <ul>
+          <li>Continuous availability of the Service</li>
+          <li>Error-free operation</li>
+          <li>Permanent retention of uploaded records</li>
+          <li>Recovery of deleted or corrupted data</li>
+          <li>Compatibility with all devices or browsers</li>
+        </ul>
+
+        <p>
+          We reserve the right to modify, suspend, discontinue, or remove
+          features at any time.
+        </p>
+
+        <h3>12. Suspension and Termination</h3>
+
+        <p>
+          We may suspend or terminate access immediately if:
+        </p>
+
         <ul>
           <li>You violate these Terms</li>
-          <li>You engage in fraud or abuse</li>
-          <li>Your use poses legal or operational risk</li>
+          <li>You create legal, operational, financial, or security risk</li>
+          <li>You misuse the Service</li>
+          <li>We are required to do so by law or third-party providers</li>
         </ul>
 
-        <h3>11. Data and Records</h3>
         <p>
-          Providers retain responsibility for maintaining required childcare and financial records.
-          We are not responsible for data loss due to user error or external system failures.
+          Upon termination, your right to use the Service ends immediately.
         </p>
 
-        <h3>12. Disclaimer of Warranties</h3>
+        <h3>13. Intellectual Property</h3>
+
         <p>
-          The Service is provided "as is" and "as available" without warranties of any kind.
-          We do not guarantee uninterrupted or error-free operation.
+          The Service, including its software, branding, content, design,
+          workflows, dashboards, graphics, and functionality, is owned by MI
+          Little Care and protected by intellectual property laws.
         </p>
 
-        <h3>13. Limitation of Liability</h3>
         <p>
-          To the fullest extent permitted by law:
+          Except for limited access rights necessary to use the Service, no
+          rights are granted to you.
         </p>
+
+        <h3>14. Disclaimer of Warranties</h3>
+
+        <p>
+          THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES
+          OF ANY KIND, EXPRESS OR IMPLIED.
+        </p>
+
+        <p>
+          TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE DISCLAIM ALL IMPLIED
+          WARRANTIES, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+          PARTICULAR PURPOSE, NON-INFRINGEMENT, ACCURACY, RELIABILITY, AND
+          AVAILABILITY.
+        </p>
+
+        <p>
+          WE DO NOT WARRANT THAT:
+        </p>
+
         <ul>
-          <li>We are not liable for indirect, incidental, or consequential damages</li>
-          <li>Total liability is limited to the amount paid by you in the last 12 months</li>
+          <li>The Service will be uninterrupted or error-free</li>
+          <li>The Service will meet all regulatory requirements</li>
+          <li>The Service will prevent compliance violations</li>
+          <li>The Service will guarantee reimbursement outcomes</li>
+          <li>The Service will guarantee successful audits or inspections</li>
         </ul>
 
-        <h3>14. Indemnification</h3>
+        <h3>15. Limitation of Liability</h3>
+
         <p>
-          You agree to indemnify and hold harmless MI Little Care from claims arising out of your use of the Service or violation of these Terms.
+          TO THE MAXIMUM EXTENT PERMITTED BY LAW:
         </p>
 
-        <h3>15. Governing Law</h3>
+        <ul>
+          <li>WE ARE NOT LIABLE FOR INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES</li>
+          <li>WE ARE NOT LIABLE FOR LOST PROFITS, LOST REVENUE, LOST DATA, LOST REIMBURSEMENTS, LICENSING ACTIONS, AUDIT OUTCOMES, PENALTIES, FINES, OR BUSINESS INTERRUPTION</li>
+          <li>WE ARE NOT LIABLE FOR THIRD-PARTY ACTIONS OR AGENCY DECISIONS</li>
+          <li>WE ARE NOT LIABLE FOR USER DATA ERRORS OR FAILURE TO MAINTAIN REQUIRED RECORDS</li>
+        </ul>
+
         <p>
-          These Terms are governed by the laws of the State of Michigan, without regard to conflict of law principles.
+          OUR TOTAL LIABILITY FOR ANY CLAIM RELATING TO THE SERVICE SHALL NOT
+          EXCEED THE GREATER OF:
         </p>
 
-        <h3>16. Changes to Terms</h3>
+        <ul>
+          <li>The amount paid by you to us during the previous 12 months, or</li>
+          <li>$100 USD</li>
+        </ul>
+
+        <h3>16. Indemnification</h3>
+
         <p>
-          We may update these Terms periodically. Continued use of the Service constitutes acceptance of the updated Terms.
+          You agree to defend, indemnify, and hold harmless MI Little Care,
+          Seth Dominique, affiliates, contractors, and service providers from
+          and against any claims, damages, liabilities, losses, penalties,
+          investigations, costs, and expenses arising out of or relating to:
         </p>
 
-        <h3>17. Contact</h3>
+        <ul>
+          <li>Your use of the Service</li>
+          <li>Your violation of these Terms</li>
+          <li>Your violation of laws or regulations</li>
+          <li>Your uploaded data or records</li>
+          <li>Parent, reimbursement, licensing, or employment disputes</li>
+          <li>Your failure to obtain required permissions or consents</li>
+        </ul>
+
+        <h3>17. Governing Law and Dispute Resolution</h3>
+
         <p>
-          Email: <a href="mailto:smdominique@gmail.com">smdominique@gmail.com</a>
+          These Terms are governed by the laws of the State of Michigan,
+          excluding conflict-of-law rules.
+        </p>
+
+        <p>
+          Any dispute arising out of or relating to the Service or these Terms
+          shall be resolved exclusively in the state or federal courts located
+          in Michigan, and you consent to the personal jurisdiction of those
+          courts.
+        </p>
+
+        <p>
+          You waive any right to participate in class actions or class-wide
+          proceedings.
+        </p>
+
+        <h3>18. Force Majeure</h3>
+
+        <p>
+          We are not liable for delays or failures caused by events beyond our
+          reasonable control, including internet outages, infrastructure
+          failures, cyberattacks, labor disputes, acts of government, natural
+          disasters, or third-party service interruptions.
+        </p>
+
+        <h3>19. Miscellaneous</h3>
+
+        <ul>
+          <li>If any provision of these Terms is found unenforceable, the remaining provisions remain in effect</li>
+          <li>Our failure to enforce any provision is not a waiver of future enforcement</li>
+          <li>These Terms constitute the entire agreement between you and MI Little Care regarding the Service</li>
+          <li>You may not assign these Terms without our written consent</li>
+        </ul>
+
+        <h3>20. Changes to Terms</h3>
+
+        <p>
+          We may update these Terms periodically. Continued use of the Service
+          after updated Terms become effective constitutes acceptance of the
+          revised Terms.
+        </p>
+
+        <h3>21. Contact</h3>
+
+        <p>
+          Email:{' '}
+          <a href="mailto:smdominique@gmail.com">
+            smdominique@gmail.com
+          </a>
         </p>
       </section>
 
@@ -182,6 +435,7 @@ export default function TermsPage() {
           margin: 8px 0 24px;
           color: #1e2620;
         }
+
         .legal-content h3 {
           font-family: Georgia, 'Times New Roman', serif;
           font-size: 1.25rem;
@@ -190,24 +444,29 @@ export default function TermsPage() {
           color: #1e2620;
           letter-spacing: -0.01em;
         }
+
         .legal-content h4 {
           font-size: 1rem;
           font-weight: 600;
           margin: 20px 0 8px;
           color: #3e4639;
         }
+
         .legal-content p {
           margin: 12px 0;
           color: #3e4639;
         }
+
         .legal-content ul {
           margin: 8px 0 16px;
           padding-left: 24px;
           color: #3e4639;
         }
+
         .legal-content li {
           margin: 4px 0;
         }
+
         .legal-content a {
           color: #3e5849;
           text-decoration: underline;
@@ -216,3 +475,5 @@ export default function TermsPage() {
     </div>
   )
 }
+
+
