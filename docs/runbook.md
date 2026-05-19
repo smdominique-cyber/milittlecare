@@ -263,3 +263,100 @@ Rollback: uncomment the `DOWN MIGRATION` block at the foot of
 exists onboarding_state;`. Dropping the column discards any wizard
 bookkeeping written since application; the canonical answer columns
 (`profiles.*`, `program_settings.*`) are unaffected.
+
+### 2026-05-18 — Migration 012: staff training tracking schema — PENDING PRODUCTION APPLICATION
+
+> ⚠️ **Status: PENDING PRODUCTION APPLICATION.** Ships on branch
+> `docs/staff-training-tracking-spec` (PR #8); **not yet applied**. Apply
+> per the Migration Application Procedure above — including the
+> user-visible dashboard verification convention (`CLAUDE.md` § Critical
+> Domain Knowledge: the user runs the verification queries in the Supabase
+> web SQL Editor and saves a screenshot). This entry is completed with the
+> actual verification output at application time; the numbers below are
+> *expected*, not confirmed.
+
+What the migration does — `012_staff_training.sql` creates the operational
+schema for staff training tracking (PR #8), verified against Michigan
+Administrative Code R 400.1901–1963 (MiLEAP):
+
+- 4 enums — `regulatory_role`, `staff_training_category`,
+  `miregistry_status`, `background_check_status`.
+- `caregivers` — the licensee's regulatory roster; a row may or may not be
+  linked to an auth user (`app_user_id`).
+- `caregiver_regulatory_roles` — many-to-many caregiver → regulatory role;
+  driver-only attributes CHECK-scoped to driver rows.
+- `staff_training_records` — the per-caregiver training log, keyed on
+  `caregiver_id`; two status enum columns gated by a CHECK to their
+  categories; soft delete via `archived_at`.
+- `health_safety_updates` — per-licensee R 400.1924(11) notices.
+- 6 indexes, 3 `set_updated_at` triggers, provider-scoped RLS on all 4
+  tables.
+
+Dependencies — sequential after migration 011; no data dependency on any
+prior migration. References `auth.users` and the migration-001
+`set_updated_at()` function. `public.staff_memberships` is left untouched.
+
+Editor note — `012` is **all DDL, no long seed INSERT**, so the web SQL
+Editor long-statement bug (operational note above) does not apply; it can
+be pasted and run as a whole file or statement by statement.
+
+Expected verification (run by the user in the Supabase web SQL Editor at
+application time, then recorded here):
+
+1. **Tables exist** — `information_schema.tables` returns `caregivers`,
+   `caregiver_regulatory_roles`, `staff_training_records`,
+   `health_safety_updates` in schema `public` (4 rows).
+2. **Enums exist** — `select typname from pg_type where typname in
+   ('regulatory_role','staff_training_category','miregistry_status',
+   'background_check_status');` → 4 rows.
+3. **RLS enabled** — `pg_tables.rowsecurity = true` for all 4 tables;
+   `pg_policies` lists the select/insert/update policies (plus the
+   `caregiver_regulatory_roles` delete policy).
+4. **Empty** — each new table returns 0 rows (`012` seeds nothing).
+
+Rollback — uncomment the `DOWN MIGRATION` block at the foot of
+`012_staff_training.sql` (drop the 4 tables in reverse-dependency order,
+then the 4 enums). The tables hold no data until the app writes to them.
+
+### 2026-05-18 — Migration 013: training requirements catalog — PENDING PRODUCTION APPLICATION
+
+> ⚠️ **Status: PENDING PRODUCTION APPLICATION.** Ships on branch
+> `docs/staff-training-tracking-spec` (PR #8); **not yet applied**. Apply
+> **after migration 012** (it uses 012's enums). Same dashboard
+> verification convention as above; the numbers below are *expected*.
+
+What the migration does — `013_training_requirements.sql` creates the
+verified MiLEAP training requirement catalog (PR #8) — reference data,
+structurally like `cdc_pay_period_catalog` (migration 010):
+
+- 2 enums — `requirement_cadence`, `requirement_condition`.
+- `training_requirements` — one row per (training category, regulatory
+  role) requirement, each carrying its `R 400.19xx` citation.
+- 1 index; SELECT-only RLS for `authenticated` (no write policies — the
+  catalog is migration-seeded, like `cdc_pay_period_catalog`).
+- Seeds **28 rows** — every ✔ cell of the spec § 6.2 matrix.
+
+Dependencies — must be applied **after migration 012** (uses the
+`staff_training_category` and `regulatory_role` enums created in 012).
+
+Editor note — the seed is split into **6 short INSERT statements (≤ 6 rows
+each)**, one per training category, to stay clear of the web SQL Editor
+long-statement bug (operational note above).
+
+Expected verification (run by the user in the Supabase web SQL Editor):
+
+1. **Table + enums exist** — `training_requirements` in
+   `information_schema.tables`; `requirement_cadence` and
+   `requirement_condition` in `pg_type`.
+2. **Row count** — `select count(*) from public.training_requirements;`
+   → expected **28**.
+3. **Breakdown by role** — `select regulatory_role, count(*) from
+   public.training_requirements group by regulatory_role order by 1;`
+   Expected: `child_care_assistant` 6, `child_care_staff_member` 6,
+   `driver` 4, `licensee` 6, `supervised_volunteer` 1,
+   `unsupervised_volunteer` 5.
+4. **RLS** — row level security enabled, exactly one policy
+   (`cmd = SELECT`, `roles = {authenticated}`), no write policies.
+
+Rollback — uncomment the `DOWN MIGRATION` block at the foot of
+`013_training_requirements.sql` (drop the table, then the 2 enums).
