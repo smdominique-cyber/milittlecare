@@ -424,6 +424,20 @@ modules.add(MODULE_KEYS.STAFF_TRAINING)`. This is a small, additive change
 to `getActiveModules`, covered by new unit tests — unlike PR #6, this PR
 *does* touch `modules.js`.
 
+**Staff activation.** That rule activates the module for the *licensee*.
+A staff member of a licensed home carries no license status on their own
+`profiles` row, so `is_license_exempt` cannot gate them in. The signal
+instead is **regulatory-roster membership**: a staff member sees Staff
+Training (their own log only, § 3.1 surface 2) once they appear on a
+licensee's roster — a `caregivers` row linked to them by `app_user_id`
+and owned by a *different* licensee (`licensee_id <> app_user_id`, which
+excludes the licensee's own self-row, § 4.1). `getActiveModules` takes a
+second input, `isTrackedStaffCaregiver`, for this; `useActiveModules`
+resolves it with one `caregivers` lookup. This keeps V1 licensee-driven
+(§ 9 OQ16) — the staff self-view unlocks exactly when the licensee adds
+the person to the roster. `view_only` users are never caregivers, so the
+roster lookup naturally excludes them (§ 4.4).
+
 ### 5.2 Relationship to the MiRegistry tracker
 
 The MiRegistry tracker (`MIREGISTRY_TRACKER`) and Staff Training **coexist
