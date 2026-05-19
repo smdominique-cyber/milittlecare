@@ -1,8 +1,10 @@
 # MILittleCare: Staff Training Tracking for Licensed Providers Spec
 
-**Status:** Draft for PR #8. Open questions in § 9 — recommendations given,
-not yet resolved. Several § 7 reference values are explicitly **unconfirmed**
-and must not be implemented as fact.
+**Status:** Reconciled for PR #8 (2026-05-18). § 9 decisions recorded;
+OQ7 / OQ13 / OQ14 / OQ15 resolved against the verified requirements in
+`docs/reference/staff_training_tracking_spec.md` (Michigan Administrative
+Code R 400.1901–1963, MiLEAP, effective 2026-04-27). OQ12 (license-exempt
+providers with helpers) remains the only flagged regulatory unknown.
 **Goal:** Give a *licensed* provider one place to track training compliance
 for every caregiver working under their license — themselves, co-providers,
 and assistants — and to see, at a glance, who is missing what.
@@ -12,14 +14,15 @@ This spec mirrors `docs/miregistry_tracker_spec.md` and
 `docs/tech_debt.md` § "Staff training tracking for licensed providers is
 unmodeled", surfaced 2026-05-15 by Seth.
 
-> **Regulatory caution.** MILittleCare's repo contains the *License-Exempt*
-> Scholarship Handbook (MDHHS / CDC) — **not** the licensed-home rules.
-> Specific training requirements for Michigan licensed Family and Group
-> Child Care Homes (hours, deadlines, curricula, role applicability) are
-> **not verified in this draft.** Where a specific is needed it is written
-> as "[TBD — regulatory confirmation]" and raised in § 9. Per the build
-> discipline for a regulatory product: an unsourced "the state requires X"
-> is dangerous misinformation and is not written here.
+> **Regulatory basis.** The training requirements in this spec are verified
+> against `docs/reference/staff_training_tracking_spec.md` — the Michigan
+> Administrative Code **R 400.1901–1963**, *Licensing Family and Group Child
+> Care Homes*, administered by **MiLEAP** (Department of Lifelong Education,
+> Advancement, and Potential), Child Care Licensing Bureau, effective
+> **April 27, 2026**. Every requirement, deadline, and role restriction in
+> §§ 2, 6, 7 carries its `R 400.19xx` citation. The build discipline still
+> holds: any behaviour not traceable to that rule text is flagged in § 7.3,
+> not invented.
 
 ---
 
@@ -44,25 +47,33 @@ own training" cannot serve a licensed provider at all.
 
 ### 1.2 Regulatory stakes
 
-Licensed child care in Michigan is governed by licensing rules administered
-by a state body — **referred to here as "LARA"** (see § 9, OQ15: the
-administering department should be confirmed; Michigan reorganized
-early-childhood functions into the new MiLEAP department in 2023–2024 and
-child care licensing may now sit there rather than under LARA proper).
+Licensed child care in Michigan is governed by **Michigan Administrative
+Code R 400.1901–1963**, administered by **MiLEAP** (Department of Lifelong
+Education, Advancement, and Potential), Child Care Licensing Bureau,
+effective April 27, 2026. The administering agency is confirmed (OQ15
+resolved); MiLEAP — not LARA — is used in all user-facing copy.
 
-What is reasonably certain — the *categories* of caregiver training a
-licensed home must maintain (the specifics of each are § 7 / OQ material):
+The training categories a licensed home must maintain, each verified
+against the adopted rule text (see § 2.3, § 6, § 7):
 
-- **Initial orientation** — a licensing-specific curriculum required before
-  or shortly after a caregiver begins. This is **not** the CDC LEPPT;
-  license-exempt LEPPT does not satisfy a licensed home's orientation rule.
-- **CPR / First Aid** — required for caregivers; a **certification that
-  expires** (typically a fixed term from the issue date), unlike a
-  calendar-deadline obligation.
-- **Annual ongoing health & safety training** — a recurring requirement on
-  a cycle that is **distinct from MiRegistry's December 16 CDC deadline**.
-- **Activity-specific training** — e.g. food handling where the home
-  prepares meals; possibly medication administration, water safety, etc.
+- **New hire training** — the home's own curriculum, 14 mandated topics,
+  completed within 90 days of being present and before unsupervised care
+  (R 400.1923). This is **not** the CDC LEPPT.
+- **CPR / pediatric first aid** — required for the licensee and caregivers;
+  a **certification that expires** on the date printed on the certification
+  card (R 400.1920(3), R 400.1921(3), R 400.1924(8)).
+- **Professional development** — a recurring per-**calendar-year** clock-hour
+  requirement that varies by role (R 400.1924); **distinct from
+  MiRegistry's December 16 CDC deadline**.
+- **Health & safety update acknowledgements** — event-driven: when MiLEAP
+  publishes an update notice, applicable personnel and unsupervised
+  volunteers must read/complete it within the notice's stated timeframe
+  (R 400.1924(11)).
+- **MiRegistry account & membership** — every staff member must hold a
+  MiRegistry account with non-expired membership status and a verified
+  employment entry within 30 days of employment (R 400.1922).
+- **Background-check eligibility** — an eligibility determination before
+  unsupervised contact with children (R 400.1919, R 400.1903(1)(r)).
 
 Consequences of gaps are real: licensing violations, citations on the
 public license record, conditions on renewal, and in serious cases
@@ -135,17 +146,17 @@ immediately or after an approval step* — which are real and deferred to
 
 ### 2.3 New table: `staff_training_records`
 
-LARA training is a **different regime** from MiRegistry CDC training and
-gets its **own table** — not a polymorphic extension of
+MiLEAP licensed-home training is a **different regime** from MiRegistry CDC
+training and gets its **own table** — not a polymorphic extension of
 `miregistry_training_entries` (OQ1). Reasons:
 
 - The MiRegistry `source` enum is CDC-specific (`leppt`, `annual_ongoing`
   meaning the Dec-16 refresher, `level_2_approved`). None map cleanly to
-  LARA categories.
-- LARA records need an **`expires_on`** date (CPR/First Aid expires);
+  the MiLEAP licensed-home categories.
+- These records need an **`expires_on`** date (CPR / first aid expires);
   MiRegistry entries never expire. Polymorphism would mean columns that are
   meaningful in only one regime.
-- RLS differs: MiRegistry entries are strictly owner-only; LARA records
+- RLS differs: MiRegistry entries are strictly owner-only; these records
   must be **readable by the licensee** of the person's active membership
   (Model B). Different policy shapes on one table is avoidable complexity.
 
@@ -159,11 +170,13 @@ at (handles multi-home staff naturally, OQ8).
 --  free sequential number.)
 
 create type public.staff_training_category as enum (
-  'initial_orientation',   -- LARA licensing orientation curriculum (NOT LEPPT)
-  'cpr_first_aid',         -- expiring certification
-  'annual_health_safety',  -- recurring LARA ongoing training
-  'food_handling',         -- activity-specific (home prepares meals)
-  'other'                  -- anything the provider wants on record
+  'new_hire_training',                    -- R 400.1923 — 14 mandated topics, 90-day deadline
+  'cpr_first_aid',                        -- R 400.1920(3) / 1921(3) — expiring certification
+  'professional_development',             -- R 400.1924 — per-calendar-year clock hours, by role
+  'health_safety_update_acknowledgement', -- R 400.1924(11) — event-driven MiLEAP-notice acknowledgement
+  'miregistry_account',                   -- R 400.1922 — account + non-expired membership + employment entry
+  'background_check_eligibility',         -- R 400.1919 / 1903(1)(r) — eligibility before unsupervised contact
+  'other'                                 -- anything the provider wants on record
 );
 
 create table public.staff_training_records (
@@ -204,25 +217,35 @@ licensee read path:
 - A user may **select** records whose `user_id` belongs to a person with an
   **active `staff_memberships` row pointing at the calling user** as
   `licensee_id`. This is the Model B oversight read.
-- Whether a licensee may also **insert/update** on a staff member's behalf
-  depends on OQ4 — V1 RLS should be written for the chosen answer, not
-  both.
+- Per § 9 decision 4, a licensee may also **insert/update** on the records
+  of a staff member with an active `staff_memberships` row pointing at the
+  licensee — `entered_by` records who entered each row.
+
+Two of the enum categories — `miregistry_account` and
+`background_check_eligibility` — are **status-bearing** rather than simple
+completion records (a MiRegistry membership has a status and an expiry; a
+background check has an eligibility determination). `staff_training_records`
+as drawn above has no `status` column; whether these categories carry a
+status via a new column, via `notes`, or via a separate per-person shape is
+a data-model decision deferred to the implementation plan. The
+MiRegistry-membership field model is specified in § 7.1.
 
 ### 2.4 Requirement catalog — reference data
 
 "Who needs which training, how often, with what expiration" is **reference
-data**, structurally like `cdc_pay_period_catalog` (PR #6). But unlike the
-CDC pay schedule — which is published and transcribable — the LARA
-requirement values are **not confirmed** (§ 7). Recommendation:
+data**, structurally like `cdc_pay_period_catalog` (PR #6). Unlike earlier
+drafts, the requirement values are now **verified** — transcribed from
+R 400.1901–1963 in `docs/reference/staff_training_tracking_spec.md`.
 
-- **V1 ships the *engine*, not unverified values.** A
-  `lara_training_requirements` catalog (table or seeded JS constant — OQ9)
-  defines, per `(category, role)`: required? / frequency / expiration term.
-- Until the values are regulatory-confirmed, the catalog is seeded with a
-  clearly-marked **placeholder** set and the "compliant? / overdue?"
-  rollup is **gated** behind a confirmed-data flag (§ 7.3). Expiration
-  tracking for CPR/First Aid works *without* the catalog — an `expires_on`
-  date is self-contained.
+- A `training_requirements` catalog — a **seeded table** (§ 9 decision 9),
+  not a JS constant — defines, per `(category, role)`: required? /
+  frequency / clock-hours / expiration model, each row carrying its
+  `R 400.19xx` citation.
+- The catalog is seeded with the **confirmed** values from § 6 / § 7 — no
+  longer a placeholder. The "compliant? / overdue?" rollup renders as
+  authoritative for the categories the rules address.
+- Expiration tracking for CPR / first aid works *without* the catalog — an
+  `expires_on` date is self-contained.
 
 ### 2.5 Derived state (computed in app code)
 
@@ -237,6 +260,23 @@ Pure functions in `src/lib/staffTraining.js` (Vitest-tested, the pattern of
   "needs attention" list.
 
 These do not depend on a database; the requirement set is passed in.
+
+### 2.6 Record retention
+
+R 400.1906(2): staff and driver records "must be retained for the duration
+of the individual's employment and a minimum of 2 years after the
+individual has left the employment of the licensee." Staff training records
+therefore follow a **retain-while-employed + 2-years-after-termination**
+policy.
+
+Records are **never hard-deleted** (`archived_at` soft-delete, § 2.3); a
+former staff member's records persist and move to the "archived caregivers"
+section of the dashboard (§ 9 decision 7). No automatic purge ships in V1 —
+2 years is the regulatory floor, and a purge feature is out of V1 scope.
+This 2-year figure is the rule-specific retention for staff and driver
+files under R 400.1906(2); it is narrower than the general 4-year
+audit-retention guidance in `CLAUDE.md`, which governs funding and
+attendance records — a different record class.
 
 ---
 
@@ -284,19 +324,19 @@ column per training category, each cell a status.
 │  ✓ on record   ⚠ expiring ≤ 60 days   ✗ expired/overdue           │
 │  — not on record   n/a not required for this role                 │
 │                                                                    │
-│  ⓘ Requirement rules shown here are placeholders pending           │
-│     confirmation of Michigan licensing rules — see your licensing  │
-│     consultant. Expiration dates you enter are always accurate.    │
+│  ⓘ Requirement rules are verified against MiLEAP rules             │
+│     R 400.1901–1963. A cell marked n/a is a role the adopted        │
+│     rules do not address. Expiration dates you enter are exact.    │
 │                                                                    │
 │  [ View a caregiver's full log ]      [ Add a training record ]    │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-The `ⓘ` disclaimer is **load-bearing** while § 7 values are unconfirmed:
-the grid must not imply MILittleCare authoritatively knows the rules. Cells
-driven only by an entered `expires_on` (CPR) are trustworthy; cells driven
-by the requirement catalog ("orientation required for assistants?") carry
-the disclaimer until § 7.3 is satisfied.
+The `ⓘ` note records the regulatory basis: the requirement rules are
+verified against MiLEAP R 400.1901–1963 (§ 7.1). Cells driven by an entered
+`expires_on` (CPR / first aid) are exact; cells driven by the requirement
+catalog are authoritative for every role the rules address, and render
+**n/a** for the roles § 7.3 records the adopted rules as silent on.
 
 ### 3.3 Per-staff training log (ASCII mock)
 
@@ -335,9 +375,9 @@ pattern. Inline help per category. Validation: `completed_on` ≤ today;
   that their own training is tracked here too.
 - **Staff member, nothing logged** — empty log with a "start with your most
   recent" prompt (the PR #4 pattern).
-- **Requirement catalog unconfirmed** — the rollup columns render in a
-  visibly provisional style with the § 3.2 disclaimer; expiration tracking
-  is unaffected.
+- **Roles the rules are silent on** — where § 7.3 records the adopted rules
+  as silent for a role/category, that cell renders **n/a**, not as a gap;
+  expiration tracking is unaffected.
 
 ---
 
@@ -414,8 +454,8 @@ but address different regimes**:
 - `MIREGISTRY_TRACKER` — MDHHS / CDC, license-exempt, the December 16
   deadline, Level 1/2 pay. Activates on `miregistry_id` or
   `is_license_exempt === true`.
-- `STAFF_TRAINING` — LARA, licensed, multi-person, expiring certifications.
-  Activates on `is_license_exempt === false`.
+- `STAFF_TRAINING` — MiLEAP, licensed, multi-person, expiring
+  certifications. Activates on `is_license_exempt === false`.
 
 Because the two activation conditions are mutually exclusive on
 `is_license_exempt`, a provider sees **one or the other**, not both — which
@@ -436,79 +476,175 @@ the *licensed-home tracking UI* is Staff Training.
 
 ## 6. Role-Aware Training Requirements
 
-Different roles carry different obligations. The **structure** is a
-`(category × role) → requirement` matrix; the **values** are § 7 / OQ
-material and not asserted here.
+Different roles carry different obligations. The role × category matrix
+below is transcribed from R 400.1901–1963; OQ13 (the matrix) and OQ14
+(minor-assistant rules) are resolved.
 
-| Role (display) | Caregiver? | Training expectation (structure only) |
+### 6.1 Regulatory roles vs. app roles
+
+R 400.1901–1963 distinguishes six roles relevant to training. Two
+definitions govern who a requirement reaches:
+
+- **R 400.1901(1)(ff)** — *"'Personnel' means a licensee, child care staff
+  member, and child care assistant. It does not include therapeutic
+  professionals and independent service providers."*
+- **R 400.1901(1)(pp)** — *"'Staff' means personnel and unsupervised
+  volunteers."*
+
+So a rule addressed to "all staff" reaches the licensee, child care staff
+members, child care assistants, and unsupervised volunteers — but **not**
+supervised volunteers (explicitly not "staff") and **not** drivers (not
+"personnel").
+
+| Regulatory role | Age | Closest app `staff_memberships.role` |
 | --- | --- | --- |
-| `licensee` (Licensee) | Yes — operator **and** caregiver | The fullest set: caregiver training **plus** any operator/licensee-specific obligations. [Specifics TBD — OQ13] |
-| `adult_staff` (Co-Provider) | Yes — full caregiver | Full caregiver training set. [Specifics TBD] |
-| `assistant` (Daily Helper) | Yes — limited caregiver; may be 14–17 | A **subset**. Age matters: an assistant under 18 cannot administer medication (Michigan R 400.1918, already encoded in `useRole`'s `hasMedicationPermission`), and some training may be age- or supervision-gated. [Specifics TBD — OQ13, OQ14] |
-| `view_only` (View-only) | No | **None.** `view_only` exists for accountants / read-only access; they provide no care. Confirmed by the `useRole` permission map (no `log_attendance` / `log_incidents`). |
+| Licensee | adult | `licensee` |
+| Child care staff member | 16+ (R 400.1920(1)) | `adult_staff` |
+| Child care assistant | 14–15 (R 400.1921(1)) | `assistant` |
+| Unsupervised volunteer | — | *no app role yet* |
+| Supervised volunteer | — | *no app role yet* |
+| Driver | — | *no app role yet* |
 
-What is safe to state now: **CPR/First Aid applies to everyone who provides
-care** (licensee + adult_staff + assistant) — broadly known and consistent
-with the task brief. **`view_only` requires nothing.** Everything more
-specific — which categories an assistant is exempt from, whether a minor
-assistant has a reduced set, the licensee's operator-only obligations — is
-**not confirmed** and is OQ13 / OQ14.
+The app's `staff_memberships.role` enum (`licensee` / `adult_staff` /
+`assistant` / `view_only`) does **not** map 1:1 to the six regulatory roles
+— a 16–17-year-old is a *child care staff member*, not a regulatory
+"assistant" (strictly 14–15) — and a person may hold more than one
+regulatory role (a staff member who also drives). V1 therefore needs a
+**many-to-many person → regulatory-role** assignment, not a single role
+field. That mapping and the role-assignment surface are a data-model item
+for the implementation plan.
 
-The requirement engine (§ 2.4) is built to take this matrix as data, so
-when the confirmed values arrive they are seeded, not coded.
+`view_only` users provide no care and carry **no** training obligations
+(confirmed by the `useRole` permission map — no `log_attendance` /
+`log_incidents`).
+
+### 6.2 Verified role × category matrix
+
+✔ = required (citation in the cell); — = the adopted rules are silent for
+that role (§ 7.3 — not asserted).
+
+| Category | Licensee | Staff member | Assistant | Unsup. volunteer | Sup. volunteer | Driver |
+| --- | --- | --- | --- | --- | --- | --- |
+| `cpr_first_aid` | ✔ R 400.1902(1)(d) | ✔ before care, R 400.1920(3) | ✔ ≤90 days of hire, R 400.1921(3) | — | — | — |
+| `new_hire_training` | ✔ R 400.1923(1) | ✔ R 400.1923(1) | ✔ R 400.1923(1) | ✔ R 400.1923(1) | — | only if ratio-counted, R 400.1951(10) |
+| `professional_development` | ✔ 10 hrs/yr, R 400.1924(1) | ✔ 5 hrs/yr, R 400.1924(2) | ✔ 5 hrs/yr, R 400.1924(2) | ✔ 1 hr/yr, R 400.1924(3) | — | ✔ 1 hr/yr, R 400.1924(4) |
+| `health_safety_update_acknowledgement` | ✔ R 400.1924(11) | ✔ R 400.1924(11) | ✔ R 400.1924(11) | ✔ R 400.1924(11) | — | only if ratio-counted, R 400.1951(10) |
+| `miregistry_account` | ✔ R 400.1922 | ✔ R 400.1922 | ✔ R 400.1922 | ✔ R 400.1922 | — | — |
+| `background_check_eligibility` | ✔ R 400.1919(1)(a) | ✔ R 400.1919(1)(c) | ✔ registry clearance, R 400.1903(1)(r) | ✔ R 400.1919(1)(d) | ✔ registry clearance, R 400.1903(1)(r) | ✔ if unsupervised access or ratio-counted, R 400.1951(4) |
+
+Matrix notes:
+
+- `new_hire_training`, `professional_development`,
+  `health_safety_update_acknowledgement`, and `miregistry_account` reach
+  the licensee, staff members, and assistants because each is "staff" /
+  "personnel" (R 400.1901(1)(ff), (pp)). The assistant's
+  professional-development figure is the 5-hour "personnel, not the
+  licensee" amount (R 400.1924(2)) — the assistant is "personnel."
+- CPR / first aid is **not** stated by the adopted rules for volunteers or
+  drivers — those cells are "—", not asserted.
+- The **driver** column reflects R 400.1951: a ratio-counted driver
+  complies with R 400.1923 and R 400.1924 — and *only* those two
+  (R 400.1951(10) names exactly those rules). It does **not** pull in
+  R 400.1922, so `miregistry_account` is "—" for a driver unless they
+  independently hold a staff role (§ 6.3 rollup handles that case).
+- A driver's `background_check_eligibility` is conditional under
+  **R 400.1951(4)**: a comprehensive background check and eligibility
+  determination are required for a driver who **either** has unsupervised
+  access to children **or** is counted in child-to-staff ratios — two
+  independent triggers, either one sufficient. A driver with neither is not
+  subject to it.
+- Adult household members are subject to background-check eligibility
+  (R 400.1919(1)(b)) but are not a tracked caregiver role on the roster.
+- The child care assistant also carries non-training restrictions —
+  directly supervised at all times (R 400.1921(4)), no substituting for
+  staff (R 400.1921(6)), no driving children (R 400.1921(7)), no
+  administering medication (R 400.1931(1)). These bound the role but are
+  not training records.
+
+### 6.3 Multi-role rollup
+
+A person may hold several regulatory roles. The compliance engine treats
+roles as **many-to-many** and rolls up **strictest-wins per category**: if
+any of a person's roles requires a category, the person must satisfy it, at
+the most stringent threshold among their roles (e.g. staff member 5 hrs +
+driver 1 hr → 5 hrs of `professional_development`).
+
+The rule-text basis is **R 400.1951(10)**: *"If the driver is counted in
+child to staff ratios, the driver shall comply with R 400.1923 and
+R 400.1924."* — a ratio-counted driver acquires the new-hire-training and
+professional-development obligations on top of the driver baseline. The
+engine generalises this: obligations accumulate across a person's roles.
+
+The requirement engine (§ 2.4) takes this matrix as seeded data, so a
+future rule change is a data update, not a code change.
 
 ---
 
-## 7. Reference Data — LARA Training Catalog
+## 7. Reference Data — MiLEAP Training Catalog
 
-### 7.1 What is knowable
+### 7.1 Verified source
 
-The **categories** in § 1.2 and the `staff_training_category` enum are a
-reasonable, conventional framing of licensed-home caregiver training and
-are safe to build the data model around. The **expiration model** for
-CPR/First Aid (a certification with a fixed-term expiry) is a property of
-those certifications themselves and is safe.
+The requirement values are verified in
+`docs/reference/staff_training_tracking_spec.md` — one row per requirement,
+quoted from R 400.1901–1963 with its citation. The § 2.3 enum and the § 6
+role × category matrix are built directly from it.
 
-### 7.2 What is NOT knowable from the repo or general knowledge
+**Deadlines / timeframes the catalog and engine must encode:**
 
-The repo has **no LARA licensed-home training reference document** — the
-`docs/reference/` handbook is the MDHHS *License-Exempt* Scholarship
-Handbook, a different regime. The following must come from Michigan's child
-care licensing rules (the R 400.1900-series administrative rules for Family
-and Group Child Care Homes) and/or a licensing consultant **before they are
-implemented as fact**:
+| Timeframe | Applies to | Citation |
+| --- | --- | --- |
+| Before caring for children | Staff member CPR + first aid | R 400.1920(3) |
+| Before unsupervised contact | Background-check eligibility | R 400.1919(1) |
+| Within 90 days of hire | Assistant CPR + first aid | R 400.1921(3) |
+| Within 90 days + before unsupervised care | New hire training | R 400.1923(1) |
+| Within 30 calendar days of employment | MiRegistry account + membership + employment entry | R 400.1922 |
+| Each calendar year | Professional development (10 / 5 / 1 / 1 clock hrs) | R 400.1924(1)–(4) |
+| Per certification-card expiry date | CPR + first aid renewal | R 400.1924(8) |
+| Timeframe stated on the MiLEAP notice | Health & safety update acknowledgement | R 400.1924(11) |
+| Employment + ≥2 years after termination | Record retention | R 400.1906(2) |
 
-| Unknown | Why it matters |
-| --- | --- |
-| Required **hours** per category | Drives "complete?" logic |
-| **Deadline / frequency** of annual ongoing H&S training | Drives the recurring-due calculation; explicitly *not* Dec 16 |
-| **CPR/First Aid term length** | Whether 1 or 2 years, pediatric-specific requirement |
-| Exact **orientation curriculum** name, length, timing (before vs within N days of starting) | Drives the orientation requirement |
-| **Role applicability** — which categories bind which roles, and any minor-assistant carve-outs | The § 6 matrix |
-| Whether **food handling** is mandatory only when meals are prepared on-site | Drives `n/a` cells |
-| **Record-retention period** LARA expects post-employment | OQ7 |
-| The **administering department** (LARA vs MiLEAP vs other) and current rule citations | OQ15 |
+**MiRegistry account & membership tracking (R 400.1922).** A staff
+member's MiRegistry standing is tracked as **three fields**, entered
+manually by the licensee — there is no MiRegistry API integration in V1:
 
-### 7.3 V1 posture toward unconfirmed data
+1. **MiRegistry ID** — already stored as `profiles.miregistry_id`.
+2. **Membership status** — one of MiRegistry's values: *Submitted*,
+   *Materials Received*, *Awaiting Print*, *Current*, *Expired*. The first
+   four satisfy R 400.1922(1)'s "non-expired ... membership status that
+   would include materials submitted, received, awaiting print, or
+   current"; *Expired* does not.
+3. **Membership expiry date** (`expires_on`).
 
-V1 must ship **honestly**:
+Whether those three live as columns on the person or as a status-bearing
+`miregistry_account` record in `staff_training_records` is a data-model
+decision for the implementation plan (§ 2.3).
 
-1. The **data model, entry, and expiration tracking** ship fully — these
-   do not depend on the unknowns. A provider can log records and the
-   feature will correctly flag an expired CPR card.
-2. The **requirement catalog** ships with a clearly-labelled **placeholder**
-   set. The compliance rollup ("required / overdue / n/a" cells) renders in
-   a provisional style with the § 3.2 disclaimer until a confirmed catalog
-   replaces the placeholder.
-3. No screen states "Michigan requires X" for any X that is not confirmed.
-4. Replacing placeholders with confirmed values is a **data update** (seed
-   migration or config change), not a code change — that is the point of
-   making the requirement set reference data (§ 2.4).
+### 7.2 The 2-year on-file → MiRegistry cutover
 
-This mirrors how `miregistry_tracker_spec.md` § 5.3 refused to compute a
-Level-2 progress bar it could not compute correctly: surfacing a confident
-wrong answer in a compliance product is worse than surfacing an honest
-"confirm this."
+R 400.1922(3), R 400.1923(4), R 400.1924(7), and R 400.1924(10) all pivot
+on **"2 years after the effective date of this rule."** The rule took
+effect **April 27, 2026**, so the cutover is **April 27, 2028**. Until
+then, training verification is maintained on file at the child care home;
+on and after that date, qualifications and professional development must be
+reflected as verified in MiRegistry, and all professional-development
+training must be MiRegistry-approved (R 400.1924(10)). The engine treats
+`2028-04-27` as a named constant.
+
+### 7.3 Remaining silences
+
+The adopted rules are **silent** — not "unconfirmed" — on one point. The
+§ 6.2 matrix marks it "—"; the implementation must not assert a requirement
+where the rule is silent:
+
+- CPR / first aid for unsupervised volunteers, supervised volunteers, and
+  drivers — R 400.1920 and R 400.1921 name only the licensee, child care
+  staff member, and child care assistant.
+
+This is a genuine gap in the rule text. If a provider's situation needs it
+resolved, confirm with the MiLEAP Child Care Licensing Bureau. It does not
+block V1 — it is simply not asserted, consistent with the build discipline:
+a confident wrong answer in a compliance product is worse than an honest
+"not specified."
 
 ---
 
@@ -532,13 +668,13 @@ Assessed against `docs/strategy.md` § "State modernization hedge" and the
 - **Expiration awareness** — CPR/First Aid countdowns, "expiring in N days"
   — is compliance intelligence. Durable.
 - **Inspection-readiness / audit-packet generation** — a one-click bundle
-  of a license's training records for a LARA renewal or complaint
+  of a license's training records for a MiLEAP renewal or complaint
   investigation. Durable, and high-value.
 
 ### State-mimicry to avoid
 
-- There is **no LARA portal to "submit" staff training to** — individuals
-  log training in MiRegistry; LARA *inspects*. So the temptation to
+- There is **no MiLEAP portal to "submit" staff training to** — individuals
+  log training in MiRegistry; MiLEAP *inspects*. So the temptation to
   replicate a submission UI mostly does not arise. Do not invent one.
 - If MiRegistry exposes an API, **importing** each caregiver's transcript
   is a V2 hook (`reference_code` is the seam) — that is durable
@@ -555,10 +691,12 @@ is the usual one: do not drift into "we file your licensing paperwork."
 
 ## 9. Decisions Recorded (2026-05-17)
 
-Resolved in spec review on 2026-05-17. Of the 16 questions raised in the
-draft § 9, twelve are resolved as decisions and four (OQ12–OQ15) remain
-flagged regulatory unknowns to verify before the affected § 7 values are
-implemented.
+Resolved in spec review on 2026-05-17, then reconciled on 2026-05-18
+against the verified requirements in
+`docs/reference/staff_training_tracking_spec.md` (R 400.1901–1963, MiLEAP).
+Of the 16 questions, **fifteen are now resolved**; only **OQ12**
+(license-exempt providers with helpers) remains a flagged regulatory
+unknown.
 
 1. **Separate `staff_training_records` table.** Approved. Staff training
    records live in their own table (§ 2.3), not polymorphically on
@@ -594,14 +732,14 @@ implemented.
    themselves a tracked caregiver, and the dashboard is where they add
    staff. "No staff" is simply an empty state.
 
-7. **Never hard-delete; archived caregivers section; retention TBD.**
-   Approved with one item still open. When a staff member leaves
-   (membership revoked) the record is never hard-deleted — it stays
-   person-owned and persists, and former staff move to an "archived
-   caregivers" section of the dashboard. The **exact retention period**,
-   and whether a departed person's licensee-visibility should eventually
-   end, remain regulatory unknowns (§ 7.2); confirm the retention period
-   before any purge logic is written.
+7. **Never hard-delete; archived caregivers section; 2-year retention.**
+   Resolved. When a staff member leaves (membership revoked) the record is
+   never hard-deleted — it stays person-owned and persists, and former
+   staff move to an "archived caregivers" section of the dashboard. The
+   retention period is now confirmed: **R 400.1906(2)** requires staff and
+   driver records to be kept "for the duration of the individual's
+   employment and a minimum of 2 years after the individual has left the
+   employment of the licensee" — see § 2.6. No automatic purge ships in V1.
 
 8. **Person-keyed records; licensees see all of a person's records in V1.**
    Approved. Records are keyed on `user_id`, so staff working at multiple
@@ -611,10 +749,10 @@ implemented.
    only if a provider objects.
 
 9. **Seeded catalog table for the requirement catalog.** Approved. The
-   requirement catalog is a seeded table (`lara_training_requirements`),
+   requirement catalog is a seeded table (`training_requirements`),
    parallel to `cdc_pay_period_catalog`, so confirmed values land as a data
    update rather than a deploy and can carry effective-dated rule changes.
-   A JS constant is not used, even for the first placeholder set.
+   A JS constant is not used.
 
 10. **New `STAFF_TRAINING` module key.** Approved. A new `STAFF_TRAINING`
     key keyed on `is_license_exempt === false` (§ 5.1), rather than reusing
@@ -634,23 +772,27 @@ implemented.
     regulatory unknown the repo cannot answer (§ 4.3). V1 serves licensed
     providers only; the question is flagged, not guessed.
 
-13. **Role × category requirement matrix — regulatory unknown.** *Flagged.*
-    The actual matrix must be filled from Michigan licensing rules or a
-    consultant (§ 6, § 7.2). V1 builds the engine and ships a labelled
-    placeholder (§ 7.3); the matrix is not invented.
+13. **Role × category requirement matrix.** Resolved. The matrix is built
+    in § 6.2 from R 400.1920, R 400.1921, R 400.1922, R 400.1923, and
+    R 400.1924, with the "personnel" / "staff" scope set by the definitions
+    in R 400.1901(1)(ff) and R 400.1901(1)(pp). Cells the adopted rules are
+    silent on are marked "—" (§ 7.3), not invented.
 
-14. **Minor (14–17) assistant rules — regulatory unknown.** *Flagged.*
-    Whether minor assistants have reduced or age-gated requirements is
-    unknown. The `is_18_or_older` flag on `staff_memberships` is available
-    to drive any age-conditional rule once the rule is confirmed.
+14. **Minor (14–15) assistant rules.** Resolved. A child care assistant is
+    14–15 years old (R 400.1921(1)), directly supervised at all times
+    (R 400.1921(4)), may not substitute for staff (R 400.1921(6)), may not
+    drive children (R 400.1921(7)), and may not administer medication
+    (R 400.1931(1)). An assistant provides CPR and pediatric first aid
+    certification within 90 days of hire (R 400.1921(3)) and, as
+    "personnel" (R 400.1901(1)(ff)), completes 5 hours of professional
+    development per calendar year (R 400.1924(2)). See § 6.2.
 
-15. **Administering department name (LARA vs MiLEAP) — verify.** *Flagged.*
-    The task brief says "LARA," but Michigan moved early-childhood
-    functions into the new **MiLEAP** department in 2023–2024 (the CDC
-    program already cites michigan.gov/mileap). The administering body, the
-    current rule numbers, and the public-facing name for copy must be
-    verified before any § 7 value is implemented; until then the spec uses
-    "LARA" as a placeholder label.
+15. **Administering department — MiLEAP.** Resolved. The administering body
+    is the **Department of Lifelong Education, Advancement, and Potential
+    (MiLEAP)**, Child Care Licensing Bureau. The governing rules are
+    Michigan Administrative Code R 400.1901–1963, *Licensing Family and
+    Group Child Care Homes*, effective April 27, 2026. "MiLEAP" is used in
+    all user-facing copy; the superseded 2019 LARA rules are not used.
 
 16. **Defer the staff first-login prompt to V2.** Approved. Staff still get
     no structural-identity wizard (consistent with
@@ -665,16 +807,62 @@ implemented.
 
 | Ships in V1 | Deferred / gated |
 | --- | --- |
-| `staff_training_records` table + RLS + indexes (migration 012) | Confirmed LARA requirement values (§ 7.3 — placeholder until verified) |
-| `staff_training_category` enum | Approval/verification workflow (OQ5) |
-| Per-person entry form, edit, soft-delete | MiRegistry transcript import (V2 — `reference_code` seam) |
-| Expiration tracking for CPR/First Aid (no catalog needed) | Audit-packet generation (V2 — durable, § 8) |
-| Licensee roster compliance dashboard (rollup gated by § 7.3) | Email reminders for expiring certs (V2 — needs email infra) |
-| Per-staff training log; staff self-view | License-exempt-with-helpers (OQ12) |
-| `MODULE_KEYS.STAFF_TRAINING` + `modules.js` change + tests | Minor-assistant age-gated rules (OQ14) |
-| `src/lib/staffTraining.js` pure helpers + Vitest | Staff first-login training prompt (OQ16) |
+| `staff_training_records` table + RLS + indexes (migration 012) | Approval/verification workflow (OQ5) |
+| `staff_training_category` enum — 7 verified categories (§ 2.3) | MiRegistry transcript import (V2 — `reference_code` seam) |
+| `training_requirements` seeded catalog — verified values (§ 6, § 7) | Audit-packet generation (V2 — durable, § 8) |
+| Many-to-many person → regulatory-role assignment (§ 6.1) | Email reminders for expiring certs (V2 — needs email infra) |
+| Per-person entry form, edit, soft-delete | License-exempt-with-helpers (OQ12 — flagged regulatory unknown) |
+| Expiration tracking for CPR / first aid | Staff first-login training prompt (OQ16) |
+| Licensee roster compliance dashboard + multi-role rollup (§ 6.3) | MiRegistry API integration (V2) |
+| Per-staff training log; staff self-view | |
+| `MODULE_KEYS.STAFF_TRAINING` + `modules.js` change + tests | |
+| `src/lib/staffTraining.js` pure helpers + Vitest | |
 | Runbook entry for migration 012; `tech_debt.md` update; `miregistry_tracker_spec.md` § 3.4 deprecation note (OQ11) | |
 
-V1 explicitly is **not**: a LARA submission portal, an authoritative
-statement of Michigan licensing rules, or a feature for license-exempt
-providers.
+V1 explicitly is **not**: a MiLEAP submission portal, a substitute for the
+official rule text, or a feature for license-exempt providers.
+
+---
+
+## Reconciliation log — 2026-05-18
+
+This spec was reconciled against the verified requirements file
+`docs/reference/staff_training_tracking_spec.md` (Michigan Administrative
+Code R 400.1901–1963, MiLEAP, effective 2026-04-27). Every change and the
+rule text that drove it:
+
+| § | Change | Driver / citation |
+| --- | --- | --- |
+| Status, § 1.2, § 2.3, § 5.2, § 8, § 9, Appendix | "LARA" → "MiLEAP" throughout — copy, comments, headings | OQ15 — administering agency is MiLEAP |
+| Regulatory caution | "Regulatory caution" (rules unverified) → "Regulatory basis" (rules verified) | Verified requirements file now in the repo |
+| § 1.2 | Category list rewritten to the six verified categories | R 400.1919, R 400.1920–1924 |
+| § 2.3 enum | Dropped `food_handling` | Food/allergic-reaction response is a *new-hire-training topic*, not a standalone certification — R 400.1923(2)(i) |
+| § 2.3 enum | `initial_orientation` → `new_hire_training` | R 400.1923 — "new hire training," 14 topics, 90-day deadline |
+| § 2.3 enum | `annual_health_safety` split into `professional_development` + `health_safety_update_acknowledgement` | R 400.1924 (calendar-year PD hours) vs R 400.1924(11) (event-driven update notices) — two distinct obligations |
+| § 2.3 enum | Added `miregistry_account` | R 400.1922 |
+| § 2.3 enum | Added `background_check_eligibility` | R 400.1919, R 400.1903(1)(r) |
+| § 2.3 | Noted the two new categories are status-bearing; storage model deferred to the implementation plan | They carry a status, not just a completion date |
+| § 2.3 RLS | OQ4 phrasing ("depends on OQ4") replaced with the resolved write policy | § 9 decision 4 (recorded 2026-05-17) |
+| § 2.4 | Catalog reframed from "placeholder until verified" to verified; table `lara_training_requirements` → `training_requirements` | Requirement values now verified; agency-neutral table name |
+| § 2.6 (new) | Added record-retention subsection — employment + ≥ 2 years after termination | R 400.1906(2); resolves OQ7. Note: narrower than the general 4-year figure in earlier drafts / `CLAUDE.md` |
+| § 3.2, § 3.5 | Disclaimer reworded from "placeholder / unconfirmed" to "verified; n/a where the rules are silent" | § 7 is now verified |
+| § 6 | Rebuilt — § 6.1 regulatory roles + the "personnel" / "staff" definitions, § 6.2 verified role × category matrix, § 6.3 multi-role rollup | R 400.1901(1)(ff), R 400.1901(1)(pp); R 400.1902, 1903, 1919–1924; R 400.1951(10) |
+| § 7 | Rebuilt — verified source + deadlines table, MiRegistry 3-field membership model, the 2028-04-27 cutover, remaining silences | R 400.1922, R 400.1924(8), R 400.1922(3) / 1923(4) / 1924(7) / 1924(10), R 400.1906(2) |
+| § 9 | OQ7, OQ13, OQ14, OQ15 marked resolved with citations; intro updated to "15 of 16 resolved" | R 400.1906(2); R 400.1919–1924; R 400.1921, R 400.1931(1); R 400.1901–1963 |
+| Appendix | V1-scope table updated — the verified catalog and the many-to-many role assignment now ship in V1; resolved OQs removed from "deferred" | This reconciliation |
+| § 6.2, § 7.3 (follow-up correction) | Driver cells corrected — `miregistry_account` → "—" (R 400.1951(10) extends only R 400.1923 and R 400.1924 to ratio-counted drivers, not R 400.1922); `background_check_eligibility` → "✔ if unsupervised access or ratio-counted"; the matching § 7.3 "silent" line removed | R 400.1951(4) — driver background-check rule, missed in the first requirements transcription |
+
+**Resolved this pass:** OQ7, OQ13, OQ14, OQ15. **Still flagged:** OQ12 —
+license-exempt providers with helpers; out of V1 scope, since the verified
+rules govern *licensed* homes only.
+
+**Carried to the implementation plan (engineering, not regulatory gaps):**
+
+1. The `staff_memberships.role` → regulatory-role mapping and the
+   many-to-many role-assignment surface (§ 6.1).
+2. The status-bearing storage model for `miregistry_account` and
+   `background_check_eligibility` (§ 2.3).
+3. The existing `useRole` `hasMedicationPermission` comment cites
+   `R 400.1918` for the no-medication rule; the verified file gives it as
+   **R 400.1931(1)**. Verify and correct that comment when `modules.js` /
+   `useRole` are touched.
