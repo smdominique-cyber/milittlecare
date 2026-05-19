@@ -18,6 +18,7 @@ const PAGE_TITLES = {
   '/how-money-works': 'How Money Works',
   '/business-info': 'Business Info',
   '/staff': 'Team',
+  '/staff-training': 'Staff Training',
   '/contact': 'Contact / Support',
 }
 
