@@ -139,6 +139,50 @@ describe('getActiveModules', () => {
     })
   })
 
+  describe('Staff Training activation (staff_training_tracking_spec.md § 5.1)', () => {
+    it('is_license_exempt === false activates the Staff Training module', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, is_license_exempt: false },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.STAFF_TRAINING)).toBe(true)
+    })
+
+    it('activates even with no michigan_license_number on file', () => {
+      // Keyed on the onboarding answer, not the license number — a
+      // licensed provider who skipped the number question still gets it.
+      const modules = getActiveModules({
+        profile: { program_settings: {}, is_license_exempt: false },
+        fundingSources: [fs('cdc_scholarship')],
+      })
+      expect(modules.has(MODULE_KEYS.STAFF_TRAINING)).toBe(true)
+    })
+
+    it('is_license_exempt === true does NOT activate Staff Training', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, is_license_exempt: true },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.STAFF_TRAINING)).toBe(false)
+    })
+
+    it('is_license_exempt === null does NOT activate Staff Training', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, is_license_exempt: null },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.STAFF_TRAINING)).toBe(false)
+    })
+
+    it('unanswered (is_license_exempt absent) does NOT activate Staff Training', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {} },
+        fundingSources: [fs('private_pay')],
+      })
+      expect(modules.has(MODULE_KEYS.STAFF_TRAINING)).toBe(false)
+    })
+  })
+
   describe('edge cases beyond the spec', () => {
     it('archived funding sources are ignored regardless of status', () => {
       const modules = getActiveModules({

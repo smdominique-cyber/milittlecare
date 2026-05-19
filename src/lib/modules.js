@@ -13,6 +13,7 @@ export const MODULE_KEYS = Object.freeze({
   HEAD_START: 'head_start',
   AGENCY_BILLING: 'agency_billing',
   MIREGISTRY_TRACKER: 'miregistry_tracker',
+  STAFF_TRAINING: 'staff_training',
   LICENSED_COMPLIANCE: 'licensed_compliance',
   LICENSE_EXEMPT_COMPLIANCE: 'license_exempt_compliance',
   CACFP: 'cacfp',
@@ -85,6 +86,15 @@ export function getActiveModules({ profile, fundingSources } = {}) {
   ) {
     modules.add(MODULE_KEYS.MIREGISTRY_TRACKER)
   }
+  // staff_training: the staff-training-tracking feature for LICENSED
+  // providers (PR #8 / docs/staff_training_tracking_spec.md § 5.1).
+  // Keyed on the affirmative "I am a licensed provider" answer
+  // (is_license_exempt === false) — captured at onboarding by PR #5 /
+  // PR #7 — not on michigan_license_number, which a licensed provider
+  // may leave blank for a while. The strict === false check keeps the
+  // feature off for the null (unanswered) and true (license-exempt)
+  // cases (spec § 4.2).
+  if (safeProfile.is_license_exempt === false) modules.add(MODULE_KEYS.STAFF_TRAINING)
   if (safeProfile.michigan_license_number) modules.add(MODULE_KEYS.LICENSED_COMPLIANCE)
   if (safeProfile.is_license_exempt) modules.add(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)
   if (settings.cacfp === true) modules.add(MODULE_KEYS.CACFP)
