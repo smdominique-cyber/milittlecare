@@ -358,3 +358,56 @@ runs clean against current `main` before merging.
 
 Out of scope for the license-status prompt PR; surfaced here so it's not
 lost.
+
+## Deferred work introduced by PR #6 (CDC pay period catalog)
+
+- **Local-date helpers are now duplicated.** `src/lib/cdcPayPeriods.js`
+  re-implements `todayYMD()` and the `Date.UTC`-based day-difference helper
+  that already exist in `src/lib/miregistry.js`. `miregistry.js` already
+  foreshadowed this ("extract a shared util when this multiplies further")
+  — it has now multiplied. Extracting a shared `src/lib/dates.js` was kept
+  out of PR #6's scope because it would touch `miregistry.js` (and its
+  tests) unrelated to the pay-period feature. Fix: lift `todayYMD`,
+  `daysBetweenYMD`, and `nextDayYMD` into one date util and have both
+  modules import it, as a standalone cleanup PR.
+- **No render tests for the CDC pay period UI.** `CdcPayPeriodsPage.jsx`,
+  `PayPeriodTable.jsx`, and `PayPeriodCard.jsx` have no component tests —
+  the pure helpers in `cdcPayPeriods.js` are covered by Vitest, the React
+  surfaces are not. Same gap as PRs #1, #2, #4. Add when React Testing
+  Library is approved and installed; cover loading / error /
+  schedule-not-published / populated states, the year selector, the
+  narrow-width card fallback, and the module-gate redirect.
+- **`useIsNarrow` is page-local.** `CdcPayPeriodsPage.jsx` defines a small
+  `matchMedia`-based hook for the ≤640px table→card switch. If a second
+  surface needs viewport-width detection, lift it into
+  `src/hooks/useMediaQuery.js` rather than copy it.
+
+## Deferred work introduced by PR #7 (onboarding wizard)
+
+- **`getMissingFields` cannot distinguish a participation "no" from
+  "unanswered".** `src/lib/onboarding.js#getMissingFields` reports a
+  participation question (`cdc` / `tri_share` / `gsrp`) as missing whenever
+  its `program_settings` key is absent. But a wizard "no" *also* leaves the
+  key absent by design (`onboarding_wizard_spec.md` § 9 decision 13:
+  "no" → absent / `'auto'`, never `'force_off'`). So a provider who
+  answered "no" and a provider who never answered are indistinguishable
+  from the profile alone. This is acceptable for V1, which ships a single
+  generic next-step prompt. When V2 adds precise per-field next-step
+  prompts (spec § 3.3, § 7.2), "no" on a participation question must be
+  distinguishable from "unanswered" — the disambiguating signal is
+  `onboarding_state.gate_answers` (added in PR #7; it records the raw
+  CDC/Tri-Share/GSRP answer, including a distinct "never heard of it" for
+  Tri-Share). The V2 prompt logic should consult it rather than rely on
+  `getMissingFields`, which inspects the profile alone.
+
+- **The generic next-step prompt routes everything to Business Info.**
+  `OnboardingNextStepPrompt` (the single generic V1 prompt) links to
+  `/business-info` for every skipped field. That page's "Licensing" tab
+  is a real edit surface for `is_license_exempt` (and the future home for
+  `miregistry_id` / `michigan_license_number`), but the program-
+  participation fields (`program_settings.cdc` / `tri_share` / `gsrp` /
+  `cacfp`) and the soft-context buckets have **no settings UI at all**
+  (`funding_source_spec.md` § 1.1). A provider who skipped those in the
+  wizard has nowhere to set them afterward. Resolve when the richer
+  per-field next-step prompts land (spec § 7.2) — each should route to,
+  or the same PR should build, a real per-field settings surface.

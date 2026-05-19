@@ -30,6 +30,13 @@
   --clr-success-pale: #e8f5ee;
   --clr-warning: #c8872a;
   --clr-warning-pale: #fef5e7;
+  /* warn-* scale: muted-amber tokens for advisory (non-error) UI —
+     holiday-delay notes on CDC Pay Periods, MiRegistry training
+     warnings. Previously referenced only via inline fallbacks. */
+  --clr-warn-pale: #fdf3d8;
+  --clr-warn-mid: #e8d196;
+  --clr-warn-ink: #8a6a1a;
+  --clr-warn-dark: #8a6d00;
   --clr-error: #c0392b;
   --clr-error-pale: #fdecea;
 

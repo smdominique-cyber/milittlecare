@@ -207,6 +207,12 @@ Provider {
 }
 ```
 
+> **Onboarding (PR #7):** these structural-identity fields
+> (`is_license_exempt`, `miregistry_id`, `michigan_license_number`,
+> `michigan_provider_id`, and program participation) are captured by the
+> first-login onboarding wizard — `docs/onboarding_wizard_spec.md` is the
+> canonical capture point. This spec's module logic only reads them.
+
 ---
 
 ### 5. `BillingPeriod` (new entity)

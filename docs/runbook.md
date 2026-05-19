@@ -14,6 +14,22 @@ All schema migrations are currently applied manually. Until automated migration 
 
 Rollback follows the same pattern in reverse: open the migration's commented `DOWN MIGRATION` section, uncomment, paste, run. Always rollback the latest applied migration first and walk backwards in number order.
 
+### Operational note — the web SQL Editor mangles long statements
+
+⚠️ **The Supabase web SQL Editor cannot reliably execute long single
+statements.** Observed during migration 010 application on 2026-05-17: long
+`INSERT` statements (26 rows per `VALUES` clause, ~1500+ chars) get wrapped
+into multiple physical lines and the editor runs only a fragment, producing
+a `syntax error` on the truncated portion. The editor handles short
+single-line statements fine.
+
+For future migrations: either break long seed inserts into many short
+statements (4–5 rows each), apply via the direct Supabase connection (MCP
+path), or test the editor's behavior with a small sample first before
+assuming a complex migration will land. The `Success. No rows returned`
+message can fire on a fragment that did nothing — verification queries
+against the actual table state are the only reliable confirmation.
+
 ## Migration History
 
 ### 2026-05-13 — Migrations 003-006: funding-source scaffolding
@@ -130,3 +146,120 @@ Non-changes worth noting:
   cleanup PR drops the column once write paths are removed (per
   `docs/tech_debt.md` § Planned deprecations).
 - No backfill — no existing training entries to migrate.
+
+### 2026-05-17 — Migration 010: CDC pay period catalog
+
+Applied to production on **2026-05-17** by Seth, via **two channels**
+(forced by the web SQL Editor bug recorded in the operational note above):
+
+- **DDL** — the `cdc_pay_period_catalog` table, the
+  `cdc_pay_period_catalog_year_start_idx` index, `enable row level
+  security`, and the single SELECT policy — applied through the **Supabase
+  web SQL Editor** as four separate single-line statements.
+- **The 52 seed rows** — the 2025 schedule (501–526) and the 2026 schedule
+  (601–626) — applied via the **direct Supabase connection (MCP path)**,
+  because the web SQL Editor corrupted the long multi-row `INSERT`
+  statements (~1500+ chars each). See the operational note in the Migration
+  Application Procedure section above.
+
+Not applied via the `supabase` CLI — this project has no CLI migration
+ledger (`supabase_migrations.schema_migrations` does not exist).
+
+What the migration creates:
+
+- `cdc_pay_period_catalog` table — a **statewide** reference table (no
+  `user_id`) holding the MDHHS-published CDC Payment Schedule. Modelled on
+  `tri_share_hubs` (migration 003): readable by every authenticated user,
+  never written from the app.
+- One index, `cdc_pay_period_catalog_year_start_idx` on
+  `(schedule_year, start_date)`. The `unique (schedule_year, period_number)`
+  constraint provides a second index.
+- RLS enabled, with a single SELECT policy for `authenticated`. **No
+  insert/update/delete policies** — the catalog is seeded by migration only.
+- 52 seed rows: the 2025 schedule (period numbers 501–526) and the 2026
+  schedule (601–626), transcribed from `docs/cdc_pay_periods_spec.md`
+  Appendix A.
+
+No dependency on migration 009. Independent of `billing_periods` (migration
+003), which this migration deliberately leaves untouched.
+
+Verification — four queries run by Seth in the Supabase web SQL editor on
+**2026-05-17**, all passed:
+
+1. **Table exists** — `information_schema.tables` returns
+   `public.cdc_pay_period_catalog`. ✓
+2. **Row count** — 52 rows total, 26 per `schedule_year` (2025 and 2026). ✓
+3. **Contiguity** (spec § 7.5) — ordered by `start_date`, every period's
+   `start_date` equals the previous period's `end_date + 1`; the
+   gap/overlap query returned 0 rows. ✓
+4. **RLS** — row level security enabled, exactly one policy:
+   `cmd = SELECT`, `roles = {authenticated}`, no insert/update/delete
+   policies. ✓
+
+Rollback: uncomment the `DOWN MIGRATION` block at the foot of the migration
+file (drop policy → drop index → drop table). Dropping the table removes all
+52 seeded rows; no separate DELETE is needed.
+
+### 2026-05-18 — Migration 011: profiles.onboarding_state column
+
+Applied to production on **2026-05-18** by Seth, via the **Supabase web
+SQL Editor** — a single `ALTER TABLE` statement. The web SQL Editor
+long-statement bug (see the Migration Application Procedure note above)
+does not apply: this is one short single statement, pasted and run
+directly.
+
+Applied ahead of the original plan (which scheduled it for the end of
+PR #7's Phase 3). It was pulled forward so the Phase 2 onboarding-wizard
+write-through could be smoke-tested against production before Phase 3's
+dashboard integration is built on top of it.
+
+What the migration does:
+
+- `011_onboarding_state.sql` — adds a single column,
+  `public.profiles.onboarding_state jsonb not null default '{}'::jsonb`.
+  It is the bookkeeping blob for the first-login onboarding wizard
+  (`docs/onboarding_wizard_spec.md` § 2.3): `version`, `completed_at`,
+  `dismissed_at`, `last_step`, `skipped`. Wizard answers are **not** stored
+  here — each writes through to its canonical column.
+
+Dependencies:
+
+- Sequential after migration `010` (the next free number). No data
+  dependency on `010` or any other migration — this is an isolated
+  column-add on `profiles`.
+
+No backfill statement: the `default '{}'::jsonb` populates every existing
+`profiles` row (Venessa + 2 others) at `ALTER` time. Each then reads as
+"not yet onboarded" (`completed_at` absent), which is the intended
+backfill of structural identity (spec § 4.3).
+
+RLS: no new policy. `onboarding_state` is a new column on `public.profiles`,
+which already has per-provider read/write policies (migration 001); the
+column inherits them.
+
+Editor note: this is a **single short DDL statement**, so the web SQL
+Editor long-statement bug recorded in the Migration Application Procedure
+above does not apply — it can be pasted and run directly.
+
+Verification — two queries run by Seth in the Supabase web SQL Editor on
+**2026-05-18**, both passed:
+
+1. **Column exists with the right type/default** —
+   `select column_name, data_type, is_nullable, column_default
+    from information_schema.columns
+    where table_schema='public' and table_name='profiles'
+      and column_name='onboarding_state';`
+   Returned one row: `onboarding_state | jsonb | NO | '{}'::jsonb`. ✓
+2. **Every existing row is backfilled** —
+   `select count(*) as total,
+           count(*) filter (where onboarding_state = '{}'::jsonb) as empty_blob
+    from public.profiles;`
+   Returned `total = 3`, `empty_blob = 3` — every existing `profiles` row
+   defaults to `{}`. The 3 rows are Venessa + 2 others, matching the
+   expected production state. ✓
+
+Rollback: uncomment the `DOWN MIGRATION` block at the foot of
+`011_onboarding_state.sql` — `alter table public.profiles drop column if
+exists onboarding_state;`. Dropping the column discards any wizard
+bookkeeping written since application; the canonical answer columns
+(`profiles.*`, `program_settings.*`) are unaffected.

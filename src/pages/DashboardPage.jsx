@@ -11,7 +11,14 @@ import SetupWidget from '@/components/dashboard/SetupWidget'
 import TodayWidget from '@/components/dashboard/TodayWidget'
 import StaffClockWidget from '@/components/dashboard/StaffClockWidget'
 import InstallBanner from '@/components/ui/InstallBanner'
+import OnboardingCompletionCard from '@/components/onboarding/OnboardingCompletionCard'
+import OnboardingNextStepPrompt from '@/components/onboarding/OnboardingNextStepPrompt'
+import { useOnboardingStatus } from '@/hooks/useOnboardingStatus'
 import '@/styles/today-widget.css'
+
+// The onboarding wizard auto-opens at most once per browser session
+// (spec § 9 decision 7); this sessionStorage key records that it has.
+const ONBOARDING_AUTO_OPEN_KEY = 'milc.onboarding.autoOpened'
 
 function getGreeting() {
   const h = new Date().getHours()
@@ -68,6 +75,7 @@ export default function DashboardPage() {
   const { licenseeId, isLicensee, role } = useRole()
   const [staffMembership, setStaffMembership] = useState(null)
   const navigate = useNavigate()
+  const onboarding = useOnboardingStatus()
   const firstName = user?.user_metadata?.full_name?.split(' ')[0] || 'there'
   const greeting = getGreeting()
 
@@ -98,6 +106,18 @@ export default function DashboardPage() {
     }
     loadMembership()
   }, [user, isLicensee])
+
+  // Auto-open the onboarding wizard once per browser session for a
+  // licensee who has not completed it (spec § 4.1, § 9 decision 7). The
+  // sessionStorage flag suppresses re-opens for the rest of the session,
+  // including the bounce-back after "finish later".
+  useEffect(() => {
+    if (onboarding.loading || !onboarding.progress) return
+    if (!isLicensee || onboarding.progress.completed) return
+    if (sessionStorage.getItem(ONBOARDING_AUTO_OPEN_KEY)) return
+    sessionStorage.setItem(ONBOARDING_AUTO_OPEN_KEY, '1')
+    navigate('/onboarding')
+  }, [onboarding.loading, onboarding.progress, isLicensee, navigate])
 
   async function loadAll() {
     if (!licenseeId) return
@@ -165,6 +185,15 @@ export default function DashboardPage() {
     has_tsratio: !!tsRatio,
   }
 
+  // Onboarding nudges — licensee-only. Each component self-gates on the
+  // wizard's completion state, so both are rendered.
+  const onboardingBanner = isLicensee && onboarding.progress ? (
+    <>
+      <OnboardingCompletionCard progress={onboarding.progress} />
+      <OnboardingNextStepPrompt progress={onboarding.progress} />
+    </>
+  ) : null
+
   if (loading) {
     return (
       <div style={{ padding: 'var(--space-12)', textAlign: 'center' }}>
@@ -178,6 +207,7 @@ export default function DashboardPage() {
     return (
       <>
         <InstallBanner />
+        {onboardingBanner}
         {staffMembership && (
           <StaffClockWidget userId={user.id} membership={staffMembership} />
         )}
@@ -249,6 +279,7 @@ export default function DashboardPage() {
   return (
     <>
       <InstallBanner />
+      {onboardingBanner}
       {staffMembership && (
         <StaffClockWidget userId={user.id} membership={staffMembership} />
       )}

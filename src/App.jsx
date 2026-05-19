@@ -25,6 +25,8 @@ import HowMoneyWorksPage from '@/pages/HowMoneyWorksPage'
 import BusinessInfoPage from '@/pages/BusinessInfoPage'
 import StaffPage from '@/pages/StaffPage'
 import MiRegistryPage from '@/pages/MiRegistryPage'
+import CdcPayPeriodsPage from '@/pages/CdcPayPeriodsPage'
+import OnboardingPage from '@/pages/OnboardingPage'
 import ContactPage from '@/pages/ContactPage'
 import PrivacyPage from '@/pages/PrivacyPage'
 import TermsPage from '@/pages/TermsPage'
@@ -73,6 +75,19 @@ export default function App() {
                 {/* Public landing page */}
                 <Route path="/" element={<LandingPage />} />
 
+                {/* Onboarding wizard — inside PaywallGate but outside
+                    DashboardLayout: full-screen, no sidebar (spec § 4.1). */}
+                <Route
+                  path="/onboarding"
+                  element={
+                    <ProtectedRoute>
+                      <PaywallGate>
+                        <OnboardingPage />
+                      </PaywallGate>
+                    </ProtectedRoute>
+                  }
+                />
+
                 {/* Protected dashboard routes (with paywall gate) */}
                 <Route
                   path="/"
@@ -100,6 +115,7 @@ export default function App() {
                   <Route path="business-info" element={<BusinessInfoPage />} />
                   <Route path="staff" element={<StaffPage />} />
                   <Route path="miregistry" element={<MiRegistryPage />} />
+                  <Route path="cdc-pay-periods" element={<CdcPayPeriodsPage />} />
                   <Route path="contact" element={<ContactPage />} />
                   <Route path="admin" element={<AdminPage />} />
                 </Route>

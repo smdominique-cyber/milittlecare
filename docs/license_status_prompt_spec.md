@@ -31,6 +31,12 @@ exists** — because the one flag that would activate it stays `null`. The
 December 16 Annual Ongoing Training countdown, the overdue banner on the
 Funding tab, the whole tracker — all invisible.
 
+> **Update — PR #7:** the onboarding wizard
+> (`docs/onboarding_wizard_spec.md`) is now the canonical capture point for
+> `is_license_exempt` — it asks this at first login. This prompt modal
+> remains as the fallback for providers who skip that wizard question
+> (onboarding spec § 6.1).
+
 The regulatory stakes are real: missing the December 16 deadline **closes
 the provider's CDC account**. They must reapply with MDHHS before they can
 bill again (see `miregistry_tracker_spec.md` § 1). The tracker exists
