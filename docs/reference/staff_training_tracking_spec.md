@@ -56,3 +56,50 @@
 | Staff and driver file must include name, address, phone, date of hire, daily arrival/departure records, physician attestation, signed abuse/neglect/discipline acknowledgement | R 400.1906(1) | "A licensee shall maintain a file for each staff and driver that includes all of the following: (a) The individual's first and last name, address, telephone number, and date of hire. (b) Daily records detailing arrival times and departure times at the child care home. (c) A statement signed by a licensed physician or the physician's designee that attests to the individual's mental and physical health … (e) A written statement, signed and dated by the child care staff member or child care assistant at the time of hiring, indicating all of the following: (i) The individual is aware that abuse and neglect of children is unlawful. (ii) The individual knows that they are mandated by law to report child abuse and neglect. (iii) The individual has received and read a copy of the licensee's discipline policy." |
 | Staff records retained for duration of employment plus minimum 2 years after termination | R 400.1906(2) | "The records in this rule must be retained for the duration of the individual's employment and a minimum of 2 years after the individual has left the employment of the licensee." |
 | Daily attendance records of children must be kept on file at the home with each child's first/last name and arrival/departure times | R 400.1907(3) | "A child care home shall keep on file at the child care home an accurate record of daily attendance at the child care home that includes each child's first and last name and each child's arrival and departure time." |
+PR #8 spec addendum — resolution of regulatory unknowns
+
+Paste into docs/staff_training_tracking_spec.md under the section that covers regulatory unknowns. Renumber subsections (§ 7.1 / 7.2 / 7.3 below) to fit the existing structure.
+
+
+§ 7 Resolution of regulatory unknowns
+The adopted rule text (R 400.1901–1963, effective April 27, 2026) leaves three implementation questions unanswered. The following resolutions are product decisions, not interpretations of rule text.
+§ 7.1 MiRegistry per-staff membership tracking
+R 400.1922(1) requires "a non-expired MiRegistry membership status" within 30 calendar days of employment. The rule does not define membership expiration because that mechanic lives in MiRegistry itself, not in licensing rules.
+Per miregistry.org/resources/miregistry-membership, every individual member has a stable MiRegistry ID and a membership that expires one year from approval. Status is one of: Submitted, Materials Received, Awaiting Print, Current, or Expired. R 400.1922(1)'s "non-expired" language explicitly includes the first four.
+Schema (per staff member, not provider-level):
+FieldTypeNotesmiregistry_idtextThe individual's stable MiRegistry IDmiregistry_statusenumsubmitted, materials_received, awaiting_print, current, expiredmiregistry_membership_expires_ondateOne year from membership approval, transcribed by licensee
+Compliance rule: status ∈ {submitted, materials_received, awaiting_print, current} AND expires_on > today.
+R 400.1922(1) 30-day rule: Compliance is met when both miregistry_id and miregistry_status are populated within 30 calendar days of hired_on. The system surfaces a warning at day 25 if either field is still empty.
+Data source: Manual entry by licensee, transcribed from each staff member's MiRegistry profile. PR #4's MiRegistry tracker is provider-level and does not satisfy this need; PR #8 introduces staff-level tracking.
+Out of scope for V1: No MiRegistry API integration. No countdown widget on expiration (the rule cares about non-expired status, not days remaining). expires_on is collected for the eventual renewal nudge but does not drive compliance status in V1.
+§ 7.2 Multi-role staff members
+The rules do not address one individual occupying multiple roles. R 400.1951(10) is the only place stacking is explicit: "If the driver is counted in child to staff ratios, the driver shall comply with R 400.1923 and R 400.1924." That language treats requirements as additive, not substitutive.
+Schema: Many-to-many between persons and roles via a staff_role_assignments table.
+persons (id, name, hired_on, ...)
+roles (slug: licensee | child_care_staff_member | child_care_assistant
+       | unsupervised_volunteer | supervised_volunteer | driver)
+staff_role_assignments (id, person_id, role_slug, started_on, ended_on, counted_in_ratios)
+counted_in_ratios is a nullable boolean used only by driver assignments:
+
+Driver, counted_in_ratios = true → R 400.1923 and R 400.1924 apply (cite R 400.1951(10)).
+Driver, counted_in_ratios = false → only R 400.1924(4)'s 1-hour transportation PD applies; new hire training is not required.
+
+Compliance rollup rule (UI and validation): For each training category, compute the strictest requirement across the person's active role assignments, then check whether the person meets it.
+CategoryRollupAnnual PD hoursmax of (licensee 10, personnel 5, unsupervised volunteer 1, driver 1)New hire trainingrequired if any active role is in {licensee, staff_member, assistant, unsupervised_volunteer, driver_counted_in_ratios}CPR + first aid timing"before care" wins over "within 90 days" — a person who is both staff member and assistant must have certs before caring for childrenSex offender registry clearancerequired if any active role is in {child_care_assistant, supervised_volunteer} (R 400.1903(1)(r))
+UI: A single person record shows all active roles as chips. The compliance card shows one rolled-up status per category, with a "why" tooltip naming the strictest role driving the requirement.
+§ 7.3 Health and safety update tracking
+R 400.1924(11) requires staff to read/acknowledge each new health and safety update within the timeframe stated on the department notice. The rule is event-driven — updates are published on MiRegistry at MiLEAP's discretion with no fixed cadence and no known published feed URL.
+V1 approach: manual entry + recurring nudge.
+Schema:
+health_safety_updates (id, title, miregistry_url, published_on, acknowledge_by, created_by, archived_at)
+health_safety_acknowledgements (id, update_id, person_id, acknowledged_on)
+Licensee workflow:
+
+Licensee sees a MiRegistry notification (email or in-MiRegistry banner) about a new health & safety update.
+Licensee opens the staff training module → "Health & Safety Updates" tab → "Add update."
+Licensee enters title, MiRegistry URL, and the acknowledge-by deadline from the notice.
+The system creates a per-staff acknowledgement row in pending state for every active staff member where R 400.1924(11) applies (personnel and unsupervised volunteers, per the rule's "all applicable personnel and unsupervised volunteers" language).
+Licensee marks each staff member acknowledged after the staff member confirms having read the document.
+
+Recurring nudge: On the first of each month, a dashboard banner reads: "Check MiRegistry for new health & safety updates." Dismissible per month. Suppressed automatically for the current month if the licensee has added an update record within the past 30 days.
+Out of scope for V1: No automated feed monitoring. The MiLEAP email already drafted should include the question: "Is there a published URL or feed for health & safety updates under R 400.1924(11)?" If MiLEAP confirms a stable list URL, a future PR can automate detection.
