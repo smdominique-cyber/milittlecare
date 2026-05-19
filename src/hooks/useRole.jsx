@@ -123,8 +123,8 @@ export function hasPermission(role, action) {
 
 /**
  * Medication permission is special — it depends on the staff member's age,
- * not their role tier. Michigan R 400.1918 prohibits caregivers under 18
- * from logging medication.
+ * not their role tier. Michigan R 400.1931(1) prohibits a child care
+ * assistant (a 14–15-year-old) from administering medication.
  *
  * Daily Helper who is 18+ → can log medication.
  * Daily Helper who is under 18 → cannot.
