@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useSubscription } from '@/hooks/useSubscription'
+import { SUBSCRIPTION_PRICE_DISPLAY } from '@/lib/pricing'
 import { Check, CreditCard, Settings, Sparkles, AlertCircle } from 'lucide-react'
 import '@/styles/subscription.css'
 
@@ -161,8 +162,8 @@ export default function SubscriptionPage() {
             <>
               <h2>Your trial has <em>ended</em></h2>
               <p className="sub-hero-desc">
-                Subscribe for $14.99/month to keep using MI Little Care and never lose your data.
-                Cancel anytime.
+                Subscribe for {SUBSCRIPTION_PRICE_DISPLAY}/month to keep using MI Little Care and
+                never lose your data. Cancel anytime.
               </p>
               <button className="sub-hero-button" onClick={startCheckout} disabled={busy}>
                 <CreditCard size={16} /> {busy ? 'Loading…' : 'Subscribe now'}
@@ -203,7 +204,7 @@ export default function SubscriptionPage() {
           <div className="plan-name">MI Little Care · Provider Plan</div>
 
           <div className="plan-price-row">
-            <span className="plan-price">$14.99</span>
+            <span className="plan-price">{SUBSCRIPTION_PRICE_DISPLAY}</span>
             <span className="plan-price-unit">/ month</span>
           </div>
 

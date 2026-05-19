@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
+import { SUBSCRIPTION_PRICE_DISPLAY } from '@/lib/pricing'
 
 export default function TermsPage() {
   return (
@@ -62,7 +63,7 @@ export default function TermsPage() {
 
         <h3>4. Subscription and Billing</h3>
         <ul>
-          <li>Subscription cost: $14.99/month</li>
+          <li>Subscription cost: {SUBSCRIPTION_PRICE_DISPLAY}/month</li>
           <li>Free trial: 30 days (90 days for early users, if applicable)</li>
           <li>Billing is recurring unless canceled</li>
           <li>No refunds for unused time</li>

@@ -1,6 +1,7 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useSubscription } from '@/hooks/useSubscription'
 import { useAuth } from '@/hooks/useAuth'
+import { SUBSCRIPTION_PRICE_DISPLAY } from '@/lib/pricing'
 import { Lock, LogOut } from 'lucide-react'
 
 // Wraps the app — if trial expired or subscription canceled, show the paywall
@@ -31,7 +32,7 @@ export default function PaywallGate({ children }) {
           </h2>
           <p>
             {sub.isTrialExpired
-              ? 'Subscribe for $14.99/month to keep using MI Little Care. Your data is safe and waiting for you.'
+              ? `Subscribe for ${SUBSCRIPTION_PRICE_DISPLAY}/month to keep using MI Little Care. Your data is safe and waiting for you.`
               : 'Re-subscribe to access your account and pick up right where you left off.'}
           </p>
           <button className="plan-cta" onClick={() => navigate('/subscription')} style={{ marginBottom: 'var(--space-3)' }}>

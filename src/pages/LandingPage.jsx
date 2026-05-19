@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { SUBSCRIPTION_PRICE_DISPLAY } from '@/lib/pricing'
 import '@/styles/landing.css'
 
 export default function LandingPage() {
@@ -408,7 +409,7 @@ export default function LandingPage() {
 
           <div className="landing-pricing-card">
             <div className="landing-pricing-price">
-              <span className="amount">$14.99</span>
+              <span className="amount">{SUBSCRIPTION_PRICE_DISPLAY}</span>
               <span className="period"> / month</span>
             </div>
             <p className="landing-pricing-tag">
