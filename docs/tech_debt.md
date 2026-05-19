@@ -464,3 +464,32 @@ lost.
   Acceptable — the per-caregiver set is at most six rows — but it churns
   rows and their `created_at`. Diff-and-patch if role history ever
   needs to be preserved.
+
+## Displayed subscription price is loosely coupled to the Stripe Price
+
+The subscription price shown across the UI is a hand-maintained
+constant — `SUBSCRIPTION_PRICE_DISPLAY` in `src/lib/pricing.js`,
+imported by `SubscriptionPage`, `LandingPage`, `HowMoneyWorksPage`,
+`PaywallGate`, and `TermsPage`.
+
+The amount actually charged at checkout is a separate thing: the Stripe
+Price object referenced by the `STRIPE_PRICE_ID` environment variable in
+Vercel (`api/create-checkout-session.js` appends it as the checkout
+line item). **Nothing links the two.** If someone updates the Stripe
+Price without also updating `SUBSCRIPTION_PRICE_DISPLAY` — or vice versa
+— the UI will advertise one price while Stripe charges another, and no
+test or build step will catch the drift.
+
+Centralising the display string into one constant (branch
+`chore/pricing-update-34-99`, 2026-05-19) removed the *worse* version of
+this problem — five separately-hardcoded `$14.99` copies that could
+drift from each other — but the display-vs-Stripe gap remains.
+
+Proper fix (deferred): make the Stripe Price the single source of truth
+— a small `api/` endpoint reads the Price object and returns its
+`unit_amount`, and the pricing surfaces render that. Deferred because it
+adds a network dependency to rendering a price and needs a caching /
+fallback story (what to show before the fetch resolves, or if it
+fails) — out of scope for a copy update. Until then, updating the price
+is a **two-place change**: the Stripe Price object in Vercel **and**
+`SUBSCRIPTION_PRICE_DISPLAY`.

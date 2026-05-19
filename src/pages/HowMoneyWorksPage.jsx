@@ -1,4 +1,5 @@
 import { Lock, Shield, CreditCard, FileText, AlertCircle, CheckCircle, Eye, EyeOff } from 'lucide-react'
+import { SUBSCRIPTION_PRICE_DISPLAY } from '@/lib/pricing'
 import '@/styles/how-money-works.css'
 
 export default function HowMoneyWorksPage() {
@@ -176,7 +177,7 @@ export default function HowMoneyWorksPage() {
       </Section>
 
       {/* Section: Your subscription to MI Little Care */}
-      <Section icon={<CreditCard size={22} />} iconClass="sage" title="Your $14.99/month subscription">
+      <Section icon={<CreditCard size={22} />} iconClass="sage" title={`Your ${SUBSCRIPTION_PRICE_DISPLAY}/month subscription`}>
         <p>
           Your subscription to MI Little Care is also processed through Stripe. We use the
           same secure infrastructure for our own billing.
