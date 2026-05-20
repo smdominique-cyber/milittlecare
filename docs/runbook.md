@@ -371,52 +371,70 @@ Rollback — uncomment the `DOWN MIGRATION` block at the foot of
 > the actual verification output at application time; the numbers below
 > are *expected*, not confirmed.
 
-What the migration does — `014_terms_acceptance.sql` adds a single
-nullable `timestamptz` column, `public.profiles.terms_accepted_at`,
-that records when a provider clicked through the required Terms of
-Service / Privacy Policy clickwrap (added in the same branch on the
-`LoginPage` signup form, `InviteAcceptPage`, and
-`StaffInviteAcceptPage`). NULL means no recorded acceptance — the
-intended state for every existing row, since pre-existing users never
-went through the clickwrap. See `docs/tech_debt.md` § "Existing users
-have no recorded Terms acceptance" for the remediation plan.
+What the migration does — `014_terms_acceptance.sql` adds a nullable
+`terms_accepted_at timestamptz` column to **both** user-shaped tables:
+`public.profiles` (providers and staff) **and** `public.parent_profiles`
+(parents). Both record when the user clicked through the required Terms
+of Service / Privacy Policy clickwrap added in the same branch on the
+`LoginPage` signup form, `StaffInviteAcceptPage` (both → `profiles`), and
+`InviteAcceptPage` (→ `parent_profiles`). NULL means no recorded
+acceptance — the intended state for every existing row, since
+pre-existing users never went through the clickwrap. See
+`docs/tech_debt.md` § "Existing users have no recorded Terms acceptance"
+for the remediation plan.
 
-Dependencies — none beyond `001_profiles.sql` (the column lives on
-`public.profiles`). Independent of every migration after it.
+Dependencies — none beyond `001_profiles.sql` and the (out-of-band)
+existence of `public.parent_profiles`. Independent of every migration
+after it.
 
-Editor note — `014` is a **single short DDL statement** plus a
-`comment on column` statement, so the web SQL Editor long-statement
+Editor note — `014` is **two short DDL statements** plus two
+`comment on column` statements, so the web SQL Editor long-statement
 bug (operational note above) does not apply; it can be pasted and run
 as a whole file.
 
-RLS — no new policy. `terms_accepted_at` is a new column on
-`public.profiles`, which already has per-provider read/write policies
-(migration 001); the column inherits them.
+RLS — no new policy. `terms_accepted_at` is a new column on tables
+that already have per-user read/write policies; the column inherits
+them on each table.
 
 Expected verification (run by the user in the Supabase web SQL Editor
 at application time, then recorded here):
 
-1. **Column exists with the right type/nullability** —
-   `select column_name, data_type, is_nullable, column_default
+1. **Both columns exist with the right type/nullability** —
+   `select table_name, column_name, data_type, is_nullable, column_default
     from information_schema.columns
-    where table_schema='public' and table_name='profiles'
-      and column_name='terms_accepted_at';`
-   → 1 row: `terms_accepted_at | timestamp with time zone | YES | NULL`.
-2. **Pre-existing rows read NULL** —
-   `select count(*) as total,
+    where table_schema='public'
+      and column_name='terms_accepted_at'
+    order by table_name;`
+   → 2 rows: `parent_profiles | terms_accepted_at | timestamp with time zone | YES | NULL`
+   and `profiles | terms_accepted_at | timestamp with time zone | YES | NULL`.
+2. **Pre-existing rows read NULL on both tables** —
+   `select 'profiles' as t, count(*) as total,
            count(*) filter (where terms_accepted_at is null) as null_rows
-    from public.profiles;`
-   → `total = null_rows` (every existing row has no recorded acceptance).
-3. **Column comment is set** —
-   `select col_description('public.profiles'::regclass,
-     (select ordinal_position from information_schema.columns
-      where table_schema='public' and table_name='profiles'
-        and column_name='terms_accepted_at'));`
-   → the comment text from `014_terms_acceptance.sql` (cites
-   2026-05-19 and the deferred `user_agreements` shape).
+    from public.profiles
+    union all
+    select 'parent_profiles', count(*),
+           count(*) filter (where terms_accepted_at is null)
+    from public.parent_profiles;`
+   → for each row, `total = null_rows` (every existing row has no
+   recorded acceptance).
+3. **Both column comments are set** —
+   `select 'profiles' as t,
+           col_description('public.profiles'::regclass,
+             (select ordinal_position from information_schema.columns
+              where table_schema='public' and table_name='profiles'
+                and column_name='terms_accepted_at')) as comment
+    union all
+    select 'parent_profiles',
+           col_description('public.parent_profiles'::regclass,
+             (select ordinal_position from information_schema.columns
+              where table_schema='public' and table_name='parent_profiles'
+                and column_name='terms_accepted_at'));`
+   → 2 rows, each with the comment text from
+   `014_terms_acceptance.sql` (cites 2026-05-19 and the deferred
+   `user_agreements` shape).
 
 Rollback — uncomment the `DOWN MIGRATION` block at the foot of
-`014_terms_acceptance.sql` (`alter table public.profiles drop column
-if exists terms_accepted_at;`). Dropping the column discards every
-recorded acceptance written since application; the clickwrap UI
-continues to gate signup either way.
+`014_terms_acceptance.sql` (drops the column from both
+`public.profiles` and `public.parent_profiles`). Dropping the columns
+discards every recorded acceptance written since application; the
+clickwrap UI continues to gate signup either way.

@@ -144,15 +144,16 @@ export default function InviteAcceptPage() {
       const data = await resp.json()
       if (!resp.ok) throw new Error(data.error || 'Failed to accept invitation')
 
-      // Record clickwrap acceptance on the user's profiles row
-      // (migration 014). Try/catch — if the row does not exist (a
-      // parent invitee has a parent_profiles row, not a profiles row),
-      // the update silently affects 0 rows; acceptance is enforced
-      // UX-side by the disabled-until-checked submit gate.
+      // Record clickwrap acceptance on the user's parent_profiles row
+      // (migration 014 adds terms_accepted_at to both profiles and
+      // parent_profiles; this is the parent-invite flow, so the row
+      // lives in parent_profiles). Try/catch — log failures but don't
+      // block; acceptance is enforced UX-side by the disabled-until-
+      // checked submit gate.
       try {
         if (session.user?.id) {
           await supabase
-            .from('profiles')
+            .from('parent_profiles')
             .update({ terms_accepted_at: new Date().toISOString() })
             .eq('id', session.user.id)
         }
