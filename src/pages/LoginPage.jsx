@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import '@/styles/auth.css'
@@ -29,6 +29,7 @@ export default function LoginPage() {
   })
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState(null)
+  const [agreedToTerms, setAgreedToTerms] = useState(false)
 
   const set = (field) => (e) => {
     setForm((f) => ({ ...f, [field]: e.target.value }))
@@ -130,12 +131,28 @@ export default function LoginPage() {
       signUpOptions.options.emailRedirectTo =
         `${window.location.origin}${from}`
     }
-    const { error } = await supabase.auth.signUp(signUpOptions)
+    const { data, error } = await supabase.auth.signUp(signUpOptions)
 
     setLoading(false)
     if (error) {
       setMessage({ type: 'error', text: error.message })
     } else {
+      // Record clickwrap acceptance on the user's profiles row
+      // (migration 014). With email confirmation enabled, the signUp
+      // response carries `user` but no `session`, so this RLS-gated
+      // write may not land until the user signs in for the first time
+      // — that's acceptable: signup itself succeeded, and the gate is
+      // primarily a UX/legal affordance enforced before this point.
+      try {
+        if (data?.user?.id) {
+          await supabase
+            .from('profiles')
+            .update({ terms_accepted_at: new Date().toISOString() })
+            .eq('id', data.user.id)
+        }
+      } catch (writeErr) {
+        console.error('LoginPage: terms_accepted_at update failed', writeErr)
+      }
       setMessage({
         type: 'success',
         text: inviteEmail
@@ -304,12 +321,29 @@ export default function LoginPage() {
                   onChange={set('password')}
                 />
               </div>
-              <button className="btn-primary" type="submit" disabled={loading}>
+              <div className="form-field" style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <input
+                  id="agree-terms"
+                  type="checkbox"
+                  required
+                  checked={agreedToTerms}
+                  onChange={(e) => setAgreedToTerms(e.target.checked)}
+                  style={{ marginTop: 3, flexShrink: 0 }}
+                />
+                <label htmlFor="agree-terms" style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', lineHeight: 1.5 }}>
+                  I agree to the{' '}
+                  <Link to="/terms" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--clr-sage-dark)' }}>
+                    Terms of Service
+                  </Link>{' '}
+                  and{' '}
+                  <Link to="/privacy" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--clr-sage-dark)' }}>
+                    Privacy Policy
+                  </Link>
+                </label>
+              </div>
+              <button className="btn-primary" type="submit" disabled={loading || !agreedToTerms}>
                 {loading ? 'Creating account…' : 'Create free account'}
               </button>
-              <p style={{ fontSize: '0.78125rem', color: 'var(--clr-ink-faint)', textAlign: 'center', marginTop: 'var(--space-3)' }}>
-                By creating an account you agree to our Terms of Service and Privacy Policy.
-              </p>
             </form>
           )}
 

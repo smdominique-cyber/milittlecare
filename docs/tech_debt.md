@@ -493,3 +493,78 @@ fallback story (what to show before the fetch resolves, or if it
 fails) — out of scope for a copy update. Until then, updating the price
 is a **two-place change**: the Stripe Price object in Vercel **and**
 `SUBSCRIPTION_PRICE_DISPLAY`.
+
+## Versioned `user_agreements` table (deferred from `chore/legal-pages-and-consent`)
+
+PR shipped clickwrap consent as a `terms_accepted_at timestamptz`
+column on each user-shaped table — `public.profiles` for providers and
+staff, `public.parent_profiles` for parents (migration 014). The
+proper long-term shape is a separate `user_agreements (id, user_id,
+terms_version, privacy_version, agreed_at)` table that records which
+version a user agreed to, supports re-prompting on document updates,
+and survives profile resets. Build when the first material Terms /
+Privacy update lands.
+
+A second motivation worth recording: today's two-column layout
+duplicates the same acceptance fact across two tables and forces every
+write-site to know which table to update (`InviteAcceptPage` →
+`parent_profiles`; `LoginPage` signup + `StaffInviteAcceptPage` →
+`profiles`). A `user_agreements` table keyed on `auth.users.id` would
+collapse that to one write-site regardless of which profile-shape
+table a user lives in.
+
+## Existing users have no recorded Terms acceptance
+
+Users who signed up before `chore/legal-pages-and-consent` shipped
+have `profiles.terms_accepted_at = NULL` (and parents,
+`parent_profiles.terms_accepted_at = NULL`). A one-time acceptance
+modal on next login is the standard remediation; deferred. Most
+relevant when the first post-lawyer-review Terms update ships —
+that's the natural moment to require acceptance from all users at
+once.
+
+## Direct signup (LoginPage) doesn't record terms acceptance in DB
+
+Branch `chore/legal-pages-and-consent` wired the post-`signUp`
+`profiles.terms_accepted_at` write client-side in `LoginPage`'s
+`handleSignUp`. With Supabase **email confirmation required** (the
+project's setting — the success copy literally says "Check your email
+to confirm"), `supabase.auth.signUp` returns `{ user, session: null }`
+— no authenticated session is established at signup time. The
+RLS-gated `profiles` update is therefore issued from an anonymous
+client, the `auth.uid() = id` policy denies it, and the update
+silently affects 0 rows. The try/catch swallows whatever surfaces; the
+column stays NULL for direct (non-invite) signups even though the user
+clicked the clickwrap.
+
+Important — **the clickwrap UX gate is enforced regardless**: the
+submit button is disabled until the checkbox is checked, so a user
+*cannot* create an account without affirmatively agreeing. The DB
+record is corroborating evidence of when they agreed, not the
+agreement itself. The agreement is the click; the row is the receipt.
+
+Why this is fine for now and not for later: it's fine because we have
+no obligation today to prove acceptance for any specific account, and
+the UX gate is the actual consent mechanism. It will not be fine the
+day a Terms-update remediation needs to know "which existing accounts
+have / haven't accepted the new Terms" — at that point the receipts
+matter and we need the column populated for every active account.
+
+The invite flows are the correct pattern for comparison: an invitee
+arrives on `InviteAcceptPage` / `StaffInviteAcceptPage` already
+authenticated (they confirmed email and returned via the
+`emailRedirectTo` round-trip), so when those pages run their
+`terms_accepted_at` update the session exists, RLS permits the write,
+and the row lands.
+
+**Fix path: a post-confirmation auth state listener.** On the first
+authenticated session after a fresh signup, check whether the user's
+`profiles` row (or `parent_profiles` row, for parents) has
+`terms_accepted_at = NULL` and write `now()` if so. The natural home
+is the existing `supabase.auth.onAuthStateChange` listener in
+`useAuth.jsx`: on a `SIGNED_IN` event whose user is freshly confirmed,
+issue the same update the invite flows do. Idempotent — a non-null
+column is left alone. Deferred because it cuts across `useAuth`'s
+contract (read-only today) and needs a "freshly confirmed vs
+returning user" decision; a follow-up PR can wire it in one place once
+that decision is made.
