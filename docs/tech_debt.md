@@ -493,3 +493,29 @@ fallback story (what to show before the fetch resolves, or if it
 fails) — out of scope for a copy update. Until then, updating the price
 is a **two-place change**: the Stripe Price object in Vercel **and**
 `SUBSCRIPTION_PRICE_DISPLAY`.
+
+## Versioned `user_agreements` table (deferred from `chore/legal-pages-and-consent`)
+
+PR shipped clickwrap consent with a single `profiles.terms_accepted_at`
+timestamp (migration 014). The proper long-term shape is a separate
+`user_agreements (id, user_id, terms_version, privacy_version,
+agreed_at)` table that records which version a user agreed to,
+supports re-prompting on document updates, and survives profile
+resets. Build when the first material Terms / Privacy update lands.
+
+A related limitation worth recording now: `terms_accepted_at` only
+exists on `public.profiles`. A parent invitee accepting via
+`InviteAcceptPage` is a `parent_profiles` row, not a `profiles` row,
+so the post-accept update silently affects 0 rows — the clickwrap
+gate is still enforced UX-side, but no DB record lands for parent
+acceptances. A `user_agreements` table keyed on `auth.users.id` would
+record acceptance uniformly regardless of which profile-shape table a
+user lives in.
+
+## Existing users have no recorded Terms acceptance
+
+Users who signed up before `chore/legal-pages-and-consent` shipped
+have `profiles.terms_accepted_at = NULL`. A one-time acceptance modal
+on next login is the standard remediation; deferred. Most relevant
+when the first post-lawyer-review Terms update ships — that's the
+natural moment to require acceptance from all users at once.
