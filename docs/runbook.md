@@ -438,3 +438,128 @@ Rollback — uncomment the `DOWN MIGRATION` block at the foot of
 `public.profiles` and `public.parent_profiles`). Dropping the columns
 discards every recorded acceptance written since application; the
 clickwrap UI continues to gate signup either way.
+
+### 2026-05-19 — Migration 015: Supabase security advisor hardening — PENDING PRODUCTION APPLICATION
+
+> ⚠️ **Status: PENDING PRODUCTION APPLICATION.** Ships on branch
+> `chore/supabase-security-hardening`; **not yet applied**. Apply per
+> the Migration Application Procedure above — including the
+> user-visible dashboard verification convention (`CLAUDE.md`
+> § Critical Domain Knowledge). This entry is completed with the
+> actual verification output at application time; the numbers below
+> are *expected*, not confirmed.
+
+What the migration does — `015_security_hardening.sql` resolves the
+three pre-existing Supabase security advisor findings recorded in
+`docs/backlog.md`:
+
+- **Locks `search_path` on the 5 mutable-search_path functions** —
+  `set_updated_at`, `current_user_licensee_id`, `current_user_role`,
+  `bump_thread_last_message_at`, `set_funding_source_priority_default`
+  → each gets `set search_path = public, pg_catalog` via
+  `ALTER FUNCTION` (proconfig change only, no body rewrite).
+- **Tightens `handle_new_user`** from its migration-001 setting of
+  `search_path = public` (no `pg_catalog`) to the standard
+  `public, pg_catalog`.
+- **Scopes `admin_user_progress`** to `public, auth` (its body
+  references `auth.sessions` and `auth.jwt()`, so it genuinely needs
+  the `auth` schema on the path).
+- **Revokes `EXECUTE` from `anon`** on all 7 functions — per-function
+  rationale documented inline in the migration. The four trigger
+  functions don't consult function-level EXECUTE; the two
+  `current_user_*` helpers are only consulted inside RLS policy
+  expressions; `admin_user_progress` is called only from the
+  `smdominique@gmail.com`-gated `AdminPage` under the `authenticated`
+  role.
+- **Adds a `comment on function` to `admin_user_progress`** so the
+  smdominique-only intent is legible in `pg_proc` itself.
+
+Dependencies — none beyond the existence of the 7 functions
+themselves (4 of which were created out-of-band; see
+`docs/tech_debt.md` § "Migrations folder is out of sync with
+production schema").
+
+Editor note — all DDL, no long seed `INSERT`, so the web SQL Editor
+long-statement bug (operational note above) does not apply; can be
+pasted and run as a whole file.
+
+Signature note — every `ALTER FUNCTION` / `REVOKE` uses the zero-arg
+signature `name()`, verified against the dashboard `pg_proc` lookup
+done on 2026-05-19. If any statement errors with "function … does not
+exist", the live signature has drifted; re-run the dashboard signature
+query and update the `(args)` on the offending line.
+
+Expected verification (run by the user in the Supabase web SQL Editor
+at application time, then recorded here):
+
+1. **All 7 functions have the expected `proconfig`** —
+   ```sql
+   select proname, proconfig
+   from pg_proc p
+   join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and proname in (
+       'set_updated_at',
+       'current_user_licensee_id',
+       'current_user_role',
+       'bump_thread_last_message_at',
+       'set_funding_source_priority_default',
+       'admin_user_progress',
+       'handle_new_user'
+     )
+   order by proname;
+   ```
+   → 7 rows. `proconfig` contains `search_path=public,pg_catalog` for
+   six of them; `admin_user_progress` has `search_path=public,auth`.
+2. **No `anon` EXECUTE grants remain on any of the 7** —
+   ```sql
+   select routine_name, grantee, privilege_type
+   from information_schema.routine_privileges
+   where grantee = 'anon'
+     and routine_schema = 'public'
+     and routine_name in (
+       'set_updated_at',
+       'current_user_licensee_id',
+       'current_user_role',
+       'bump_thread_last_message_at',
+       'set_funding_source_priority_default',
+       'admin_user_progress',
+       'handle_new_user'
+     );
+   ```
+   → 0 rows.
+3. **`admin_user_progress` carries the operational comment** —
+   ```sql
+   select obj_description('public.admin_user_progress()'::regprocedure);
+   ```
+   → the comment text written by `015_security_hardening.sql` (cites
+   `AdminPage.jsx`, the smdominique gate, and 2026-05-19).
+4. **Re-run the Supabase security advisor** in the dashboard
+   (Database → Advisors → Security). The three categories recorded in
+   `docs/backlog.md` should be cleared:
+   - "Function Search Path Mutable" — 0 entries from the 5 listed
+     functions
+   - "RLS Disabled in Public" / SECURITY DEFINER + anon exposure —
+     0 entries from the listed functions
+   - Leaked-password protection — see the dashboard step below
+
+#### Dashboard step — enable leaked-password protection
+
+Not part of migration 015 (it's a Supabase Auth config, not a SQL
+object). Apply after 015 lands:
+
+1. Open the Supabase dashboard → **Authentication** → **Providers** →
+   **Email**.
+2. Enable **"Check passwords against HaveIBeenPwned"** (the
+   leaked-password protection toggle).
+3. Click **Save**.
+
+After this, the advisor's "Leaked Password Protection Disabled"
+finding clears too.
+
+Rollback — uncomment the `DOWN MIGRATION` block at the foot of
+`015_security_hardening.sql`. It resets each function's `search_path`
+override and re-grants `EXECUTE` to `anon`, restoring the pre-015
+state (`handle_new_user` goes back to `set search_path = public` to
+match migration 001's original). The dashboard leaked-password toggle
+is rolled back separately by un-checking the same setting.
