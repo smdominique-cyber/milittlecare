@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Loader, AlertCircle, CheckCircle, Shield, Lock, ArrowRight, LogOut, UserPlus } from 'lucide-react'
 
@@ -41,6 +41,7 @@ export default function StaffInviteAcceptPage() {
   const [error, setError] = useState(null)
   const [sessionEmail, setSessionEmail] = useState(null)
   const [fullName, setFullName] = useState('')
+  const [agreedToTerms, setAgreedToTerms] = useState(false)
 
   useEffect(() => {
     if (!token) {
@@ -142,6 +143,22 @@ export default function StaffInviteAcceptPage() {
       })
       const data = await resp.json()
       if (!resp.ok) throw new Error(data.error || 'Failed to accept')
+
+      // Record clickwrap acceptance on the user's profiles row
+      // (migration 014). Try/catch — log failures but don't block;
+      // acceptance is enforced UX-side by the disabled-until-checked
+      // submit gate.
+      try {
+        if (session.user?.id) {
+          await supabase
+            .from('profiles')
+            .update({ terms_accepted_at: new Date().toISOString() })
+            .eq('id', session.user.id)
+        }
+      } catch (writeErr) {
+        console.error('StaffInviteAcceptPage: terms_accepted_at update failed', writeErr)
+      }
+
       setPhase('done')
       setTimeout(() => navigate('/dashboard'), 1500)
     } catch (err) {
@@ -287,10 +304,31 @@ export default function StaffInviteAcceptPage() {
           </div>
         )}
 
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, textAlign: 'left', marginBottom: 12 }}>
+          <input
+            id="agree-terms"
+            type="checkbox"
+            required
+            checked={agreedToTerms}
+            onChange={(e) => setAgreedToTerms(e.target.checked)}
+            style={{ marginTop: 3, flexShrink: 0 }}
+          />
+          <label htmlFor="agree-terms" style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', lineHeight: 1.5 }}>
+            I agree to the{' '}
+            <Link to="/terms" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--clr-sage-dark)' }}>
+              Terms of Service
+            </Link>{' '}
+            and{' '}
+            <Link to="/privacy" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--clr-sage-dark)' }}>
+              Privacy Policy
+            </Link>
+          </label>
+        </div>
+
         <button
           className="parent-cta"
           onClick={accept}
-          disabled={accepting}
+          disabled={accepting || !agreedToTerms}
           style={{ width: '100%' }}
         >
           {accepting ? (

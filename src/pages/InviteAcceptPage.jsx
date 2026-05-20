@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Shield, CheckCircle, AlertCircle, Loader, LogOut, UserPlus, LogIn } from 'lucide-react'
 import '@/styles/parent.css'
@@ -30,6 +30,7 @@ export default function InviteAcceptPage() {
   const [invitation, setInvitation] = useState(null)
   const [sessionEmail, setSessionEmail] = useState(null)
   const [fullName, setFullName] = useState('')
+  const [agreedToTerms, setAgreedToTerms] = useState(false)
 
   // Fetch invitation preview AND current auth state in parallel.
   useEffect(() => {
@@ -142,6 +143,22 @@ export default function InviteAcceptPage() {
       })
       const data = await resp.json()
       if (!resp.ok) throw new Error(data.error || 'Failed to accept invitation')
+
+      // Record clickwrap acceptance on the user's profiles row
+      // (migration 014). Try/catch — if the row does not exist (a
+      // parent invitee has a parent_profiles row, not a profiles row),
+      // the update silently affects 0 rows; acceptance is enforced
+      // UX-side by the disabled-until-checked submit gate.
+      try {
+        if (session.user?.id) {
+          await supabase
+            .from('profiles')
+            .update({ terms_accepted_at: new Date().toISOString() })
+            .eq('id', session.user.id)
+        }
+      } catch (writeErr) {
+        console.error('InviteAcceptPage: terms_accepted_at update failed', writeErr)
+      }
 
       setPhase('done')
       setTimeout(() => navigate('/parent'), 1200)
@@ -284,10 +301,31 @@ export default function InviteAcceptPage() {
           </div>
         )}
 
+        <div style={{ marginTop: 16, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+          <input
+            id="agree-terms"
+            type="checkbox"
+            required
+            checked={agreedToTerms}
+            onChange={(e) => setAgreedToTerms(e.target.checked)}
+            style={{ marginTop: 3, flexShrink: 0 }}
+          />
+          <label htmlFor="agree-terms" style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', lineHeight: 1.5 }}>
+            I agree to the{' '}
+            <Link to="/terms" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--clr-sage-dark)' }}>
+              Terms of Service
+            </Link>{' '}
+            and{' '}
+            <Link to="/privacy" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--clr-sage-dark)' }}>
+              Privacy Policy
+            </Link>
+          </label>
+        </div>
+
         <button
           className="parent-cta"
           onClick={handleAccept}
-          disabled={accepting || !fullName.trim()}
+          disabled={accepting || !fullName.trim() || !agreedToTerms}
         >
           {accepting ? 'Accepting…' : (
             <><LogIn size={14} /> Accept invitation</>
