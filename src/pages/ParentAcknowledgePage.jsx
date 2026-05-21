@@ -91,6 +91,8 @@ export default function ParentAcknowledgePage() {
 
   const [flagging, setFlagging] = useState(null)   // { record } currently being flagged
   const [working, setWorking] = useState(null)     // record id being saved
+  const [emailOptIn, setEmailOptIn] = useState(true)
+  const [savingOptIn, setSavingOptIn] = useState(false)
 
   // --- session + data load --------------------------------------------------
 
@@ -120,6 +122,14 @@ export default function ParentAcknowledgePage() {
       const lookbackDays = includeOlder ? 90 : PARENT_BANNER_LOOKBACK_DAYS
       const startDate = addDaysYMD(todayYMD(), -lookbackDays)
       const endDate = todayYMD()
+
+      // Parent's email-opt-in toggle from parent_profiles.
+      const { data: pProfile } = await supabase
+        .from('parent_profiles')
+        .select('acknowledgment_email_opt_in')
+        .eq('id', parentId)
+        .maybeSingle()
+      if (pProfile) setEmailOptIn(pProfile.acknowledgment_email_opt_in !== false)
 
       const { data: links } = await supabase
         .from('parent_family_links')
@@ -375,6 +385,40 @@ export default function ParentAcknowledgePage() {
             <ChevronDown size={14} />
             {showOlder ? 'Show only recent days' : 'Show older periods (90-day backlog)'}
           </button>
+        </div>
+
+        <div style={{
+          marginTop: 24, paddingTop: 16,
+          borderTop: '1px solid var(--clr-warm-mid)',
+          display: 'flex', alignItems: 'center', gap: 8,
+          fontSize: 14, color: 'var(--clr-ink-mid)',
+        }}>
+          <input
+            type="checkbox"
+            id="email-opt-in"
+            checked={emailOptIn}
+            disabled={savingOptIn || !session}
+            onChange={async (e) => {
+              const next = e.target.checked
+              setEmailOptIn(next)
+              if (!session) return
+              setSavingOptIn(true)
+              try {
+                await supabase
+                  .from('parent_profiles')
+                  .update({ acknowledgment_email_opt_in: next })
+                  .eq('id', session.user.id)
+              } catch (err) {
+                console.error('opt-in save failed', err)
+                setEmailOptIn(!next)
+              } finally {
+                setSavingOptIn(false)
+              }
+            }}
+          />
+          <label htmlFor="email-opt-in">
+            Send me reminder emails when there are hours to review
+          </label>
         </div>
       </div>
 

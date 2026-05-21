@@ -72,6 +72,8 @@ export default function ProviderAcknowledgmentsPage() {
   const [resolving, setResolving] = useState(null)        // { flag } modal state
   const [overriding, setOverriding] = useState(null)      // { record } modal state
   const [working, setWorking] = useState(null)            // id currently saving
+  const [settings, setSettings] = useState(null)          // profiles ack-settings row
+  const [savingSettings, setSavingSettings] = useState(false)
 
   // --- data load -----------------------------------------------------------
 
@@ -87,6 +89,14 @@ export default function ProviderAcknowledgmentsPage() {
     try {
       const startDate = addDaysYMD(todayYMD(), -LOOKBACK_DAYS)
       const endDate = todayYMD()
+
+      // Provider ack-settings (the six columns added in migration 020).
+      const { data: settingsRow } = await supabase
+        .from('profiles')
+        .select('acknowledgment_cadence, acknowledgment_strictness, acknowledgment_email_enabled, acknowledgment_email_send_day, acknowledgment_email_send_hour, acknowledgment_email_timezone')
+        .eq('id', user.id)
+        .maybeSingle()
+      setSettings(settingsRow || {})
 
       // Families this provider owns → children → attendance + acks + flags.
       const { data: families } = await supabase
@@ -285,6 +295,28 @@ export default function ProviderAcknowledgmentsPage() {
         </div>
       )}
 
+      <SettingsCard
+        settings={settings}
+        saving={savingSettings}
+        onSave={async (next) => {
+          setSavingSettings(true)
+          setMessage(null)
+          try {
+            const { error: e } = await supabase
+              .from('profiles')
+              .update(next)
+              .eq('id', user.id)
+            if (e) throw e
+            setSettings(next)
+            setMessage({ type: 'success', text: '✓ Settings saved' })
+          } catch (err) {
+            setMessage({ type: 'error', text: err.message || 'Couldn’t save settings' })
+          } finally {
+            setSavingSettings(false)
+          }
+        }}
+      />
+
       {/* Counts strip */}
       <section style={cardStyle}>
         <h3 style={sectionTitleStyle}>This 30-day window</h3>
@@ -389,6 +421,108 @@ export default function ProviderAcknowledgmentsPage() {
 // -----------------------------------------------------------------------------
 // Subcomponents
 // -----------------------------------------------------------------------------
+
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const HOURS = Array.from({ length: 24 }, (_, i) => {
+  const hour12 = i === 0 ? 12 : i > 12 ? i - 12 : i
+  const ampm = i >= 12 ? 'PM' : 'AM'
+  return { value: i, label: `${hour12}:00 ${ampm}` }
+})
+
+function SettingsCard({ settings, saving, onSave }) {
+  const [form, setForm] = useState(null)
+  useEffect(() => {
+    if (!settings) return
+    setForm({
+      acknowledgment_cadence:           settings.acknowledgment_cadence || 'weekly',
+      acknowledgment_strictness:        settings.acknowledgment_strictness || 'warning',
+      acknowledgment_email_enabled:     settings.acknowledgment_email_enabled !== false,
+      acknowledgment_email_send_day:    settings.acknowledgment_email_send_day ?? 5,
+      acknowledgment_email_send_hour:   settings.acknowledgment_email_send_hour ?? 17,
+      acknowledgment_email_timezone:    settings.acknowledgment_email_timezone || 'America/Detroit',
+    })
+  }, [settings])
+
+  if (!form) return null
+
+  const update = (key) => (value) => setForm(f => ({ ...f, [key]: value }))
+
+  return (
+    <section style={cardStyle}>
+      <h3 style={sectionTitleStyle}>Settings</h3>
+      <p style={emptyStyle}>
+        Controls when and how parents are reminded to review billed hours.
+        Strict mode blocks I-Billing export when any billed day is unacknowledged.
+      </p>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-3)', marginTop: 'var(--space-3)' }}>
+        <div className="form-field-group">
+          <label className="field-label">Email reminders</label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input type="checkbox" checked={form.acknowledgment_email_enabled}
+              onChange={(e) => update('acknowledgment_email_enabled')(e.target.checked)} />
+            <span>Send weekly/daily digest emails to parents</span>
+          </label>
+        </div>
+
+        <div className="form-field-group">
+          <label className="field-label">Cadence</label>
+          <select className="field-input"
+            value={form.acknowledgment_cadence}
+            onChange={(e) => update('acknowledgment_cadence')(e.target.value)}>
+            <option value="weekly">Weekly</option>
+            <option value="daily">Daily</option>
+          </select>
+        </div>
+
+        <div className="form-field-group">
+          <label className="field-label">Strictness</label>
+          <select className="field-input"
+            value={form.acknowledgment_strictness}
+            onChange={(e) => update('acknowledgment_strictness')(e.target.value)}>
+            <option value="warning">Warning — surface unacknowledged days but allow billing</option>
+            <option value="strict">Strict — block I-Billing export until every day is acknowledged</option>
+          </select>
+        </div>
+
+        {form.acknowledgment_cadence === 'weekly' && (
+          <div className="form-field-group">
+            <label className="field-label">Send day</label>
+            <select className="field-input"
+              value={form.acknowledgment_email_send_day}
+              onChange={(e) => update('acknowledgment_email_send_day')(Number(e.target.value))}>
+              {DAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+            </select>
+          </div>
+        )}
+
+        <div className="form-field-group">
+          <label className="field-label">Send hour (provider local time)</label>
+          <select className="field-input"
+            value={form.acknowledgment_email_send_hour}
+            onChange={(e) => update('acknowledgment_email_send_hour')(Number(e.target.value))}>
+            {HOURS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
+          </select>
+        </div>
+
+        <div className="form-field-group">
+          <label className="field-label">Timezone (IANA)</label>
+          <input className="field-input" type="text"
+            value={form.acknowledgment_email_timezone}
+            onChange={(e) => update('acknowledgment_email_timezone')(e.target.value)}
+            placeholder="America/Detroit" />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 'var(--space-3)' }}>
+        <button className="btn-save" disabled={saving} onClick={() => onSave(form)}
+          style={{ flex: 'initial', padding: '0.5rem 1rem', fontSize: '0.875rem' }}>
+          {saving ? 'Saving…' : 'Save settings'}
+        </button>
+      </div>
+    </section>
+  )
+}
 
 function Stat({ label, value, color }) {
   return (
