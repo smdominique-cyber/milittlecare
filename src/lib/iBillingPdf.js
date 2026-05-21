@@ -24,6 +24,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
 import { runValidation } from './iBilling'
+import { computeAttendanceHash } from './parentAcknowledgment'
 
 // -----------------------------------------------------------------------------
 // Formatting helpers
@@ -397,11 +398,18 @@ function drawTransferWeek(doc, { startY, dates, childAtt, label }) {
 
 /**
  * Builds the official T&A Record PDF, pre-filled with everything the
- * system knows. Parent initials column is left blank (PR #12 wires
- * acknowledgments here as a follow-up commit). CACFP meals column is
- * left blank in V1 (CACFP integration is a future PR).
+ * system knows. Parent initials column is pre-filled from
+ * attendance_acknowledgments (PR #12): the child's initials appear when
+ * the row matches the segment's current canonical hash, "(override)"
+ * for provider attestations, "(re-ack needed)" if the hash mismatches
+ * (i.e. the row was edited after the parent acknowledged), and
+ * "(awaiting)" otherwise. A per-page footnote legend explains each
+ * state. CACFP meals column is left blank in V1 (CACFP integration is
+ * a future PR).
  *
- * @param {object} args  Same shape as buildTransferSheetPdf.
+ * @param {object} args  Same shape as buildTransferSheetPdf plus:
+ * @param {object[]} [args.acknowledgments]   Acknowledgment rows for the
+ *                                            period. Defaults to [].
  * @returns {jsPDF}
  */
 export function buildOfficialTimeAndAttendancePdf({
@@ -410,12 +418,14 @@ export function buildOfficialTimeAndAttendancePdf({
   children,
   fundingSources,
   profile,
+  acknowledgments,
   generatedAt,
 } = {}) {
   const doc = new jsPDF({ unit: 'pt', format: 'letter', orientation: 'landscape' })
   const safeChildren = Array.isArray(children) ? children : []
   const dates = dateArrayForPeriod(payPeriod)
   const attByChild = indexAttendance(attendance)
+  const ackIdx = indexAcknowledgments(acknowledgments)
   const generated = generatedAt || new Date().toISOString()
 
   const billableChildren = safeChildren.filter(c => {
@@ -435,16 +445,17 @@ export function buildOfficialTimeAndAttendancePdf({
   billableChildren.forEach((child, idx) => {
     if (idx > 0) doc.addPage('letter', 'landscape')
     drawHeaderStamp(doc, generated)
-    drawOfficialTaPage(doc, { child, payPeriod, dates, attByChild, fundingSources, profile })
+    drawOfficialTaPage(doc, { child, payPeriod, dates, attByChild, ackIdx, fundingSources, profile })
     drawFooter(doc, 'MI Little Care · MiLEAP Time & Attendance Record (draft layout)')
   })
 
   return doc
 }
 
-function drawOfficialTaPage(doc, { child, payPeriod, dates, attByChild, fundingSources, profile }) {
+function drawOfficialTaPage(doc, { child, payPeriod, dates, attByChild, ackIdx, fundingSources, profile }) {
   const fs = readCdcSource(child, fundingSources)
   const childAtt = attByChild[child.id] || {}
+  const initials = childInitials(child)
 
   // Title row
   doc.setFontSize(13)
@@ -518,7 +529,8 @@ function drawOfficialTaPage(doc, { child, payPeriod, dates, attByChild, fundingS
       formatTime12h(segs[1]?.check_out),
       dayHours > 0 ? dayHours.toFixed(2) : '',
       isAbsent ? 'X' : '',
-      '',   // Parent init. — left blank, PR #12 follow-up wires acknowledgments
+      // Parent-initial cell: aggregated across the segments of this day.
+      dayHours > 0 ? parentInitialCell({ segs, ackIdx, child, initials }) : '',
       '',   // CACFP meals — out of scope this PR
     ]
   })
@@ -558,11 +570,78 @@ function drawOfficialTaPage(doc, { child, payPeriod, dates, attByChild, fundingS
   doc.setFontSize(8)
   doc.setTextColor(140)
   doc.text(
-    'Parent-initial column intentionally blank — to be filled in by the parent (or pre-filled from milittlecare ' +
-    'parent acknowledgments once PR #12 wires the integration).',
+    'Parent-initial column legend:  ' +
+    'initials (e.g. "MR") = parent acknowledged electronically;  ' +
+    '"(override)" = provider attested per audit override;  ' +
+    '"(re-ack needed)" = attendance was edited after parent acknowledged;  ' +
+    '"(awaiting)" = no parent acknowledgment yet — parent should initial by hand.',
     36, sigY + 44, { maxWidth: 760 }
   )
   doc.setTextColor(0)
+}
+
+// -----------------------------------------------------------------------------
+// Parent-initial cell resolver (PR #12 wiring)
+// -----------------------------------------------------------------------------
+
+/**
+ * Index acknowledgments by (child_id|date|segment_index). Archived rows
+ * are dropped. Returns a Map.
+ */
+function indexAcknowledgments(acknowledgments) {
+  const idx = new Map()
+  const safe = Array.isArray(acknowledgments) ? acknowledgments : []
+  for (const a of safe) {
+    if (!a || a.archived_at) continue
+    if (!a.child_id || !a.date) continue
+    const key = `${a.child_id}|${a.date}|${a.segment_index ?? 0}`
+    idx.set(key, a)
+  }
+  return idx
+}
+
+/**
+ * Day-level parent-initial cell text. Aggregates across the day's
+ * present segments (multi-segment days are common when there's a
+ * before-school + after-school split). Resolution:
+ *
+ *   - Every billed segment matches a parent acknowledgment whose
+ *     attendance_snapshot_hash equals the current canonical hash →
+ *     child's initials (e.g. "MR").
+ *   - At least one segment was acknowledged via provider override →
+ *     "(override)" (only if no plain-parent acks remain to make the
+ *     "initials" wording correct; a mix of override + parent collapses
+ *     to "(override)" since the override is the authoritative one).
+ *   - Any segment's hash mismatches its acknowledgment → "(re-ack
+ *     needed)".
+ *   - Any segment has no acknowledgment on file → "(awaiting)".
+ */
+function parentInitialCell({ segs, ackIdx, child, initials }) {
+  const billed = segs.filter(s => s && s.status === 'present'
+    && (segmentDurationHours(s.check_in, s.check_out) || 0) > 0)
+  if (billed.length === 0) return ''
+
+  let allClean = true
+  let anyOverride = false
+  let anyTampered = false
+  let anyUnack = false
+  for (const s of billed) {
+    const key = `${child.id}|${s.date}|${s.segment_index ?? 0}`
+    const ack = ackIdx.get(key)
+    if (!ack) { anyUnack = true; allClean = false; continue }
+    const currentHash = computeAttendanceHash(s)
+    if (currentHash !== ack.attendance_snapshot_hash) {
+      anyTampered = true; allClean = false; continue
+    }
+    if (ack.acknowledged_via === 'provider_override') {
+      anyOverride = true
+    }
+  }
+  if (anyUnack)    return '(awaiting)'
+  if (anyTampered) return '(re-ack needed)'
+  if (anyOverride) return '(override)'
+  if (allClean)    return initials || '✓'
+  return '(awaiting)'
 }
 
 // -----------------------------------------------------------------------------
