@@ -1,13 +1,13 @@
 // I-Billing Transfer page (PR #9 orchestrator).
 //
-// The CDC I-Billing flow is a five-stage wizard:
+// The CDC I-Billing flow is a four-stage wizard:
 //
 //   1. PayPeriodPicker      — choose the period to transfer
 //   2. ReviewGrid           — children × days; running totals;
-//                             validation cells (Screen 2)
-//   3. IssueResolutionModal — modal opened from Screen 2 (Screen 3)
-//   4. ExportPanel          — download CSV + PDFs (Screen 4)
-//   5. ReconcilePanel       — enter MDHHS confirmation #; lock the
+//                             validation cells. Issue Resolution
+//                             (Screen 3) opens as a modal from here.
+//   3. ExportPanel          — download CSV + PDFs (Screen 4)
+//   4. ReconcilePanel       — enter MDHHS confirmation #; lock the
 //                             period (Screen 5)
 //
 // Each stage is its own component under src/components/iBilling/. This
@@ -25,7 +25,9 @@ import { useAuth } from '@/hooks/useAuth'
 import { useActiveModules } from '@/hooks/useActiveModules'
 import { MODULE_KEYS } from '@/lib/modules'
 import PayPeriodPicker from '@/components/iBilling/PayPeriodPicker'
+import ReviewGrid from '@/components/iBilling/ReviewGrid'
 import { todayYMD } from '@/lib/cdcPayPeriods'
+import { runValidation } from '@/lib/iBilling'
 
 // -----------------------------------------------------------------------------
 // Stage IDs
@@ -33,7 +35,7 @@ import { todayYMD } from '@/lib/cdcPayPeriods'
 
 export const STAGE = Object.freeze({
   PICK:      'pick',       // Screen 1
-  REVIEW:    'review',     // Screen 2 (Screen 3 is a modal inside it)
+  REVIEW:    'review',     // Screen 2 (Screen 3 opens modally on top)
   EXPORT:    'export',     // Screen 4
   RECONCILE: 'reconcile',  // Screen 5
 })
@@ -50,18 +52,25 @@ export default function IBillingPage() {
   const [stage, setStage] = useState(STAGE.PICK)
   const [selectedPeriod, setSelectedPeriod] = useState(null)
 
-  // Loaded data — populated on mount; refreshed when selectedPeriod
-  // changes (the screens use the same slice; the orchestrator owns it).
+  // Initial (provider-scoped) data.
   const [catalog, setCatalog] = useState([])
   const [fundingSources, setFundingSources] = useState([])
   const [submittedNumbers, setSubmittedNumbers] = useState(new Set())
+  const [profile, setProfile] = useState(null)
+  const [allChildren, setAllChildren] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
+  // Period-scoped data (refetched when selectedPeriod changes).
+  const [attendance, setAttendance] = useState([])
+  const [fiscalYearAttendance, setFiscalYearAttendance] = useState([])
+  const [acknowledgments, setAcknowledgments] = useState([])
+  const [periodLoading, setPeriodLoading] = useState(false)
+  const [periodError, setPeriodError] = useState(null)
+
   const today = useMemo(() => todayYMD(), [])
 
-  // Initial load: catalog + funding sources + prior submissions.
-  // Hook runs unconditionally; user check happens inside.
+  // -- Initial load ----------------------------------------------------
   useEffect(() => {
     if (!user) { setLoading(false); return }
     let cancelled = false
@@ -75,9 +84,11 @@ export default function IBillingPage() {
         .from('cdc_billing_submissions')
         .select('pay_period_number')
         .eq('provider_id', user.id),
-    ]).then(([catRes, fsRes, subRes]) => {
+      supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+      supabase.from('children').select('*').eq('user_id', user.id),
+    ]).then(([catRes, fsRes, subRes, profRes, kidRes]) => {
       if (cancelled) return
-      const firstErr = catRes.error || fsRes.error || subRes.error
+      const firstErr = catRes.error || fsRes.error || subRes.error || profRes.error || kidRes.error
       if (firstErr) {
         console.error('IBillingPage initial load', firstErr)
         setError('Failed to load I-Billing data. Refresh and try again.')
@@ -85,6 +96,8 @@ export default function IBillingPage() {
         setCatalog(catRes.data || [])
         setFundingSources(fsRes.data || [])
         setSubmittedNumbers(new Set((subRes.data || []).map(r => String(r.pay_period_number))))
+        setProfile(profRes.data || null)
+        setAllChildren(kidRes.data || [])
       }
     }).finally(() => {
       if (!cancelled) setLoading(false)
@@ -93,7 +106,80 @@ export default function IBillingPage() {
     return () => { cancelled = true }
   }, [user])
 
-  // ---- Gates (hooks must run above this line) --------------------------
+  // -- Period-scoped load: attendance, FY attendance, acknowledgments -
+  useEffect(() => {
+    if (!user || !selectedPeriod) {
+      setAttendance([])
+      setFiscalYearAttendance([])
+      setAcknowledgments([])
+      return
+    }
+    let cancelled = false
+    setPeriodLoading(true)
+    setPeriodError(null)
+
+    // Fiscal year starts Oct 1 of the year that contains the period.
+    const fyStart = fiscalYearStart(selectedPeriod.start_date)
+
+    Promise.all([
+      supabase
+        .from('attendance')
+        .select('*')
+        .eq('user_id', user.id)
+        .gte('date', selectedPeriod.start_date)
+        .lte('date', selectedPeriod.end_date),
+      supabase
+        .from('attendance')
+        .select('*')
+        .eq('user_id', user.id)
+        .gte('date', fyStart)
+        .lte('date', selectedPeriod.end_date),
+      // Acknowledgments only exist after PR #12 merges in production —
+      // the table will exist (migration 020 is live), but the row set
+      // may be empty until parents start using the portal. Tolerate
+      // failure quietly.
+      tolerateMissingTable(
+        supabase
+          .from('attendance_acknowledgments')
+          .select('*')
+          .gte('date', selectedPeriod.start_date)
+          .lte('date', selectedPeriod.end_date)
+      ),
+    ]).then(([attRes, fyRes, ackRes]) => {
+      if (cancelled) return
+      const firstErr = attRes.error || fyRes.error
+      if (firstErr) {
+        console.error('IBillingPage period load', firstErr)
+        setPeriodError('Failed to load attendance for this period.')
+      } else {
+        setAttendance(attRes.data || [])
+        setFiscalYearAttendance(fyRes.data || [])
+        setAcknowledgments(ackRes?.data || [])
+      }
+    }).finally(() => {
+      if (!cancelled) setPeriodLoading(false)
+    })
+
+    return () => { cancelled = true }
+  }, [user, selectedPeriod])
+
+  // -- Derived: validation issues -------------------------------------
+  const issues = useMemo(() => {
+    if (!selectedPeriod) return []
+    return runValidation({
+      payPeriod: selectedPeriod,
+      attendance,
+      children: allChildren,
+      fundingSources,
+      profile,
+      acknowledgments,
+      fiscalYearAttendance,
+      today,
+    })
+  }, [selectedPeriod, attendance, allChildren, fundingSources, profile,
+      acknowledgments, fiscalYearAttendance, today])
+
+  // ---- Gates ---------------------------------------------------------
   if (modulesLoading) {
     return (
       <div style={pageStyle}>
@@ -109,6 +195,15 @@ export default function IBillingPage() {
   function handlePickPeriod(period) {
     setSelectedPeriod(period)
     setStage(STAGE.REVIEW)
+  }
+
+  function handleBackToPicker() {
+    setStage(STAGE.PICK)
+    setSelectedPeriod(null)
+  }
+
+  function handleAdvanceFromReview() {
+    setStage(STAGE.EXPORT)
   }
 
   return (
@@ -130,7 +225,26 @@ export default function IBillingPage() {
         />
       )}
 
-      {stage !== STAGE.PICK && (
+      {stage === STAGE.REVIEW && (
+        <>
+          {periodLoading && <p style={{ color: '#6b7280' }}>Loading attendance for this period…</p>}
+          {periodError && <p role="alert" style={{ color: '#b91c1c' }}>{periodError}</p>}
+          {!periodLoading && !periodError && (
+            <ReviewGrid
+              payPeriod={selectedPeriod}
+              attendance={attendance}
+              children={allChildren}
+              fundingSources={fundingSources}
+              issues={issues}
+              onAdvance={handleAdvanceFromReview}
+              onBack={handleBackToPicker}
+              onOpenIssue={() => { /* Screen 3 wires this in the next commit */ }}
+            />
+          )}
+        </>
+      )}
+
+      {(stage === STAGE.EXPORT || stage === STAGE.RECONCILE) && (
         <div style={{ marginTop: 24, padding: 24, background: '#f9fafb',
                       border: '1px dashed #d1d5db', borderRadius: 8 }}>
           <h2 style={{ margin: 0, fontSize: 18 }}>
@@ -141,12 +255,12 @@ export default function IBillingPage() {
               Period {selectedPeriod?.period_number}
               {' '}({selectedPeriod?.start_date} → {selectedPeriod?.end_date})
             </strong>.
-            The Review / Export / Reconcile stages ship in the next
-            commits on this branch.
+            The Export / Reconcile stages ship in the next commits on
+            this branch.
           </p>
-          <button type="button" onClick={() => setStage(STAGE.PICK)}
+          <button type="button" onClick={() => setStage(STAGE.REVIEW)}
                   style={ghostButtonStyle}>
-            Back to picker
+            Back to review
           </button>
         </div>
       )}
@@ -178,6 +292,35 @@ function StageIndicator({ stage }) {
       ))}
     </ol>
   )
+}
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+function fiscalYearStart(yyyymmdd) {
+  // CDC fiscal year starts Oct 1.
+  const [y, m] = String(yyyymmdd).split('-').map(Number)
+  const fy = (m >= 10) ? y : y - 1
+  return `${fy}-10-01`
+}
+
+/**
+ * Wrap a Supabase query so a "relation does not exist" error resolves
+ * to an empty data result rather than failing the page. Used for the
+ * acknowledgments table when this branch is checked out independently
+ * of PR #12 — PR #12 ships migration 020 that creates the table.
+ */
+async function tolerateMissingTable(queryPromise) {
+  try {
+    const res = await queryPromise
+    if (res.error && /relation .* does not exist|42P01/.test(res.error.message || '')) {
+      return { data: [], error: null }
+    }
+    return res
+  } catch (e) {
+    return { data: [], error: null }
+  }
 }
 
 // -----------------------------------------------------------------------------
