@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { computeAttendanceHash } from './parentAcknowledgment'
 import {
   checkPayPeriodHoursCap,
   checkBillingOutsideAuthorization,
@@ -325,22 +326,121 @@ describe('Rule 7 — overnight not split at midnight', () => {
   })
 })
 
-describe('Rule 8 — missing parent initials', () => {
-  it('warns once at the provider level when any segment has billed hours', () => {
+describe('Rule 8 — missing parent initials (PR #12 acknowledgment-aware)', () => {
+  // Build an acknowledgment row whose snapshot matches the given
+  // attendance row's current canonical hash. The hash function lives in
+  // src/lib/parentAcknowledgment.js; we recompute it here so tests stay
+  // resilient to canonical-shape changes — if the canonical shape ever
+  // adds a field, both sides update simultaneously and these tests
+  // continue to mean what they were meant to mean.
+  const matchingAck = (rec, overrides = {}) => {
+    return {
+      id: `ack-${Math.random().toString(36).slice(2)}`,
+      child_id: rec.child_id,
+      date: rec.date,
+      segment_index: rec.segment_index ?? 0,
+      acknowledged_at: '2026-05-20T12:00:00.000Z',
+      acknowledged_via: 'parent_portal',
+      attendance_snapshot_hash: computeAttendanceHash(rec),
+      archived_at: null,
+      ...overrides,
+    }
+  }
+
+  it('acknowledged-clean: passes with no issue when each billed segment has a matching ack', () => {
+    const a = attendanceRow({ id: 'a', child_id: 'kid-a', check_in: '08:00', check_out: '16:00' })
+    const b = attendanceRow({ id: 'b', child_id: 'kid-b', check_in: '07:30', check_out: '17:30' })
     const issues = checkMissingParentInitials({
-      attendance: [
-        attendanceRow({ child_id: 'a', check_in: '08:00', check_out: '16:00' }),
-        attendanceRow({ child_id: 'b', check_in: '07:30', check_out: '17:30' }),
-      ],
+      attendance: [a, b],
+      acknowledgments: [matchingAck(a), matchingAck(b)],
+      profile: { acknowledgment_strictness: 'warning' },
+    })
+    expect(issues).toEqual([])
+  })
+
+  it('unacknowledged-warning: per-day warning when strictness=warning (default)', () => {
+    const a = attendanceRow({ id: 'a', child_id: 'kid-a', date: '2026-05-04' })
+    const b = attendanceRow({ id: 'b', child_id: 'kid-b', date: '2026-05-05' })
+    const issues = checkMissingParentInitials({
+      attendance: [a, b],
+      acknowledgments: [],
+      profile: { acknowledgment_strictness: 'warning' },
+    })
+    expect(issues).toHaveLength(2)
+    for (const i of issues) {
+      expect(i.severity).toBe(SEVERITY.WARNING)
+      expect(i.ruleId).toBe(RULE.MISSING_PARENT_INITIALS)
+      expect(i.proposedFix?.action?.kind).toBe('provider_override_acknowledgment')
+    }
+    // Issue is per-segment (childId + date populated, not provider-level).
+    expect(issues.map(i => `${i.childId}|${i.date}`).sort()).toEqual(['kid-a|2026-05-04', 'kid-b|2026-05-05'])
+  })
+
+  it('unacknowledged-strict-blocking: same shape, blocking severity when strictness=strict', () => {
+    const a = attendanceRow({ id: 'a', child_id: 'kid-a', date: '2026-05-04' })
+    const issues = checkMissingParentInitials({
+      attendance: [a],
+      acknowledgments: [],
+      profile: { acknowledgment_strictness: 'strict' },
     })
     expect(issues).toHaveLength(1)
-    expect(issues[0].severity).toBe(SEVERITY.WARNING)
+    expect(issues[0].severity).toBe(SEVERITY.BLOCKING)
   })
+
+  it('acknowledged-then-tampered: flags when attendance edited after ack (hash mismatch)', () => {
+    // Parent acknowledged the 07:30–17:30 segment.
+    const original = attendanceRow({ id: 'a', child_id: 'kid-a', check_in: '07:30', check_out: '17:30' })
+    const ack = matchingAck(original)
+    // Provider then edited check_out to 18:30 — same row, different hash.
+    const edited = { ...original, check_out: '18:30' }
+    const issues = checkMissingParentInitials({
+      attendance: [edited],
+      acknowledgments: [ack],
+      profile: { acknowledgment_strictness: 'warning' },
+    })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].message).toMatch(/edited after parent acknowledged/)
+    // Tampered case offers no one-click fix — re-acknowledgment is the only path.
+    expect(issues[0].proposedFix).toBeNull()
+  })
+
+  it('override-acknowledged: provider override counts as clean (no issue)', () => {
+    const a = attendanceRow({ id: 'a', child_id: 'kid-a' })
+    const issues = checkMissingParentInitials({
+      attendance: [a],
+      acknowledgments: [matchingAck(a, { acknowledged_via: 'provider_override' })],
+      profile: { acknowledgment_strictness: 'strict' },  // even in strict mode
+    })
+    expect(issues).toEqual([])
+  })
+
   it('returns [] when there are no billed hours (absence-only or empty period)', () => {
     expect(checkMissingParentInitials({
       attendance: [attendanceRow({ status: 'absent' })],
+      acknowledgments: [],
+      profile: {},
     })).toEqual([])
-    expect(checkMissingParentInitials({ attendance: [] })).toEqual([])
+    expect(checkMissingParentInitials({ attendance: [], acknowledgments: [], profile: {} })).toEqual([])
+  })
+
+  it('ignores archived acknowledgments (treats as missing)', () => {
+    const a = attendanceRow({ id: 'a', child_id: 'kid-a' })
+    const archived = matchingAck(a, { archived_at: '2026-05-21T10:00:00.000Z' })
+    const issues = checkMissingParentInitials({
+      attendance: [a],
+      acknowledgments: [archived],
+      profile: {},
+    })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].message).toMatch(/No parent acknowledgment on file/)
+  })
+
+  it('defaults to warning severity when profile is missing or strictness unset', () => {
+    const a = attendanceRow({ id: 'a' })
+    expect(checkMissingParentInitials({ attendance: [a], acknowledgments: [] })[0].severity)
+      .toBe(SEVERITY.WARNING)
+    expect(checkMissingParentInitials({ attendance: [a], acknowledgments: [], profile: {} })[0].severity)
+      .toBe(SEVERITY.WARNING)
   })
 })
 
@@ -623,10 +723,36 @@ describe('runValidation — orchestration', () => {
     }
   })
 
-  it('clean-pass: only Rule 8 warning (parent-initials gap is a known schema limitation)', () => {
-    // Even a fully compliant provider gets one warning today, because
-    // the attendance schema has no parent-initials column. When that
-    // schema gap closes (future PR), this test changes.
+  it('clean-pass: no issues when every billed day has a matching acknowledgment', () => {
+    // PR #12 closed the parent-initials schema gap. A fully compliant
+    // provider with each day acknowledged should produce zero issues.
+    const rec = attendanceRow({ id: 'a1', child_id: 'child-1', check_in: '07:00', check_out: '17:00' })
+    const ack = {
+      id: 'ack-1',
+      child_id: 'child-1',
+      date: rec.date,
+      segment_index: rec.segment_index ?? 0,
+      acknowledged_at: '2026-05-20T12:00:00.000Z',
+      acknowledged_via: 'parent_portal',
+      attendance_snapshot_hash: computeAttendanceHash(rec),
+      archived_at: null,
+    }
+    const issues = runValidation({
+      attendance: [rec],
+      children: [{ id: 'child-1', school_enrolled: false }],
+      fundingSources: [cdcSource({ child_id: 'child-1' })],
+      payPeriod: payPeriod(),
+      profile: { id: 'provider-1', full_name: 'Venessa', acknowledgment_strictness: 'warning' },
+      acknowledgments: [ack],
+      fiscalYearAttendance: [],
+      today: TODAY,
+    })
+    expect(issues).toEqual([])
+  })
+
+  it('clean-pass (legacy): unacknowledged day still produces the Rule 8 warning by default', () => {
+    // Sanity check that strictness defaults to warning when not set —
+    // the old test's expectation, just with the per-day shape.
     const issues = runValidation({
       attendance: [attendanceRow({ child_id: 'child-1', check_in: '07:00', check_out: '17:00' })],
       children: [{ id: 'child-1', school_enrolled: false }],

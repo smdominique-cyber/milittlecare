@@ -15,6 +15,17 @@
 // pre-PR #8.5b legacy rows.
 //
 // All 11 rules implemented (this commit completes them all).
+//
+// Rule 8 upgrade (PR #12 step 6). When PR #12's parent-acknowledgment
+// system is in place, Rule 8 becomes a per-day check using the
+// attendance hash for tamper detection (spec § 9.1). Severity is driven
+// by the provider's `acknowledgment_strictness` setting on `profiles`
+// — 'warning' default, 'blocking' in strict mode. The pure helper
+// `computeAttendanceHash` lives in src/lib/parentAcknowledgment.js so
+// the parent portal, the provider dashboard, and the validation engine
+// share one canonical serialisation.
+
+import { computeAttendanceHash } from './parentAcknowledgment'
 
 // -----------------------------------------------------------------------------
 // Constants
@@ -359,28 +370,97 @@ export function checkOvernightNotSplitAtMidnight({ attendance }) {
 }
 
 // -----------------------------------------------------------------------------
-// Rule 8 — missing parent initials (LEP Handbook p.15, Warning)
+// Rule 8 — missing parent initials (LEP Handbook p.15, Warning or Blocking)
 // -----------------------------------------------------------------------------
 
 /**
- * The official T&A Record requires the parent to initial each day with
- * billed hours. The `attendance` table as captured in PR #8.5a has no
- * `parent_initials` column (verified by app-code grep); the current
- * `checked_in_by` / `checked_out_by` text fields record provider
- * actions, not parent sign-off. Until the schema captures parent
- * initials, this rule downgrades to a single provider-level warning
- * making the gap visible without flooding the UI with per-day issues.
+ * One issue per billed segment that is not cleanly acknowledged by the
+ * parent. Severity is driven by the provider's
+ * `profiles.acknowledgment_strictness` setting from PR #8.5c:
+ *   - 'warning' (default) → SEVERITY.WARNING — exports proceed, parent
+ *     initials column on the T&A PDF reads "(awaiting)".
+ *   - 'strict'             → SEVERITY.BLOCKING — exports refuse until
+ *     each day is either acknowledged by the parent or overridden by
+ *     the provider with a reason.
+ *
+ * Two failure modes per segment:
+ *   1. No acknowledgment row on file → "Awaiting parent acknowledgment".
+ *      Proposed-fix is a provider override (one-click on Screen 3 with
+ *      a required reason).
+ *   2. Acknowledgment exists but the row's current canonical hash no
+ *      longer matches `attendance_snapshot_hash` → the segment was
+ *      edited after acknowledgment. Parent must re-confirm; no
+ *      one-click fix offered.
+ *
+ * Acknowledgment rows authored as `acknowledged_via = 'provider_override'`
+ * count as "clean" — the override is the resolution.
+ *
+ * Implementation note. The hash function lives in
+ * src/lib/parentAcknowledgment.js (one canonical serialisation shared
+ * by the parent portal write side and the validation read side). Both
+ * sides agree on which fields participate, so a parent who acknowledges
+ * a segment is acknowledging the exact `(check_in, check_out, status,
+ * segment_index)` tuple — and any subsequent edit to those columns
+ * trips this rule.
  */
-export function checkMissingParentInitials({ attendance }) {
+export function checkMissingParentInitials({ attendance, acknowledgments, profile }) {
   const safe = Array.isArray(attendance) ? attendance : []
-  const hasBilledHours = safe.some(r => r && r.status === 'present' && segmentHours(r) > 0)
-  if (!hasBilledHours) return []
-  return [makeIssue({
-    ruleId: RULE.MISSING_PARENT_INITIALS,
-    severity: SEVERITY.WARNING,
-    message: 'Parent initials are not captured in the system. The MiLEAP T&A Record requires the parent to initial each billed day; have the parent sign the exported T&A PDF by hand before keeping it on file.',
-    auditCitation: 'CDC LEP Handbook p.15',
-  })]
+  const acks = Array.isArray(acknowledgments) ? acknowledgments : []
+  if (!safe.some(r => r && r.status === 'present' && segmentHours(r) > 0)) return []
+
+  const strictness = profile?.acknowledgment_strictness === 'strict' ? 'strict' : 'warning'
+  const severity = strictness === 'strict' ? SEVERITY.BLOCKING : SEVERITY.WARNING
+
+  // Index acknowledgments by (child_id, date, segment_index).
+  const ackByKey = new Map()
+  for (const a of acks) {
+    if (!a || a.archived_at) continue
+    if (!a.child_id || !a.date) continue
+    const key = `${a.child_id}|${a.date}|${a.segment_index ?? 0}`
+    ackByKey.set(key, a)
+  }
+
+  const issues = []
+  for (const rec of safe) {
+    if (!rec || rec.status !== 'present') continue
+    if (segmentHours(rec) <= 0) continue
+
+    const segIdx = rec.segment_index ?? 0
+    const key = `${rec.child_id}|${rec.date}|${segIdx}`
+    const ack = ackByKey.get(key)
+
+    if (!ack) {
+      issues.push(makeIssue({
+        ruleId: RULE.MISSING_PARENT_INITIALS,
+        severity,
+        childId: rec.child_id,
+        date: rec.date,
+        segmentIndex: segIdx,
+        message: `No parent acknowledgment on file for ${rec.date}. Parent must review in the portal, or you can override with a reason.`,
+        proposedFix: {
+          description: 'Override with reason (provider attests)',
+          action: { kind: 'provider_override_acknowledgment', attendanceId: rec.id },
+        },
+        auditCitation: 'CDC LEP Handbook p.15',
+      }))
+      continue
+    }
+
+    // Hash check — did the row change after the parent acknowledged?
+    const currentHash = computeAttendanceHash(rec)
+    if (currentHash !== ack.attendance_snapshot_hash) {
+      issues.push(makeIssue({
+        ruleId: RULE.MISSING_PARENT_INITIALS,
+        severity,
+        childId: rec.child_id,
+        date: rec.date,
+        segmentIndex: segIdx,
+        message: `Attendance was edited after parent acknowledged for ${rec.date}. Parent must re-confirm before this day can be billed.`,
+        auditCitation: 'CDC LEP Handbook p.15',
+      }))
+    }
+  }
+  return issues
 }
 
 // -----------------------------------------------------------------------------
