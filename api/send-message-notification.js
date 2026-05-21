@@ -161,9 +161,14 @@ export default async function handler(req) {
     providerName = provProfs[0]?.daycare_name || provProfs[0]?.full_name || providerName
 
     if (senderType === 'provider') {
-      // Provider posted → notify all linked parents
+      // Provider posted → notify all linked parents.
+      // Same parent_profiles-embed FK gap as src/pages/FamiliesPage.jsx Access
+      // tab: parent_family_links.parent_id FKs to auth.users, not parent_profiles.
+      // The !parent_family_links_parent_id_fkey hint tells PostgREST to use that
+      // FK as the join axis; Supabase resolves it via the 1:1 auth.users.id →
+      // parent_profiles.id chain. See docs/tech_debt.md § parent_profiles FK gap.
       const linksResp = await supabaseRequest(
-        `parent_family_links?family_id=eq.${thread.family_id}&status=eq.active&select=parent_id,parent_profiles(email,full_name)`,
+        `parent_family_links?family_id=eq.${thread.family_id}&status=eq.active&select=parent_id,parent_profiles!parent_family_links_parent_id_fkey(email,full_name)`,
         'GET'
       )
       const links = await linksResp.json()

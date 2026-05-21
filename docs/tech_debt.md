@@ -595,3 +595,57 @@ Affected surfaces — fixed by `fix/attendance-widget-onconflict-after-019`:
 PR #9's migration 019 was applied to production yesterday (2026-05-21) but the PR #9 application code lives on `feature/i-billing-transfer-pr-9` and has not yet merged to `main`. The branch's own new code uses `segment_index` correctly; what broke was code already on `main` that nobody on the PR #9 branch had touched. The pre-existing app-code surfaces were invisible to the PR #9 reviewer because they were not part of PR #9's diff.
 
 **Mitigation.** When a migration touches a table the app already writes to from `main`, the PR opening that migration MUST include either (a) the matching app-code updates in the same PR (preferred), or (b) a written checklist of every `main`-side write path the migration could affect, with explicit reviewer sign-off on the order of operations.
+
+## `parent_profiles` FK gap on `parent_family_links` (2026-05-22)
+
+**Caught when Venessa's Access tab returned HTTP 400 from `/rest/v1/parent_family_links?…select=*,parent_profiles(…)`.**
+
+`parent_family_links.parent_id` foreign-keys to `auth.users(id)`, not `parent_profiles(id)`. PostgREST cannot infer a `parent_profiles` embed from a FK that points at a different table — the resource-embed system follows actual `pg_constraint` rows, not application-level "well, both ids are the same value" knowledge.
+
+### Immediate fix (hotfix branch `fix/access-tab-parent-profiles-embed`)
+
+Two surfaces patched with the PostgREST hint syntax:
+
+- `src/pages/FamiliesPage.jsx` — Access tab `loadAll`: `parent_profiles!parent_family_links_parent_id_fkey(email, full_name)`.
+- `api/send-message-notification.js` — provider→parent notification dispatch: same hint, REST-URL form.
+
+The hint tells PostgREST: "use this named FK as the join axis." Supabase's PostgREST has logic that follows the chain `auth.users.id → parent_profiles.id` via the 1:1 id mapping. If this still returns 400 in production (the chain logic isn't documented), the two-query fallback is:
+
+```javascript
+const linksResp = await supabase
+  .from('parent_family_links').select('*')
+  .eq('family_id', familyId).eq('status', 'active')
+const parentIds = (linksResp.data || []).map(l => l.parent_id)
+const profilesResp = await supabase
+  .from('parent_profiles').select('id, email, full_name')
+  .in('id', parentIds)
+const profileById = new Map((profilesResp.data || []).map(p => [p.id, p]))
+const linksWithProfile = (linksResp.data || []).map(l => ({
+  ...l,
+  parent_profiles: profileById.get(l.parent_id) || null,
+}))
+```
+
+### Real fix (follow-up PR, not this hotfix)
+
+Add the real FK so PostgREST can infer the embed natively, and so the schema records the relationship:
+
+```sql
+ALTER TABLE public.parent_family_links
+  ADD CONSTRAINT parent_family_links_parent_profiles_fkey
+  FOREIGN KEY (parent_id) REFERENCES public.parent_profiles(id)
+  ON DELETE CASCADE;
+```
+
+**Cannot apply this in the current hotfix.** Adding the FK requires that every existing `parent_family_links.parent_id` value has a corresponding `parent_profiles.id` row — otherwise the `ALTER TABLE` fails with constraint-violation. Pre-flight that with:
+
+```sql
+SELECT pfl.id, pfl.parent_id
+FROM public.parent_family_links pfl
+LEFT JOIN public.parent_profiles pp ON pp.id = pfl.parent_id
+WHERE pp.id IS NULL;
+```
+
+If that returns rows, those parents need their profile rows backfilled before the FK can land. The follow-up PR is a small two-step migration: (a) backfill any missing parent_profiles rows from auth.users; (b) add the FK constraint.
+
+Once the FK lands, the hint syntax in the two hotfix sites can be removed and the plain `parent_profiles(…)` embed will work again.

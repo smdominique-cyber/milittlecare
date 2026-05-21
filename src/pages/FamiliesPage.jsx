@@ -1242,9 +1242,17 @@ function InvitationsTab({ userId, family, guardians, onChange }) {
 
   async function loadAll() {
     setLoading(true)
+    // parent_family_links.parent_id FKs to auth.users(id), NOT parent_profiles(id).
+    // PostgREST can't infer the parent_profiles embed from that FK. The hint
+    // syntax `parent_profiles!parent_family_links_parent_id_fkey` tells it to
+    // use the parent_id FK as the join axis — Supabase's PostgREST follows
+    // auth.users → parent_profiles via the 1:1 id chain (parent_profiles.id =
+    // auth.users.id). If this still fails in production, fall back to the
+    // two-query pattern (links → ids → parent_profiles, merge in JS); see
+    // docs/tech_debt.md § parent_profiles FK gap.
     const [invsResp, linksResp] = await Promise.all([
       supabase.from('family_invitations').select('*').eq('family_id', familyId).order('created_at', { ascending: false }),
-      supabase.from('parent_family_links').select('*, parent_profiles(email, full_name)').eq('family_id', familyId).eq('status', 'active'),
+      supabase.from('parent_family_links').select('*, parent_profiles!parent_family_links_parent_id_fkey(email, full_name)').eq('family_id', familyId).eq('status', 'active'),
     ])
     setInvitations(invsResp.data || [])
     setParentLinks(linksResp.data || [])
