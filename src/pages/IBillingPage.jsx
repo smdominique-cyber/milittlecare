@@ -26,8 +26,10 @@ import { useActiveModules } from '@/hooks/useActiveModules'
 import { MODULE_KEYS } from '@/lib/modules'
 import PayPeriodPicker from '@/components/iBilling/PayPeriodPicker'
 import ReviewGrid from '@/components/iBilling/ReviewGrid'
+import IssueResolutionModal, { buildOverrideIndex, issueMatchKey } from '@/components/iBilling/IssueResolutionModal'
 import { todayYMD } from '@/lib/cdcPayPeriods'
 import { runValidation } from '@/lib/iBilling'
+import { computeAttendanceHash } from '@/lib/parentAcknowledgment'
 
 // -----------------------------------------------------------------------------
 // Stage IDs
@@ -65,8 +67,14 @@ export default function IBillingPage() {
   const [attendance, setAttendance] = useState([])
   const [fiscalYearAttendance, setFiscalYearAttendance] = useState([])
   const [acknowledgments, setAcknowledgments] = useState([])
+  const [overrides, setOverrides] = useState([])
   const [periodLoading, setPeriodLoading] = useState(false)
   const [periodError, setPeriodError] = useState(null)
+
+  // Screen 3 modal state.
+  const [issueModalOpen, setIssueModalOpen] = useState(false)
+  const [initialIssue, setInitialIssue] = useState(null)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   const today = useMemo(() => todayYMD(), [])
 
@@ -145,9 +153,14 @@ export default function IBillingPage() {
           .gte('date', selectedPeriod.start_date)
           .lte('date', selectedPeriod.end_date)
       ),
-    ]).then(([attRes, fyRes, ackRes]) => {
+      supabase
+        .from('attendance_validation_overrides')
+        .select('*')
+        .eq('provider_id', user.id)
+        .eq('pay_period_number', String(selectedPeriod.period_number)),
+    ]).then(([attRes, fyRes, ackRes, ovRes]) => {
       if (cancelled) return
-      const firstErr = attRes.error || fyRes.error
+      const firstErr = attRes.error || fyRes.error || ovRes?.error
       if (firstErr) {
         console.error('IBillingPage period load', firstErr)
         setPeriodError('Failed to load attendance for this period.')
@@ -155,16 +168,17 @@ export default function IBillingPage() {
         setAttendance(attRes.data || [])
         setFiscalYearAttendance(fyRes.data || [])
         setAcknowledgments(ackRes?.data || [])
+        setOverrides(ovRes?.data || [])
       }
     }).finally(() => {
       if (!cancelled) setPeriodLoading(false)
     })
 
     return () => { cancelled = true }
-  }, [user, selectedPeriod])
+  }, [user, selectedPeriod, refreshKey])
 
   // -- Derived: validation issues -------------------------------------
-  const issues = useMemo(() => {
+  const allIssues = useMemo(() => {
     if (!selectedPeriod) return []
     return runValidation({
       payPeriod: selectedPeriod,
@@ -178,6 +192,19 @@ export default function IBillingPage() {
     })
   }, [selectedPeriod, attendance, allChildren, fundingSources, profile,
       acknowledgments, fiscalYearAttendance, today])
+
+  // Filter out issues that the provider has explicitly overridden for
+  // this period; the audit row stays for compliance, the cell stops
+  // blocking the export.
+  const overrideIndex = useMemo(() => buildOverrideIndex(overrides), [overrides])
+  const issues = useMemo(
+    () => allIssues.filter(i => !overrideIndex.has(matchKeyForIssue(i))),
+    [allIssues, overrideIndex]
+  )
+  const overriddenIssues = useMemo(
+    () => allIssues.filter(i => overrideIndex.has(matchKeyForIssue(i))),
+    [allIssues, overrideIndex]
+  )
 
   // ---- Gates ---------------------------------------------------------
   if (modulesLoading) {
@@ -206,6 +233,148 @@ export default function IBillingPage() {
     setStage(STAGE.EXPORT)
   }
 
+  function handleOpenIssue(issue) {
+    setInitialIssue(issue || null)
+    setIssueModalOpen(true)
+  }
+
+  function handleCloseIssueModal() {
+    setIssueModalOpen(false)
+    setInitialIssue(null)
+  }
+
+  // -- Issue resolution mutations -------------------------------------
+
+  async function handleApplyFix(issue) {
+    const action = issue?.proposedFix?.action
+    if (!action || !user) return
+    if (action.kind === 'remove_segment') {
+      const { error } = await supabase
+        .from('attendance').delete().eq('id', action.attendanceId)
+      if (error) throw error
+    } else if (action.kind === 'split_at_midnight') {
+      const original = attendance.find(a => a.id === action.attendanceId)
+      if (!original) throw new Error('Segment not found.')
+      // Original day: check_in → 23:59 (segment_index stays).
+      // Next day:   00:00 → original check_out (new segment_index 0).
+      const nextDate = nextDayYMD(original.date)
+      const { error: e1 } = await supabase
+        .from('attendance').update({ check_out: '23:59' })
+        .eq('id', action.attendanceId)
+      if (e1) throw e1
+      // Determine the next-day's max segment_index (multi-segment safe).
+      const { data: existing } = await supabase
+        .from('attendance').select('segment_index')
+        .eq('child_id', original.child_id).eq('date', nextDate)
+      const nextSeg = existing && existing.length
+        ? Math.max(...existing.map(r => r.segment_index ?? 0)) + 1
+        : 0
+      const { error: e2 } = await supabase
+        .from('attendance').insert({
+          user_id: original.user_id,
+          child_id: original.child_id,
+          date: nextDate,
+          segment_index: nextSeg,
+          status: 'present',
+          check_in: '00:00',
+          check_out: original.check_out,
+        })
+      if (e2) throw e2
+    } else if (action.kind === 'trim_school_hours') {
+      const original = attendance.find(a => a.id === action.attendanceId)
+      if (!original) throw new Error('Segment not found.')
+      // Three possibilities (handled minimally for V1):
+      //   - segment fully inside school hours → delete it
+      //   - starts before school, ends during  → trim end to schoolStart
+      //   - starts during, ends after school   → trim start to schoolEnd
+      //   - brackets school entirely           → V1: split into two
+      //     segments (before + after). Same multi-segment helper.
+      const segStart = original.check_in
+      const segEnd   = original.check_out
+      const sStart   = action.schoolStart
+      const sEnd     = action.schoolEnd
+      if (segStart >= sStart && segEnd <= sEnd) {
+        const { error } = await supabase
+          .from('attendance').delete().eq('id', action.attendanceId)
+        if (error) throw error
+      } else if (segStart < sStart && segEnd <= sEnd) {
+        const { error } = await supabase
+          .from('attendance').update({ check_out: sStart })
+          .eq('id', action.attendanceId)
+        if (error) throw error
+      } else if (segStart >= sStart && segEnd > sEnd) {
+        const { error } = await supabase
+          .from('attendance').update({ check_in: sEnd })
+          .eq('id', action.attendanceId)
+        if (error) throw error
+      } else {
+        // brackets — trim original to before-school, insert after-school.
+        const { error: e1 } = await supabase
+          .from('attendance').update({ check_out: sStart })
+          .eq('id', action.attendanceId)
+        if (e1) throw e1
+        const { data: existing } = await supabase
+          .from('attendance').select('segment_index')
+          .eq('child_id', original.child_id).eq('date', original.date)
+        const nextSeg = existing && existing.length
+          ? Math.max(...existing.map(r => r.segment_index ?? 0)) + 1
+          : 0
+        const { error: e2 } = await supabase
+          .from('attendance').insert({
+            user_id: original.user_id,
+            child_id: original.child_id,
+            date: original.date,
+            segment_index: nextSeg,
+            status: 'present',
+            check_in: sEnd,
+            check_out: segEnd,
+          })
+        if (e2) throw e2
+      }
+    } else if (action.kind === 'provider_override_acknowledgment') {
+      // Write an acknowledgment row with acknowledged_via=provider_override.
+      // The table only exists post-PR #12; until that branch merges, the
+      // mutation will 42P01 — we surface that as a friendlier message.
+      const rec = attendance.find(a => a.id === action.attendanceId)
+      if (!rec) throw new Error('Segment not found.')
+      const payload = {
+        child_id: rec.child_id,
+        date:     rec.date,
+        segment_index: rec.segment_index ?? 0,
+        acknowledged_at: new Date().toISOString(),
+        acknowledged_via: 'provider_override',
+        attendance_snapshot_hash: computeAttendanceHash(rec),
+      }
+      const { error } = await supabase
+        .from('attendance_acknowledgments').insert(payload)
+      if (error) {
+        if (/42P01|does not exist/.test(error.message || '')) {
+          throw new Error('Parent acknowledgment table is not yet live. Merge PR #12 first.')
+        }
+        throw error
+      }
+    } else {
+      throw new Error(`Unknown fix action: ${action.kind}`)
+    }
+    setRefreshKey(k => k + 1)
+  }
+
+  async function handleOverride(issue, reason) {
+    if (!user || !selectedPeriod) return
+    const { error } = await supabase
+      .from('attendance_validation_overrides').insert({
+        provider_id:      user.id,
+        attendance_id:    issue?.proposedFix?.action?.attendanceId || null,
+        child_id:         issue.childId || null,
+        pay_period_number: String(selectedPeriod.period_number),
+        rule_id:          issue.ruleId,
+        rule_description: issue.message,
+        override_reason:  reason,
+      })
+    if (error) throw error
+    setRefreshKey(k => k + 1)
+  }
+
   return (
     <div style={pageStyle}>
       <header style={headerStyle}>
@@ -230,16 +399,40 @@ export default function IBillingPage() {
           {periodLoading && <p style={{ color: '#6b7280' }}>Loading attendance for this period…</p>}
           {periodError && <p role="alert" style={{ color: '#b91c1c' }}>{periodError}</p>}
           {!periodLoading && !periodError && (
-            <ReviewGrid
-              payPeriod={selectedPeriod}
-              attendance={attendance}
-              children={allChildren}
-              fundingSources={fundingSources}
-              issues={issues}
-              onAdvance={handleAdvanceFromReview}
-              onBack={handleBackToPicker}
-              onOpenIssue={() => { /* Screen 3 wires this in the next commit */ }}
-            />
+            <>
+              <ReviewGrid
+                payPeriod={selectedPeriod}
+                attendance={attendance}
+                children={allChildren}
+                fundingSources={fundingSources}
+                issues={issues}
+                onAdvance={handleAdvanceFromReview}
+                onBack={handleBackToPicker}
+                onOpenIssue={handleOpenIssue}
+              />
+              {issues.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <button type="button"
+                          onClick={() => { setInitialIssue(null); setIssueModalOpen(true) }}
+                          style={ghostButtonStyle}>
+                    Resolve {issues.length} issue{issues.length === 1 ? '' : 's'} →
+                  </button>
+                </div>
+              )}
+              {issueModalOpen && (
+                <IssueResolutionModal
+                  issues={issues}
+                  overridden={overriddenIssues.map(i => ({
+                    rule_id: i.ruleId,
+                    override_reason: overrideReasonFor(i, overrides),
+                  }))}
+                  initialIssue={initialIssue}
+                  onApplyFix={handleApplyFix}
+                  onOverride={handleOverride}
+                  onClose={handleCloseIssueModal}
+                />
+              )}
+            </>
           )}
         </>
       )}
@@ -303,6 +496,29 @@ function fiscalYearStart(yyyymmdd) {
   const [y, m] = String(yyyymmdd).split('-').map(Number)
   const fy = (m >= 10) ? y : y - 1
   return `${fy}-10-01`
+}
+
+function nextDayYMD(ymd) {
+  const [y, m, d] = String(ymd).split('-').map(Number)
+  const t = new Date(Date.UTC(y, m - 1, d + 1))
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`
+}
+
+function matchKeyForIssue(iss) {
+  // Mirror IssueResolutionModal.issueMatchKey, but at the page level
+  // we strip date+segment from the key so a rule-level override
+  // (e.g. "Missing provider name") covers all derived issues.
+  return [iss.ruleId || '', iss.childId || '', '', ''].join('|')
+}
+
+function overrideReasonFor(issue, overrides) {
+  for (const o of overrides) {
+    if (o.rule_id === issue.ruleId
+        && (o.child_id || '') === (issue.childId || '')) {
+      return o.override_reason
+    }
+  }
+  return ''
 }
 
 /**
