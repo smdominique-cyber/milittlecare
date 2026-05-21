@@ -331,56 +331,31 @@ create policy "Parents can withdraw their own flags"
   with check (flagged_by_user_id = auth.uid());
 
 -- -------------------------------------------------------
--- 3. notification_log
+-- 3. notification_log — PRE-EXISTING TABLE, REUSED (no DDL here)
 -- -------------------------------------------------------
--- General-purpose infrastructure (per addendum § 8.1). Future
--- notification types (training countdowns, payment-received) reuse
--- this table by setting a different `notification_type`. RLS scopes
--- by the recipient_guardian_id → guardians.user_id → provider link so
--- providers see their own send history; no parent-facing read.
-create table if not exists public.notification_log (
-  id                              uuid primary key default gen_random_uuid(),
-
-  recipient_guardian_id           uuid references public.guardians(id) on delete set null,
-  recipient_email                 text not null,
-  notification_type               text not null,             -- 'acknowledgment_digest' here
-  sent_at                         timestamptz,
-  delivery_status                 text check (
-    delivery_status is null
-    or delivery_status in ('queued', 'sent', 'delivered', 'bounced', 'failed')
-  ),
-  provider_message_id             text,                       -- Resend's id
-  error_detail                    text,
-  payload_summary                 jsonb,                      -- PII-minimised summary
-
-  created_at                      timestamptz not null default now()
-);
-
-create index if not exists notification_log_recipient_recent_idx
-  on public.notification_log (recipient_guardian_id, created_at desc);
-
-create index if not exists notification_log_status_recent_idx
-  on public.notification_log (delivery_status, created_at desc)
-  where delivery_status in ('bounced', 'failed');
-
-alter table public.notification_log enable row level security;
-
--- Provider sees notifications sent for guardians on their own roster.
--- The guardians.user_id here IS the licensee's id (the established
--- semantics, not the parent linkage referenced elsewhere in this file).
-create policy "Providers can view notifications for their roster"
-  on public.notification_log for select to authenticated
-  using (
-    exists (
-      select 1 from public.guardians g
-      where g.id = notification_log.recipient_guardian_id
-        and g.user_id = auth.uid()
-    )
-  );
-
--- No INSERT policy — writes come from the Vercel cron serverless
--- function via the service role, which bypasses RLS. No DELETE,
--- no UPDATE: notification log is append-only audit.
+-- The PR #12 addendum described notification_log as a new table.
+-- Production discovery on 2026-05-21 revealed it already exists with
+-- a different schema, backing the state-change notification system
+-- in api/notify-state-change.js (recipient_type/recipient_id pair,
+-- change_type, change_description, changed_by_user_id, changed_by_role,
+-- family_id, child_id, email_sent boolean, email_sent_at, email_id,
+-- metadata jsonb). The table is listed in docs/tech_debt.md's
+-- production-only inventory; the addendum simply missed the collision.
+--
+-- PR #12 reuses the existing table instead of creating a parallel one.
+-- The cron handler (api/cron-send-acknowledgment-digest.js) writes
+-- rows with change_type = 'acknowledgment_digest' and maps the
+-- addendum's intended fields onto the existing columns
+-- (recipient_guardian_id → recipient_id + recipient_type='guardian';
+--  notification_type → change_type;
+--  sent_at → email_sent_at;
+--  delivery_status → email_sent boolean + metadata.delivery_status;
+--  provider_message_id → email_id;
+--  payload_summary → metadata). See docs/pr-12-review.md § Discovery
+-- findings for the full collision narrative.
+--
+-- No DDL added in this migration block. The existing production table
+-- already carries the schema, indexes, and RLS we need.
 
 -- -------------------------------------------------------
 -- 4. Per-provider acknowledgment settings — MOVED TO MIGRATION 018
@@ -420,6 +395,10 @@ comment on column public.parent_profiles.acknowledgment_email_opt_in is
 -- Note: the six profiles.acknowledgment_* columns are rolled back by
 -- migration 018's DOWN block (not this one) since they now live there.
 --
--- drop table if exists public.notification_log;
+-- notification_log is intentionally NOT dropped — it pre-existed PR #12
+-- and is owned by the state-change notification system. To remove the
+-- PR #12 digest writes, delete the rows where change_type =
+-- 'acknowledgment_digest' instead of dropping the table.
+--
 -- drop table if exists public.acknowledgment_flags;
 -- drop table if exists public.attendance_acknowledgments;

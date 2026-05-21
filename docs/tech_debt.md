@@ -568,3 +568,43 @@ column is left alone. Deferred because it cuts across `useAuth`'s
 contract (read-only today) and needs a "freshly confirmed vs
 returning user" decision; a follow-up PR can wire it in one place once
 that decision is made.
+
+## Convention: check table name availability before declaring a new one
+
+PR #12's first apply attempt (migration 020, 2026-05-21) failed because
+the addendum spec described `notification_log` as a **new** table —
+but production already had a `notification_log` with a different schema
+backing the state-change notification system in `api/notify-state-change.js`.
+The collision was avoidable: `notification_log` was already listed in
+this file under "Migrations folder is out of sync with production
+schema" → "(live schema; used by server-side notification flow)." The
+warning was here; the addendum simply did not consult it.
+
+**Going-forward rule:** before any PR that adds a new table, two checks
+are required:
+
+1. **Repo grep.** `git grep "<table_name>"` across `src/`, `api/`,
+   `supabase/migrations/`, and `docs/`. Any hit means the name is in
+   use somewhere — could be a real existing table, a future-planned
+   table from a spec doc, or a comment. Inspect each hit and disambiguate.
+
+2. **Production introspection.**
+   ```sql
+   SELECT table_name FROM information_schema.tables
+   WHERE table_schema = 'public' AND table_name = '<candidate>';
+   ```
+   Returns 0 rows → name is free. Returns 1 row → run `\d <name>` (or
+   the equivalent `information_schema.columns` query) to inspect the
+   live shape before assuming the new table can replace it.
+
+This applies double to "framework-y" names like `notification_log`,
+`audit_log`, `events`, `outbox`, `inbox`, `settings` — generic shapes
+are exactly what gets created out-of-band and forgotten about.
+
+The PR #8.5a discovery queries (2026-05-20) only enumerated five
+specific tables. They did not survey the rest of the production
+schema; the ~21 other tables in `docs/tech_debt.md`'s out-of-band
+inventory continue to exist as undocumented surface area. A standalone
+schema-audit PR that captures every production-only table — even just
+column lists committed to a single inventory doc — would prevent the
+next collision before it happens.

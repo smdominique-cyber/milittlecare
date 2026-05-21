@@ -293,25 +293,45 @@ export default async function handler(req) {
           send = await sendViaResend({ to: parent.email, subject, html, text })
         }
 
-        const summary = {
-          provider_id: provider.id,
-          child_first_names: childFirstNames,
-          window_start: start, window_end: end,
-          unacked_segment_count: unacked.length,
-        }
-        const status = send.ok
+        // notification_log is the pre-existing state-change-notification
+        // table; PR #12 reuses it rather than creating a parallel table
+        // (see migration 020 § 3 + docs/pr-12-review.md § Discovery
+        // findings). The addendum-described shape is mapped onto the
+        // production columns:
+        //   recipient_guardian_id  → recipient_id + recipient_type='guardian' (unset here — email match deferred)
+        //   notification_type      → change_type
+        //   sent_at                → email_sent_at
+        //   delivery_status        → email_sent boolean + metadata.delivery_status
+        //   provider_message_id    → email_id
+        //   payload_summary        → metadata
+        const deliveryStatus = send.ok
           ? 'sent'
           : (process.env.RESEND_API_KEY ? 'failed' : 'queued')
 
         await supabasePost('notification_log', {
-          recipient_guardian_id: null,           // app-layer email→guardian match deferred
+          recipient_type: 'parent',
+          recipient_id: parent.id,
           recipient_email: parent.email,
-          notification_type: 'acknowledgment_digest',
-          sent_at: send.ok ? new Date().toISOString() : null,
-          delivery_status: status,
-          provider_message_id: send.providerMessageId || null,
-          error_detail: send.errorDetail || null,
-          payload_summary: summary,
+          change_type: 'acknowledgment_digest',
+          change_description:
+            `Weekly digest: ${unacked.length} segment(s) awaiting review` +
+            ` for ${childFirstNames.join(', ')} (${start} → ${end})`,
+          changed_by_user_id: provider.id,
+          changed_by_role: 'provider',
+          family_id: null,
+          child_id: null,
+          email_sent: send.ok,
+          email_sent_at: send.ok ? new Date().toISOString() : null,
+          email_id: send.providerMessageId || null,
+          metadata: {
+            provider_id: provider.id,
+            child_first_names: childFirstNames,
+            window_start: start,
+            window_end: end,
+            unacked_segment_count: unacked.length,
+            delivery_status: deliveryStatus,
+            error_detail: send.errorDetail || null,
+          },
         })
 
         if (send.ok) stats.digests_sent += 1

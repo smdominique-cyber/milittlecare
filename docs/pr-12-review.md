@@ -78,7 +78,7 @@ Remaining human-side / dashboard tasks (unchanged from prior list except item 1,
 2. **Verify sending domain.** Suggest `milittlecare.com`. Requires SPF, DKIM, and DMARC DNS records at the domain registrar. *Status unknown — flag whether already configured for the existing autopay sends.*
 3. **`RESEND_API_KEY` in Vercel env** — already documented for autopay; nothing new for PR #12.
 4. **`From` address.** Existing default is `MI Little Care <onboarding@resend.dev>` (sandbox). PR #12 uses the same `RESEND_FROM_EMAIL` env var. Recommend setting it to `MI Little Care <hours@milittlecare.com>` once domain is verified, for parent emails specifically — same address for everything is OK but `hours@` reads more accurately for billing communications.
-5. **Test send.** The cron is a no-op when `RESEND_API_KEY` is absent (matches `cron-charge-autopay.js` defensive pattern). With key present, the cron logs to `notification_log` with `delivery_status = 'sent'` on success or `'failed'` on Resend error.
+5. **Test send.** The cron is a no-op when `RESEND_API_KEY` is absent (matches `cron-charge-autopay.js` defensive pattern). With key present, the cron logs to the **pre-existing** `notification_log` (see "Discovery findings" below) with `email_sent = true` and `metadata.delivery_status = 'sent'` on success, or `email_sent = false` and `metadata.delivery_status = 'failed'` on Resend error.
 
 ## Vercel cron — plan dependency
 
@@ -154,6 +154,57 @@ public.attendance_acknowledgments SET attendance_snapshot_hash = …`
 in a one-shot batch keyed off the still-stable canonical payload from
 `canonicalAttendanceForHash`. The column type (`text`) accommodates
 either width. No schema change required.
+
+## Discovery findings — `notification_log` schema collision (2026-05-21)
+
+The PR #12 addendum § 8.1 specified `notification_log` as a **new** general-purpose send-audit table. Production discovery during the migration 020 apply revealed the table **already exists** with a different schema, backing the pre-existing state-change-notification system in `api/notify-state-change.js`.
+
+### Production schema (existing)
+
+```
+id                    uuid
+recipient_type        text          -- 'parent' / 'guardian' / 'staff' / …
+recipient_id          uuid
+recipient_email       text
+change_type           text          -- categorical event type
+change_description    text          -- human-readable summary
+changed_by_user_id    uuid
+changed_by_role       text
+family_id             uuid
+child_id              uuid
+email_sent            boolean
+email_sent_at         timestamptz
+email_id              text          -- Resend message id
+metadata              jsonb
+created_at            timestamptz
+```
+
+`docs/tech_debt.md` § "Migrations folder is out of sync with production schema" already listed `notification_log` under "(live schema; used by server-side notification flow)" — the warning was there; the addendum simply missed the collision because no one greped before declaring the table new.
+
+### Resolution
+
+1. **Migration 020 surgery.** The CREATE TABLE block (plus its two indexes, RLS `ENABLE`, the provider-read policy, and the DROP in the DOWN section) was removed from `supabase/migrations/020_parent_acknowledgment.sql`. Replaced with a doc-only stub explaining that PR #12 reuses the pre-existing table. `attendance_acknowledgments`, `acknowledgment_flags`, and the `parent_profiles.acknowledgment_email_opt_in` column stay — those are genuinely new.
+
+2. **Cron handler updated.** `api/cron-send-acknowledgment-digest.js`'s `notification_log` insert was rewritten to match the production schema. Field mapping documented inline at the call site:
+
+| Addendum field | Production column |
+|---|---|
+| `recipient_guardian_id` | `recipient_id` + `recipient_type='parent'` (digest goes to `parent_profiles` rows, not guardians) |
+| `notification_type` | `change_type` (value `'acknowledgment_digest'`) |
+| `sent_at` | `email_sent_at` |
+| `delivery_status` | `email_sent` (boolean) + `metadata.delivery_status` (preserves the `queued`/`sent`/`delivered`/`bounced`/`failed` enum) |
+| `provider_message_id` | `email_id` |
+| `error_detail` | `metadata.error_detail` |
+| `payload_summary` | `metadata` (merged with `delivery_status` + `error_detail`) |
+
+Plus the existing schema's required fields are populated: `recipient_email`, `change_description` (a one-line summary `"Weekly digest: N segment(s) awaiting review for [kids] (start → end)"`), `changed_by_user_id` + `changed_by_role` = provider, `family_id` / `child_id` = null (digest is per-parent across multiple families).
+
+3. **No other PR #12 code references `notification_log`.** Grep across `src/` and `api/` on this branch: the cron handler is the only PR #12 caller. `ProviderAcknowledgmentsPage` does **not** read from `notification_log` (the bouncing-email surface the addendum proposed wasn't actually built). No other reads or writes to update.
+
+### Field-shape notes worth carrying forward
+
+- `email_sent` is the boolean source of truth for "did Resend accept the request." `metadata.delivery_status` preserves the more granular enum (`'queued'` when the cron is no-op'd due to missing API key, `'sent'` on success, `'failed'` on Resend error). The boolean is what the existing `notify-state-change.js` flow cares about; the enum is what a future bouncing-email surface would read.
+- `recipient_type='parent'` (rather than `'guardian'`) reflects that the digest recipient is identified via `parent_profiles`, not `guardians`. The codebase uses both values across surfaces — `'parent'` for parent emails, `'guardian'` would be for any guardian-row emails (none in PR #12).
 
 ## Pending review-doc sections (populated as the build progresses)
 
