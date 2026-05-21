@@ -20,6 +20,12 @@ Step 1 of 9 (the schema migration) committed in this turn. Remaining 8 steps are
 | 8. Settings UI | queued |
 | 9. End-to-end smoke test | queued |
 
+## Provider acknowledgment-settings columns moved to migration 018
+
+The 6 `profiles.acknowledgment_*` columns originally landed in migration `020`'s § 4 block. Per the discovery handoff doc's recommendation ("fold into 018 so all provider-level settings additions land in one migration"), they were relocated to `supabase/migrations/018_provider_cdc_billing_settings.sql` alongside PR #8.5c's CDC billing columns. Migration 020's § 4 is now a doc-only stub pointing at 018; no DDL there. The `ProviderAcknowledgmentsPage` `SettingsCard` reads/writes the same `profiles` row regardless of which migration created the columns — no code change.
+
+Apply ordering: 018 must run before 020 if both are applied to a fresh environment (because the cron handler in `api/cron-send-acknowledgment-digest.js` queries those columns). On production they're independent — both are additive against existing tables.
+
 ## § 5 Parent portal surface inventory
 
 Reported as the pre-build readout; consolidated here.
