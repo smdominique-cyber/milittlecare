@@ -64,13 +64,32 @@ The addendum recommends a Supabase Edge Function triggered by `pg_cron`. The exi
 
 ## § 8 Resend setup — required human steps
 
-Documenting per addendum § 14 ("Resend setup steps completed"). All five are dashboard / human-side tasks; the build cannot do them.
+> **Discovery update:** Resend is **already integrated** in milittlecare via raw `fetch('https://api.resend.com/emails', …)` in `api/cron-charge-autopay.js:40-54`, `api/notify-state-change.js`, `api/send-invitation.js`, and the failure-detection branch in `api/send-message-notification.js`. The addendum's "Add `resend` as a new npm dependency" was based on a stale assumption. **No SDK installed.** PR #12 step 3's cron handler matches the existing raw-fetch pattern verbatim for consistency. `RESEND_API_KEY` and `RESEND_FROM_EMAIL` env-var conventions already in place.
 
-1. **Create Resend account** and get an API key.
-2. **Verify sending domain.** Suggest `milittlecare.com`. Requires SPF, DKIM, and DMARC DNS records at the domain registrar.
-3. **Add `RESEND_API_KEY` to Vercel env** (Production + Preview). Optional: also add to Supabase Secrets if any read happens server-side outside Vercel — not needed for the chosen architecture.
-4. **Choose and confirm a `From` address.** Default proposal: `hours@milittlecare.com`. Friendly name `MI Little Care`. Flag for human approval before first send.
-5. **Test send to a known address.** The cron job is structured to be a no-op when `RESEND_API_KEY` is absent (mirroring `api/create-checkout-session.js:16`), so the code can land before the API key is configured and the cron will simply log "Resend not configured" until step 3 is done.
+Remaining human-side / dashboard tasks (unchanged from prior list except item 1, which is partially already done):
+
+1. ~~Create Resend account and get an API key~~ — already done (per existing crons that depend on it).
+2. **Verify sending domain.** Suggest `milittlecare.com`. Requires SPF, DKIM, and DMARC DNS records at the domain registrar. *Status unknown — flag whether already configured for the existing autopay sends.*
+3. **`RESEND_API_KEY` in Vercel env** — already documented for autopay; nothing new for PR #12.
+4. **`From` address.** Existing default is `MI Little Care <onboarding@resend.dev>` (sandbox). PR #12 uses the same `RESEND_FROM_EMAIL` env var. Recommend setting it to `MI Little Care <hours@milittlecare.com>` once domain is verified, for parent emails specifically — same address for everything is OK but `hours@` reads more accurately for billing communications.
+5. **Test send.** The cron is a no-op when `RESEND_API_KEY` is absent (matches `cron-charge-autopay.js` defensive pattern). With key present, the cron logs to `notification_log` with `delivery_status = 'sent'` on success or `'failed'` on Resend error.
+
+## Vercel cron — plan dependency
+
+`vercel.json` now declares **3 cron jobs**:
+
+```
+0 3 * * 1   /api/cron-generate-autopay-invoices   (existing)
+0 14 * * 1  /api/cron-charge-autopay              (existing)
+0 * * * *   /api/cron-send-acknowledgment-digest  (new — hourly)
+```
+
+The hourly schedule is what allows per-provider `acknowledgment_email_send_hour` to be honoured precisely. If milittlecare is on Vercel Hobby (max 2 cron jobs), this deploy will fail and one of two adjustments is needed:
+
+- **Upgrade to Pro** — 40 cron jobs per project, unrestricted granularity. Probably the right call if the project is also approaching other Hobby limits.
+- **Drop to daily granularity** — change `0 * * * *` to `0 22 * * *` (daily at 22:00 UTC ≈ 17:00–18:00 Eastern depending on DST). Per-provider `send_hour` becomes ignored except for providers in TZs where 22:00 UTC happens to equal their preferred local hour. The `shouldSendDigestNow` helper still works correctly in this mode — it just lights up for far fewer providers per run.
+
+Documenting here rather than picking; the Vercel plan status is dashboard-side.
 
 ## § 11 Edge cases — handled in the migration
 
@@ -119,6 +138,16 @@ multiplication and `>>> 0` for unsigned conversion, to dodge
 JavaScript's signed-32-bit-on-bitwise-ops quirk. A regression test
 (`computeAttendanceHash > survives the JS-signed-bitwise-trap`)
 locks the behaviour in.
+
+**Future-upgrade path.** If the threat model ever tightens (e.g. an
+audit demands cryptographic integrity), upgrading to SHA-256 is a
+re-hash migration, not a structural change: rewrite
+`computeAttendanceHash` to use `crypto.subtle.digest` (async) or
+`require('crypto').createHash` (Node-side cron), then `UPDATE
+public.attendance_acknowledgments SET attendance_snapshot_hash = …`
+in a one-shot batch keyed off the still-stable canonical payload from
+`canonicalAttendanceForHash`. The column type (`text`) accommodates
+either width. No schema change required.
 
 ## Pending review-doc sections (populated as the build progresses)
 
