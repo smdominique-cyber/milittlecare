@@ -11,11 +11,49 @@ Three originally-proposed columns from the PR #8.5c addendum are dropped — the
 
 | Proposed | Existing column | Resolution |
 |---|---|---|
-| `annual_ongoing_training_completed_date` | `annual_training_completion_date` (migration 004) | Reuse. The column was originally marked deprecated by PR #4 for the *license-exempt CDC LEPPT* use case; PR #8.5c re-purposes it for the *LEP annual ongoing training* tracker — same Dec 16 deadline mechanic, different programmatic concept. The helper `getAnnualTrainingDeadlineState(completedDate, today)` is parameter-named generically; callers pass `profile.annual_training_completion_date`. The deprecation note in `miregistry_tracker_spec.md` § 2.3 / `tech_debt.md` § Planned deprecations should be updated to reflect this un-deprecation. |
+| `annual_ongoing_training_completed_date` | not added; data already lives in `miregistry_training_entries` (PR #4) | **Honour PR #4's deprecation** of `profiles.annual_training_completion_date`. The column stays dormant. The annual-ongoing training completion concept is captured by `miregistry_training_entries` where `source='annual_ongoing'` — a transaction log with full per-year history (PR #4's whole reason for the deprecation). PR #8.5c reads from that table; nothing on `profiles` for this concept. See "Annual training completion source-of-truth" below for the caller wiring. |
 | `rate_tier` (on profile) | `miregistry_current_level` (migration 009) — `'level_1'` / `'level_2'` | Reuse for provider-level rate tier reads. PR #8.5b's `rate_tier_at_issue` on `funding_sources` is still separately captured — that's a **snapshot at authorization issue time**, distinct from the provider's *current* tier. Both legitimately exist. |
 | (new column `michigan_provider_id`) | `michigan_provider_id` exists today | The original spec phrasing confused the LEP "Bridges Provider ID" with the licensed-provider ID. Both legitimately exist; `bridges_provider_id` is the new LEP column added here. |
 
 Net new columns added to `profiles` in this migration: **10** (4 CDC billing + 6 PR #12 ack-settings folded in per discovery doc recommendation). PR #12's migration 020 no longer touches `profiles`; the 6 columns it previously added there move here.
+
+## Annual training completion source-of-truth (PR #4 deprecation honoured)
+
+The PR #8.5c addendum originally proposed `annual_ongoing_training_completed_date` as a new column on `profiles` and the discovery doc suggested reusing the existing-but-deprecated `annual_training_completion_date` for the same purpose. **Neither path is taken.**
+
+Per investigation:
+- `profiles.annual_training_completion_date` was added in migration 004 as a single-date "latest annual training completion" snapshot.
+- PR #4 (MiRegistry tracker, migration 009) deprecated it because the single-date-no-history shape couldn't satisfy per-year audit needs. PR #4 replaced the concept with `miregistry_training_entries` carrying a `source` enum (`'leppt'` / `'annual_ongoing'` / `'level_2_approved'` / `'other'`) — a transaction log with full history per year.
+- LEPPT was never stored in this column; the "LEPPT vs annual" question doesn't apply. The actual conflict was: PR #4 already moved annual-ongoing tracking to the entries table; reusing the column would re-introduce the deprecated shape and split the source-of-truth.
+- `git grep` confirms no live code in `src/` or `api/` reads or writes the column. PR #4's "stops all new write paths" action item was completed.
+
+**Decision (2026-05-21):** the column stays dormant per PR #4's deprecation. PR #8.5c's annual-training countdown banner queries `miregistry_training_entries` directly.
+
+### Caller wiring (lands in this PR)
+
+`src/components/dashboard/AnnualTrainingBanner.jsx` — new self-loading dashboard banner. Internally:
+
+1. Reads `profiles.is_license_exempt` for the current user. If not `true`, renders nothing (the Dec 16 rule applies only to license-exempt CDC providers per the Scholarship Handbook for LEP).
+2. Queries `miregistry_training_entries`:
+   ```sql
+   SELECT completed_on
+   FROM public.miregistry_training_entries
+   WHERE user_id = $providerId
+     AND source = 'annual_ongoing'
+     AND archived_at IS NULL
+     AND completed_on >= '<year>-01-01'
+     AND completed_on <= '<year>-12-31'
+   ORDER BY completed_on DESC
+   LIMIT 1;
+   ```
+3. Passes the single returned `completed_on` (or `null` if no row) to `getAnnualTrainingDeadlineState(completedDate, today)`. Helper handles null cleanly (the "never completed" → severity-ladder branch).
+4. Renders nothing when the helper returns null (more than 45 days out, or completed this year); otherwise a severity-tinted banner (info / warning / urgent / critical / expired).
+
+Wired into `src/pages/DashboardPage.jsx` alongside the other licensee-only banners (after `onboardingBanner`, before `<StaffClockWidget />`).
+
+### `cdcProviderCompliance.js` — no changes required
+
+The helper `getAnnualTrainingDeadlineState(completedDate, today)` was always parameter-named generically. It doesn't reference any column name. The 29 Vitest cases pass YMD-strings directly — no test fixture has to change. Verified.
 
 ### Items unblocked and written in this commit
 
