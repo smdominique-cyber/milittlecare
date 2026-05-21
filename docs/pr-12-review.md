@@ -216,3 +216,44 @@ Plus the existing schema's required fields are populated: `recipient_email`, `ch
 ## Migration ordering recap
 
 Migrations on `main` go through `015`. PR #8.5a/b/c/9 commit migrations `016`/`017`/`018`/`019` on their respective branches. PR #12's migration is **`020`**. All are additive and order-independent with each other (each touches distinct objects); apply-order at the dashboard is the runbook's call.
+
+## Step 9 — Smoke test results (2026-05-21)
+
+Synthetic end-to-end walkthrough using the pure helpers, exercising the full PR #12 lifecycle on the **Venessa + Mia + Erin** fixture. The Vitest case lives at `src/lib/parentAcknowledgment.smoke.test.js` and runs every CI invocation — if any phase breaks, future refactors of any single helper trip the smoke test rather than only the per-helper unit tests.
+
+### Lifecycle phases verified
+
+| Phase | What happens | Helpers exercised | Asserts |
+|------|---|---|---|
+| 1 | Provider records 5 weekdays of attendance for Mia (May 18–22) | `countAcknowledgmentStates` | All 5 segments report `UNACKNOWLEDGED`. |
+| 2 | Parent dashboard banner | `getDaysAwaitingParentReview` | Returns those same 5 days (lookback window covers them). |
+| 3 | Cron decides whether to fire for Erin | `shouldSendDigestNow` | Sunday 18:00 Detroit → `true`. Tuesday 13:00 UTC → `false`. `acknowledgment_email_enabled: false` → `false`. |
+| 4 | Digest body | `digestDateRange`, `buildDigestEmail` | Subject mentions "Mia"; HTML body contains provider name, child name, and the portal link; plain-text body greets Erin by first name. |
+| 5 | Erin confirms 3 of 5 days in the portal | `findActiveAcknowledgment`, `getAcknowledgmentState`, `countAcknowledgmentStates` | 3 `ACKNOWLEDGED_CLEAN`, 2 `UNACKNOWLEDGED`. Banner count drops from 5 → 2. |
+| 6 | Erin flags 1 day (the 4th) for review | `findActiveFlag`, `countAcknowledgmentStates` | 3 clean, 1 `FLAGGED`, 1 `UNACKNOWLEDGED`. Banner count → 1 (`FLAGGED` excluded from the parent banner; it's Venessa's turn). |
+| 7 | Venessa edits the still-unacknowledged 5th day's check-out | `getAcknowledgmentState` | State stays `UNACKNOWLEDGED` (edit before any ack ever existed → no tamper signal). |
+| 8 | Venessa applies a provider override on the edited 5th day | `getAcknowledgmentState` | State becomes `ACKNOWLEDGED_OVERRIDE`. Banner count → 0. |
+| 9 | Venessa later edits a previously-clean day (extends Mia's check-out 16:00 → 18:00) | `computeAttendanceHash`, `findActiveAcknowledgment`, `getAcknowledgmentState` | State becomes `TAMPERED`. `findActiveAcknowledgment` still locates the original ack row; only the hash comparison flags the mismatch. |
+| 10 | Final count summary across the whole walkthrough | `countAcknowledgmentStates` | 2 clean, 1 tampered, 1 flagged, 1 override, 0 unacknowledged. |
+
+### What the smoke test does NOT cover
+
+Per CLAUDE.md § "Claude Code reports of verification are insufficient," the following pieces require manual / live verification by Seth before this PR is considered shipped:
+
+1. **Resend email delivery.** The smoke test calls `buildDigestEmail` and asserts on the returned object. It does **not** make a real Resend API call. After the cron's first scheduled fire in production, verify in the Resend dashboard:
+   - Subject line renders without the `{{var}}` literals.
+   - Inline HTML survives Gmail's tracking-pixel rewriting.
+   - `From:` matches an authenticated sender domain.
+2. **Cron schedule.** `vercel.json` has the cron at `0 * * * *` (hourly). On the first scheduled fire, confirm in the Vercel deployment log that the handler ran and that `notification_log` got one new row with `change_type='acknowledgment_digest'` and `email_sent=true`.
+3. **RLS in production.** A parent logging into `/parent/acknowledge` should only see their own family's attendance. Test by logging in as a real test parent with a child on Venessa's roster.
+4. **Provider dashboard render.** `/acknowledgments` should show the 5-state count strip and the active-flags list. Verify with the same test data.
+5. **Settings round-trip.** The SettingsCard on `/acknowledgments` writes to `profiles.acknowledgment_*` columns. Verify a value change persists across a page reload and is reflected in the next cron decision.
+6. **notification_log row layout.** Production has its own schema for `notification_log` (see migration 020 surgery doc). The cron handler maps to it correctly per `api/cron-send-acknowledgment-digest.js`, but the schema is only verifiable by running the handler against the real database.
+
+### Test command
+
+```
+npx vitest run src/lib/parentAcknowledgment.smoke.test.js
+```
+
+10 phases. ~50ms runtime. Co-resident with the per-helper unit tests so a refactor of any one helper cannot silently regress the full lifecycle without also tripping the smoke test.
