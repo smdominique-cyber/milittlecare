@@ -1,13 +1,21 @@
 # PR #8.5c Review — Provider CDC Billing Settings
 
 **Branch:** `feature/provider-cdc-billing-settings-pr-8-5c`
-**Migration:** `supabase/migrations/018_provider_cdc_billing_settings.sql` *(pending — see status below)*
+**Migration:** `supabase/migrations/018_provider_cdc_billing_settings.sql`
 
 ## Build session status
 
-> ⚠️ **Migration body PARKED, awaiting the `profiles` column-count check.**
->
-> Per spec § Step 1, the location decision (extend `profiles` vs. create a new `provider_cdc_settings` table) hinges on the current width of `public.profiles`: extend if fewer than ~30 columns today, create-new if wider. The check requires a one-line dashboard query. Until then the migration body, the settings page wiring, and the dashboard CTA cannot be written without committing speculatively to a column home.
+Migration written from Seth's discovery handoff (2026-05-20). **`profiles` has 28 columns**, under the threshold; the migration extends `profiles` rather than creating a `provider_cdc_settings` sibling table.
+
+Three originally-proposed columns from the PR #8.5c addendum are dropped — they overlap with columns that already exist:
+
+| Proposed | Existing column | Resolution |
+|---|---|---|
+| `annual_ongoing_training_completed_date` | `annual_training_completion_date` (migration 004) | Reuse. The column was originally marked deprecated by PR #4 for the *license-exempt CDC LEPPT* use case; PR #8.5c re-purposes it for the *LEP annual ongoing training* tracker — same Dec 16 deadline mechanic, different programmatic concept. The helper `getAnnualTrainingDeadlineState(completedDate, today)` is parameter-named generically; callers pass `profile.annual_training_completion_date`. The deprecation note in `miregistry_tracker_spec.md` § 2.3 / `tech_debt.md` § Planned deprecations should be updated to reflect this un-deprecation. |
+| `rate_tier` (on profile) | `miregistry_current_level` (migration 009) — `'level_1'` / `'level_2'` | Reuse for provider-level rate tier reads. PR #8.5b's `rate_tier_at_issue` on `funding_sources` is still separately captured — that's a **snapshot at authorization issue time**, distinct from the provider's *current* tier. Both legitimately exist. |
+| (new column `michigan_provider_id`) | `michigan_provider_id` exists today | The original spec phrasing confused the LEP "Bridges Provider ID" with the licensed-provider ID. Both legitimately exist; `bridges_provider_id` is the new LEP column added here. |
+
+Net new columns added to `profiles` in this migration: **10** (4 CDC billing + 6 PR #12 ack-settings folded in per discovery doc recommendation). PR #12's migration 020 no longer touches `profiles`; the 6 columns it previously added there move here.
 
 ### Items unblocked and written in this commit
 
