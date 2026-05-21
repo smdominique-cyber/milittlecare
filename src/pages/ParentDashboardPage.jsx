@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, CreditCard, X, Clock, Phone, ChevronDown, ChevronUp, Info, Settings, ChevronRight, MessageCircle, LogIn } from 'lucide-react'
 import AutopayEnrollment from '@/components/parent/AutopayEnrollment'
 import BusinessInfoSection from '@/components/parent/BusinessInfoSection'
+import AcknowledgmentBanner from '@/components/parent/AcknowledgmentBanner'
 import InstallBanner from '@/components/ui/InstallBanner'
 import '@/styles/parent.css'
 
@@ -431,6 +432,9 @@ export default function ParentDashboardPage() {
             <span>{message.text}</span>
           </div>
         )}
+
+        {/* Acknowledgment digest banner (PR #12) */}
+        {session?.user?.id && <AcknowledgmentBanner parentId={session.user.id} />}
 
         {/* Password setup banner */}
         {showPasswordBanner && (
