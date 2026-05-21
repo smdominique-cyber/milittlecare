@@ -1243,19 +1243,38 @@ function InvitationsTab({ userId, family, guardians, onChange }) {
   async function loadAll() {
     setLoading(true)
     // parent_family_links.parent_id FKs to auth.users(id), NOT parent_profiles(id).
-    // PostgREST can't infer the parent_profiles embed from that FK. The hint
-    // syntax `parent_profiles!parent_family_links_parent_id_fkey` tells it to
-    // use the parent_id FK as the join axis — Supabase's PostgREST follows
-    // auth.users → parent_profiles via the 1:1 id chain (parent_profiles.id =
-    // auth.users.id). If this still fails in production, fall back to the
-    // two-query pattern (links → ids → parent_profiles, merge in JS); see
-    // docs/tech_debt.md § parent_profiles FK gap.
+    // PostgREST can't infer the parent_profiles embed from that FK, and the
+    // hint-syntax workaround was tested in production 2026-05-22 and did NOT
+    // work — Supabase's PostgREST does not transitively follow the auth.users
+    // → parent_profiles id chain. Two-query pattern is the only viable fix
+    // until a real FK is added; see docs/tech_debt.md § parent_profiles FK gap.
     const [invsResp, linksResp] = await Promise.all([
       supabase.from('family_invitations').select('*').eq('family_id', familyId).order('created_at', { ascending: false }),
-      supabase.from('parent_family_links').select('*, parent_profiles!parent_family_links_parent_id_fkey(email, full_name)').eq('family_id', familyId).eq('status', 'active'),
+      supabase.from('parent_family_links').select('*').eq('family_id', familyId).eq('status', 'active'),
     ])
-    setInvitations(invsResp.data || [])
-    setParentLinks(linksResp.data || [])
+
+    const links = Array.isArray(linksResp.data) ? linksResp.data : []
+    const parentIds = links.map(l => l && l.parent_id).filter(Boolean)
+
+    let profilesById = new Map()
+    if (parentIds.length > 0) {
+      const profilesResp = await supabase
+        .from('parent_profiles')
+        .select('id, email, full_name')
+        .in('id', parentIds)
+      const profiles = Array.isArray(profilesResp.data) ? profilesResp.data : []
+      profilesById = new Map(profiles.map(p => [p.id, p]))
+    }
+
+    // Preserve the embedded shape the UI reads (link.parent_profiles.email,
+    // link.parent_profiles.full_name) so no downstream changes are needed.
+    const linksWithProfile = links.map(l => ({
+      ...l,
+      parent_profiles: profilesById.get(l.parent_id) || null,
+    }))
+
+    setInvitations(Array.isArray(invsResp.data) ? invsResp.data : [])
+    setParentLinks(linksWithProfile)
     setLoading(false)
   }
 

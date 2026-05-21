@@ -70,8 +70,9 @@ export default async function handler(req) {
       `message_threads?id=eq.${thread_id}&select=*,families(family_name),children(first_name,last_name)`,
       'GET'
     )
-    const threads = await threadResp.json()
-    if (!threads || threads.length === 0) {
+    const threadsRaw = await threadResp.json().catch(() => null)
+    const threads = Array.isArray(threadsRaw) ? threadsRaw : []
+    if (threads.length === 0) {
       return new Response(JSON.stringify({ error: 'Thread not found' }), {
         status: 404, headers: { 'Content-Type': 'application/json' },
       })
@@ -85,8 +86,9 @@ export default async function handler(req) {
       `messages?id=eq.${message_id}&select=sender_type,sender_user_id`,
       'GET'
     )
-    const msgRows = await msgResp.json()
-    if (!msgRows || msgRows.length === 0) {
+    const msgRowsRaw = await msgResp.json().catch(() => null)
+    const msgRows = Array.isArray(msgRowsRaw) ? msgRowsRaw : []
+    if (msgRows.length === 0) {
       return new Response(JSON.stringify({ error: 'Message not found' }), {
         status: 404, headers: { 'Content-Type': 'application/json' },
       })
@@ -112,8 +114,9 @@ export default async function handler(req) {
         `parent_family_links?parent_id=eq.${sender.id}&family_id=eq.${thread.family_id}&status=eq.active&select=id`,
         'GET'
       )
-      const links = await linkResp.json()
-      if (!Array.isArray(links) || links.length === 0) {
+      const linksRaw = await linkResp.json().catch(() => null)
+      const links = Array.isArray(linksRaw) ? linksRaw : []
+      if (links.length === 0) {
         return new Response(JSON.stringify({ error: 'Not linked to this family' }), {
           status: 403, headers: { 'Content-Type': 'application/json' },
         })
@@ -157,28 +160,63 @@ export default async function handler(req) {
       `profiles?id=eq.${thread.provider_user_id}&select=full_name,daycare_name`,
       'GET'
     )
-    const provProfs = await provProfResp.json()
+    const provProfsRaw = await provProfResp.json().catch(() => null)
+    const provProfs = Array.isArray(provProfsRaw) ? provProfsRaw : []
     providerName = provProfs[0]?.daycare_name || provProfs[0]?.full_name || providerName
 
     if (senderType === 'provider') {
       // Provider posted → notify all linked parents.
-      // Same parent_profiles-embed FK gap as src/pages/FamiliesPage.jsx Access
-      // tab: parent_family_links.parent_id FKs to auth.users, not parent_profiles.
-      // The !parent_family_links_parent_id_fkey hint tells PostgREST to use that
-      // FK as the join axis; Supabase resolves it via the 1:1 auth.users.id →
-      // parent_profiles.id chain. See docs/tech_debt.md § parent_profiles FK gap.
+      // parent_family_links.parent_id FKs to auth.users(id), not parent_profiles(id).
+      // The hint-syntax workaround was tried 2026-05-22 and did NOT work in
+      // production — PostgREST does not transitively follow auth.users →
+      // parent_profiles. Two-query fallback is the only viable fix until a
+      // real FK lands. See docs/tech_debt.md § parent_profiles FK gap.
+
+      // Query 1: links (no embed).
       const linksResp = await supabaseRequest(
-        `parent_family_links?family_id=eq.${thread.family_id}&status=eq.active&select=parent_id,parent_profiles!parent_family_links_parent_id_fkey(email,full_name)`,
+        `parent_family_links?family_id=eq.${thread.family_id}&status=eq.active&select=parent_id`,
         'GET'
       )
-      const links = await linksResp.json()
-      ;(links || []).forEach(l => {
-        const email = l.parent_profiles?.email
-        if (email) {
-          const firstName = (l.parent_profiles?.full_name || '').split(' ')[0] || ''
-          toEmails.push({ email, firstName })
+      const linksJson = await linksResp.json().catch(() => null)
+      const safeLinks = Array.isArray(linksJson) ? linksJson : []
+      const parentIds = safeLinks.map(l => l && l.parent_id).filter(Boolean)
+
+      // Query 2: profiles for those parent_ids.
+      let parentsByIds = {}
+      if (parentIds.length > 0) {
+        const idsList = parentIds.join(',')
+        const profilesResp = await supabaseRequest(
+          `parent_profiles?id=in.(${idsList})&select=id,email,full_name`,
+          'GET'
+        )
+        const profilesJson = await profilesResp.json().catch(() => null)
+        const safeProfiles = Array.isArray(profilesJson) ? profilesJson : []
+        parentsByIds = Object.fromEntries(safeProfiles.map(p => [p.id, p]))
+      }
+
+      // Merge + filter. Drop parents with no email row (and log the skip so
+      // a missing-email follow-up is debuggable without piecing it together
+      // from Vercel access logs).
+      for (const link of safeLinks) {
+        const profile = parentsByIds[link.parent_id]
+        if (!profile) {
+          console.log('send-message-notification: skipping parent without profile', { parent_id: link.parent_id })
+          continue
         }
-      })
+        if (!profile.email) {
+          console.log('send-message-notification: skipping parent without email', { parent_id: link.parent_id })
+          continue
+        }
+        const firstName = (profile.full_name || '').split(' ')[0] || ''
+        toEmails.push({ email: profile.email, firstName })
+      }
+
+      // Temporary diagnostic for the 2026-05-22 deploy. Remove once the
+      // notification flow is confirmed delivering — leaves a clean trail in
+      // Vercel logs to distinguish "zero recipients found" from "recipients
+      // found, Resend failing."
+      console.log('send-message-notification: recipients resolved',
+        { count: toEmails.length, emails: toEmails.map(t => t.email) })
     } else {
       // Parent posted → notify the provider
       // Get provider email from auth.users
@@ -192,13 +230,17 @@ export default async function handler(req) {
         }
       )
       if (provUserResp.ok) {
-        const provUser = await provUserResp.json()
-        if (provUser?.email) {
+        const provUser = await provUserResp.json().catch(() => null)
+        if (provUser && provUser.email) {
           toEmails.push({
             email: provUser.email,
             firstName: (provProfs[0]?.full_name || '').split(' ')[0] || '',
           })
+        } else {
+          console.log('send-message-notification: skipping provider notify, no email on auth user', { provider_user_id: thread.provider_user_id })
         }
+      } else {
+        console.log('send-message-notification: failed to load provider auth user', { status: provUserResp.status })
       }
 
       // Get parent name for display in email
@@ -206,8 +248,13 @@ export default async function handler(req) {
         `parent_profiles?id=eq.${sender.id}&select=full_name`,
         'GET'
       )
-      const parentProfs = await parentProfResp.json()
+      const parentProfsRaw = await parentProfResp.json().catch(() => null)
+      const parentProfs = Array.isArray(parentProfsRaw) ? parentProfsRaw : []
       parentName = parentProfs[0]?.full_name || 'A parent'
+
+      // Same temporary diagnostic on the parent->provider path.
+      console.log('send-message-notification: recipients resolved',
+        { count: toEmails.length, emails: toEmails.map(t => t.email) })
     }
 
     if (toEmails.length === 0) {
@@ -228,6 +275,12 @@ export default async function handler(req) {
     }
 
     for (const recipient of toEmails) {
+      // Defence in depth: never pass null/empty to Resend, even if a future
+      // code path constructs toEmails without filtering.
+      if (!recipient || !recipient.email) {
+        console.log('send-message-notification: skipping recipient with no email at send time', { recipient })
+        continue
+      }
       try {
         const emailResp = await fetch('https://api.resend.com/emails', {
           method: 'POST',

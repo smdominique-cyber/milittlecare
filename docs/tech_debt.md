@@ -602,27 +602,52 @@ PR #9's migration 019 was applied to production yesterday (2026-05-21) but the P
 
 `parent_family_links.parent_id` foreign-keys to `auth.users(id)`, not `parent_profiles(id)`. PostgREST cannot infer a `parent_profiles` embed from a FK that points at a different table — the resource-embed system follows actual `pg_constraint` rows, not application-level "well, both ids are the same value" knowledge.
 
-### Immediate fix (hotfix branch `fix/access-tab-parent-profiles-embed`)
+### First attempt: PostgREST hint syntax — **ATTEMPTED, DID NOT WORK IN PRODUCTION 2026-05-22**
 
-Two surfaces patched with the PostgREST hint syntax:
+Hotfix branch `fix/access-tab-parent-profiles-embed` (commit `018d30a`) tried:
 
-- `src/pages/FamiliesPage.jsx` — Access tab `loadAll`: `parent_profiles!parent_family_links_parent_id_fkey(email, full_name)`.
-- `api/send-message-notification.js` — provider→parent notification dispatch: same hint, REST-URL form.
+```javascript
+parent_profiles!parent_family_links_parent_id_fkey(email, full_name)
+```
 
-The hint tells PostgREST: "use this named FK as the join axis." Supabase's PostgREST has logic that follows the chain `auth.users.id → parent_profiles.id` via the 1:1 id mapping. If this still returns 400 in production (the chain logic isn't documented), the two-query fallback is:
+The theory: tell PostgREST to use the named FK as the join axis, and Supabase's PostgREST would follow the `auth.users.id → parent_profiles.id` 1:1 chain.
+
+**Tested in production 2026-05-22 — still returns HTTP 400.** Supabase's PostgREST does NOT transitively follow the auth.users chain even with the hint. The hint syntax only disambiguates between multiple FKs to the *same* target table; it does not synthesize relationships through intermediate tables.
+
+Quieter knock-on damage: the messaging notification route stopped 500-ing but began silently iterating zero recipients — messages saved, no notification emails sent.
+
+### Working fix: two-query fallback (hotfix branch `fix/access-and-messaging-two-query-fallback`)
+
+This is the only viable path until a real FK is added. Both surfaces rewritten to issue two queries and merge in JS:
+
+- `src/pages/FamiliesPage.jsx` Access tab `loadAll` — supabase-js client form
+- `api/send-message-notification.js` provider→parent dispatch — REST URL form
+
+The merged shape preserves `link.parent_profiles.email` / `link.parent_profiles.full_name` so the downstream UI and the email builder both keep working without further changes.
+
+Same commit added defensive `Array.isArray(x) ? x : []` wrapping at every Supabase response site in the notification route — the previous failure showed PostgREST can return non-array shapes (error objects) under failure conditions, and the route should never crash on a malformed response — it should log and continue with zero recipients. Also added a null-email guard at the Resend call site so a future code path that constructs `toEmails` without filtering can't pass `null` to Resend.
+
+A temporary diagnostic `console.log('send-message-notification: recipients resolved', ...)` was added to the route for this deploy. Remove in a follow-up cleanup commit once the notification flow is confirmed delivering — its only purpose is to distinguish "zero recipients found" from "recipients found, Resend failing" in Vercel logs.
+
+Reference snippet (client form):
 
 ```javascript
 const linksResp = await supabase
   .from('parent_family_links').select('*')
   .eq('family_id', familyId).eq('status', 'active')
-const parentIds = (linksResp.data || []).map(l => l.parent_id)
-const profilesResp = await supabase
-  .from('parent_profiles').select('id, email, full_name')
-  .in('id', parentIds)
-const profileById = new Map((profilesResp.data || []).map(p => [p.id, p]))
-const linksWithProfile = (linksResp.data || []).map(l => ({
+const links = Array.isArray(linksResp.data) ? linksResp.data : []
+const parentIds = links.map(l => l && l.parent_id).filter(Boolean)
+let profilesById = new Map()
+if (parentIds.length > 0) {
+  const profilesResp = await supabase
+    .from('parent_profiles').select('id, email, full_name')
+    .in('id', parentIds)
+  const profiles = Array.isArray(profilesResp.data) ? profilesResp.data : []
+  profilesById = new Map(profiles.map(p => [p.id, p]))
+}
+const linksWithProfile = links.map(l => ({
   ...l,
-  parent_profiles: profileById.get(l.parent_id) || null,
+  parent_profiles: profilesById.get(l.parent_id) || null,
 }))
 ```
 
@@ -648,4 +673,4 @@ WHERE pp.id IS NULL;
 
 If that returns rows, those parents need their profile rows backfilled before the FK can land. The follow-up PR is a small two-step migration: (a) backfill any missing parent_profiles rows from auth.users; (b) add the FK constraint.
 
-Once the FK lands, the hint syntax in the two hotfix sites can be removed and the plain `parent_profiles(…)` embed will work again.
+Once the FK lands, the two-query fallback in the two hotfix sites can be replaced with the plain `parent_profiles(…)` embed — PostgREST will then have a real `pg_constraint` row to infer the embed from. The temporary `console.log` diagnostic in `api/send-message-notification.js` should also come out at that time.
