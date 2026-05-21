@@ -568,3 +568,30 @@ column is left alone. Deferred because it cuts across `useAuth`'s
 contract (read-only today) and needs a "freshly confirmed vs
 returning user" decision; a follow-up PR can wire it in one place once
 that decision is made.
+
+## Schema-altering migrations must be paired with an app-code audit (2026-05-22)
+
+**Caught when Venessa reported the Drop Off button broken on 2026-05-22.**
+
+Migration 019 replaced the `attendance` unique constraint `(child_id, date)` with `(child_id, date, segment_index)`. Production-side schema applied correctly; production-side app code on `main` was unchanged. Every existing `.from('attendance').upsert(payload, { onConflict: 'child_id,date' })` call started returning HTTP 400 from PostgREST because the named constraint no longer exists. The UI optimistically rendered "selected" but nothing persisted — silent data loss until a provider noticed.
+
+Affected surfaces — fixed by `fix/attendance-widget-onconflict-after-019`:
+- `src/components/dashboard/TodayWidget.jsx` (Drop Off + Mark Absent buttons).
+- `src/pages/ParentDashboardPage.jsx` (parent self-serve drop-off).
+- `src/pages/FamiliesPage.jsx` (weekly attendance grid `saveRecord`).
+- `src/pages/AttendancePage.jsx` raw insert path — added explicit `segment_index: 0` even though the column has a default, so the write-payload intent is visible.
+
+### Convention going forward
+
+**Schema-altering migrations must be paired with two greps before merge:**
+
+1. `grep -r "onConflict.*<column-list-being-removed>"` — every PostgREST upsert call referencing the dropped constraint key.
+2. `grep -r ".from('<table>').upsert\|.from('<table>').insert"` — every write payload that touches the changed table, audited for whether the new constraint columns must be set explicitly.
+
+**Apply order: update app code first, deploy, *then* apply the migration.** Reverse order — what happened with PR #9 — risks production outages between the migration apply and the app deploy. The hotfix turnaround is small; the user trust cost is not.
+
+### Why this slipped through the build discipline
+
+PR #9's migration 019 was applied to production yesterday (2026-05-21) but the PR #9 application code lives on `feature/i-billing-transfer-pr-9` and has not yet merged to `main`. The branch's own new code uses `segment_index` correctly; what broke was code already on `main` that nobody on the PR #9 branch had touched. The pre-existing app-code surfaces were invisible to the PR #9 reviewer because they were not part of PR #9's diff.
+
+**Mitigation.** When a migration touches a table the app already writes to from `main`, the PR opening that migration MUST include either (a) the matching app-code updates in the same PR (preferred), or (b) a written checklist of every `main`-side write path the migration could affect, with explicit reviewer sign-off on the order of operations.

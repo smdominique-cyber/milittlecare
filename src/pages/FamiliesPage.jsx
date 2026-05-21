@@ -1137,12 +1137,13 @@ function AttendanceTab({ userId, children }) {
       user_id: userId,
       child_id: childId,
       date: dateStr,
+      segment_index: 0,  // weekly grid writes single-segment days; matches migration 019's unique key
       check_in:  updates.check_in  ?? existing?.check_in  ?? null,
       check_out: updates.check_out ?? existing?.check_out ?? null,
       hours: hours ? parseFloat(hours) : null,
       status: updates.status ?? existing?.status ?? 'present',
     }
-    await supabase.from('attendance').upsert(payload, { onConflict: 'child_id,date' })
+    await supabase.from('attendance').upsert(payload, { onConflict: 'child_id,date,segment_index' })
     await loadAttendance()
   }
 

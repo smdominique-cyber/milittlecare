@@ -144,6 +144,7 @@ export default function AttendancePage() {
         user_id: licenseeId,
         child_id: child.id,
         date: dateStr,
+        segment_index: 0,  // grid edits single-segment days; migration 019's unique key requires it
         status: field === 'status' ? value : 'present',
         [field]: value || null,
       }

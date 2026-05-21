@@ -207,11 +207,12 @@ export default function ParentDashboardPage() {
         user_id: family.user_id,
         child_id: child.id,
         date: today,
+        segment_index: 0,  // parent drop-off writes single-segment days; matches migration 019's unique key
         check_in: now,
         status: 'present',
         checked_in_by: 'parent',
         checked_in_by_user_id: session.user.id,
-      }, { onConflict: 'child_id,date' })
+      }, { onConflict: 'child_id,date,segment_index' })
     setWorking(null)
     if (error) {
       setMessage({ type: 'error', text: `Could not record drop-off: ${error.message}` })

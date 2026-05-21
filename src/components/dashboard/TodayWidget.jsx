@@ -118,11 +118,12 @@ export default function TodayWidget({ licenseeId, userId, businessName, provider
         user_id: licenseeId,
         child_id: child.id,
         date: today,
+        segment_index: 0,  // widget only writes single-segment days; matches migration 019's (child_id, date, segment_index) unique
         check_in: now,
         status: 'present',
         checked_in_by: 'provider',
         checked_in_by_user_id: userId,
-      }, { onConflict: 'child_id,date' })
+      }, { onConflict: 'child_id,date,segment_index' })
     setWorking(null)
     if (!error) await loadAttendanceOnly()
   }
@@ -190,10 +191,11 @@ export default function TodayWidget({ licenseeId, userId, businessName, provider
         user_id: licenseeId,
         child_id: child.id,
         date: today,
+        segment_index: 0,  // single-segment widget; matches migration 019's unique key
         status: 'absent',
         checked_in_by: 'provider',
         checked_in_by_user_id: userId,
-      }, { onConflict: 'child_id,date' })
+      }, { onConflict: 'child_id,date,segment_index' })
     setWorking(null)
     await loadAttendanceOnly()
   }
