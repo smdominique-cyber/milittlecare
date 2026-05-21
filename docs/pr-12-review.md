@@ -93,9 +93,35 @@ Remaining § 11 cases (DST transitions, Resend failure retry, daily-no-attendanc
 
 - **`resend` npm package** — needed for step 3. Per `CLAUDE.md` § Build Discipline, requires explicit approval before `npm install`. Flagging at the step 3 boundary.
 
+## Hash function chosen and rationale
+
+**FNV-1a 32-bit**, returned as 8 lowercase hex characters. Lives in
+`src/lib/parentAcknowledgment.js` as `computeAttendanceHash(record)`,
+operating over the canonical serialisation from `canonicalAttendanceForHash`
+(JSON in alphabetical key order; `null` / `undefined` normalised to the
+literal `null` token; `segment_index` defaulted to `0`).
+
+Why FNV-1a over the spec's SHA-256 suggestion:
+- **Synchronous.** Browser `crypto.subtle.digest` is async, which forces
+  every call site (hot path: the validation engine running 11 rules
+  per pay period) to be async too. FNV-1a is a few lines of pure JS.
+- **Identical in browser and Node.** Vitest tests are deterministic
+  without a polyfill layer.
+- **Adequate for the threat model.** The spec calls this
+  "tamper-detection", not cryptographic integrity. A provider with
+  direct DB write access could rewrite the stored hash; the goal is
+  honest-edit detection (provider edits attendance after parent ack
+  → hash no longer matches → re-acknowledgment required). FNV-1a is
+  sufficient for that.
+
+Implementation note: the inner loop uses `Math.imul` for the 32-bit
+multiplication and `>>> 0` for unsigned conversion, to dodge
+JavaScript's signed-32-bit-on-bitwise-ops quirk. A regression test
+(`computeAttendanceHash > survives the JS-signed-bitwise-trap`)
+locks the behaviour in.
+
 ## Pending review-doc sections (populated as the build progresses)
 
-- Hash function chosen and rationale (step 2)
 - From-address used for Resend sends (step 3 after approval)
 - T&A PDF visual marker decisions — what "OVR" looks like (step 7)
 - Whether daily-cadence was tested end-to-end or only weekly (step 9)
