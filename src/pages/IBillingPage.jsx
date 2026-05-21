@@ -28,6 +28,7 @@ import PayPeriodPicker from '@/components/iBilling/PayPeriodPicker'
 import ReviewGrid from '@/components/iBilling/ReviewGrid'
 import IssueResolutionModal, { buildOverrideIndex, issueMatchKey } from '@/components/iBilling/IssueResolutionModal'
 import ExportPanel from '@/components/iBilling/ExportPanel'
+import ReconcilePanel from '@/components/iBilling/ReconcilePanel'
 import { todayYMD } from '@/lib/cdcPayPeriods'
 import { runValidation } from '@/lib/iBilling'
 import { computeAttendanceHash } from '@/lib/parentAcknowledgment'
@@ -69,6 +70,7 @@ export default function IBillingPage() {
   const [fiscalYearAttendance, setFiscalYearAttendance] = useState([])
   const [acknowledgments, setAcknowledgments] = useState([])
   const [overrides, setOverrides] = useState([])
+  const [existingSubmission, setExistingSubmission] = useState(null)
   const [periodLoading, setPeriodLoading] = useState(false)
   const [periodError, setPeriodError] = useState(null)
 
@@ -159,9 +161,15 @@ export default function IBillingPage() {
         .select('*')
         .eq('provider_id', user.id)
         .eq('pay_period_number', String(selectedPeriod.period_number)),
-    ]).then(([attRes, fyRes, ackRes, ovRes]) => {
+      supabase
+        .from('cdc_billing_submissions')
+        .select('*')
+        .eq('provider_id', user.id)
+        .eq('pay_period_number', String(selectedPeriod.period_number))
+        .maybeSingle(),
+    ]).then(([attRes, fyRes, ackRes, ovRes, subRes]) => {
       if (cancelled) return
-      const firstErr = attRes.error || fyRes.error || ovRes?.error
+      const firstErr = attRes.error || fyRes.error || ovRes?.error || subRes?.error
       if (firstErr) {
         console.error('IBillingPage period load', firstErr)
         setPeriodError('Failed to load attendance for this period.')
@@ -170,6 +178,7 @@ export default function IBillingPage() {
         setFiscalYearAttendance(fyRes.data || [])
         setAcknowledgments(ackRes?.data || [])
         setOverrides(ovRes?.data || [])
+        setExistingSubmission(subRes?.data || null)
       }
     }).finally(() => {
       if (!cancelled) setPeriodLoading(false)
@@ -378,6 +387,30 @@ export default function IBillingPage() {
     setRefreshKey(k => k + 1)
   }
 
+  async function handleSubmitReconcile(payload) {
+    if (!user || !selectedPeriod) return
+    const { data, error } = await supabase
+      .from('cdc_billing_submissions').insert({
+        provider_id:      user.id,
+        pay_period_number: String(selectedPeriod.period_number),
+        confirmation_number: payload.confirmation_number,
+        submitted_at:     payload.submitted_at,
+        total_billed_hours: payload.total_billed_hours,
+        total_billed_amount_estimate: payload.total_billed_amount_estimate,
+        attendance_snapshot_jsonb: {
+          attendance,
+          issues,
+          overrides,
+          generated_at: new Date().toISOString(),
+        },
+      }).select('*').single()
+    if (error) throw error
+    setExistingSubmission(data)
+    // Roll the picker's "Already submitted" badge forward.
+    setSubmittedNumbers(prev => new Set([...prev, String(selectedPeriod.period_number)]))
+    return data
+  }
+
   async function handleOverride(issue, reason) {
     if (!user || !selectedPeriod) return
     const { error } = await supabase
@@ -473,21 +506,14 @@ export default function IBillingPage() {
       )}
 
       {stage === STAGE.RECONCILE && (
-        <div style={{ marginTop: 24, padding: 24, background: '#f9fafb',
-                      border: '1px dashed #d1d5db', borderRadius: 8 }}>
-          <h2 style={{ margin: 0, fontSize: 18 }}>Next stage: reconcile</h2>
-          <p style={{ margin: '8px 0 16px 0', color: '#4b5563' }}>
-            Selected period: <strong>
-              Period {selectedPeriod?.period_number}
-              {' '}({selectedPeriod?.start_date} → {selectedPeriod?.end_date})
-            </strong>.
-            The Reconcile stage ships in the next commit on this branch.
-          </p>
-          <button type="button" onClick={() => setStage(STAGE.EXPORT)}
-                  style={ghostButtonStyle}>
-            Back to export
-          </button>
-        </div>
+        <ReconcilePanel
+          payPeriod={selectedPeriod}
+          existingSubmission={existingSubmission}
+          totalBillableHours={totalBillableHours}
+          onSubmit={handleSubmitReconcile}
+          onBack={() => setStage(STAGE.EXPORT)}
+          onDone={handleBackToPicker}
+        />
       )}
     </div>
   )
