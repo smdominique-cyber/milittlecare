@@ -1,46 +1,111 @@
 # PR #8.5b Review — CDC Authorization Typing + Lifecycle Expansion
 
 **Branch:** `feature/cdc-authorization-typing-pr-8-5b`
-**Migration:** `supabase/migrations/017_promote_cdc_fields_and_expand_lifecycle.sql` *(pending — see status below)*
+**Migration:** `supabase/migrations/017_promote_cdc_fields_and_expand_lifecycle.sql`
 
-## Build session status
+## Build session status — SHIPPED
 
-> ⚠️ **Migration body PARKED, awaiting pre-flight audit output (spec § PR #8.5b Step 1).**
->
-> Per spec, the typing migration cannot be written until the four pre-flight audit queries are run against production and their output is committed to this doc. The audit may also trigger a HALT condition if `funding_sources.details` for CDC rows contains keys outside the spec's documented set.
+Migration written against Seth's pre-flight audit (2026-05-20, see `discovery_results_for_migrations.md`). **No HALT triggered.** Two commits on this branch:
 
-### Items unblocked and written in this commit
+```
+86d595e PR #8.5b: migration 017 — promote CDC fields, expand status enum, backfill 1 row
+9eb0ae1 PR #8.5b: lifecycle countdown helper + review doc scaffold
+```
 
-- `src/lib/cdcAuthorization.js` — the lifecycle countdown helper (spec § Step 5). Pure function, shape-tolerant: reads `authorization_end` from the typed column first, falls back to `details.authorization_end` for rows that haven't been rewired yet. Same `Date.UTC`-based date math as `staffTraining.js` / `miregistry.js` (DST-safe).
-- `src/lib/cdcAuthorization.test.js` — 16 deterministic Vitest cases. Boundary cases (29/30/31/0/-1 days), all three static states (`pending`/`terminated`/`renewed`), missing-data branches, and the JSON-fallback path are all covered.
-- This review-doc scaffold.
+### Items shipped
 
-### Items parked, awaiting pre-flight audit data
+- `src/lib/cdcAuthorization.js` (16 Vitest cases) — lifecycle countdown helper, shape-tolerant (typed-column-first, JSON fallback). Boundary cases at 29/30/31/0/-1 days; all three static states (`pending`/`terminated`/`renewed`); missing-data branches; JSON-fallback path.
+- Migration 017 — enum expansion, 14 typed CDC columns added to `funding_sources`, backfill UPDATE, the PR #9 expiration-countdown index.
 
-| Item | Blocker |
-|---|---|
-| The migration body (enum-expand + typed-column add + backfill + index) | Audit queries 2a–2d unrun |
-| Resolution of any unexpected JSON keys → **HALT condition** | Audit query 2a |
-| Decision on whether to add `dhs_198_issue_date` as new column or skip if production never had it | Audit query 2d |
-| Backfill `update` statement (the spec's hard-coded version) | Needs query 2b sample values to confirm types parse cleanly (e.g., are date strings ISO or local-format? are booleans `true`/`false` strings or jsonb booleans?) |
-| Reclassification report (rows that should be `expired` but are still `active`; rows currently `ended`) | Migration must land before the report queries make sense |
-| Form rewire — switch CDC form writes from `details` JSON to typed columns | Typed columns must exist |
-| Read-path updates — wire `FUNDING_SOURCE_COLUMNS` constant + every `details.X` reader to prefer typed columns | Typed columns must exist |
-| UI badge wiring — surface `getLifecycleDisplayState` results on the funding sources list, child profile, dashboard widget | Helper exists; surfaces wait for migration |
+### Items still queued (UI work, follow-up commits on this branch)
 
-## Spec § PR #8.5b — required review entries
+- Form rewire — switch CDC form writes from `details` JSON to typed columns. Typed columns exist after 017 lands; the lifecycle helper's shape-tolerance means UI can read typed-first / JSON-fallback during the transition.
+- Read-path updates — extend `FUNDING_SOURCE_COLUMNS` constant in `FundingSourceList.jsx`; update every `details.X` reader to prefer typed columns.
+- UI badge wiring — surface `getLifecycleDisplayState` results on the funding sources list, child profile, and dashboard widget.
 
-### Pre-flight audit output
+## Pre-flight audit results (2026-05-20)
 
-*Pending — paste verbatim once human runs queries 2a–2d in the Supabase dashboard.*
+### Query 2a — distinct keys on CDC `details` JSON
 
-### HALT verification
+10 keys, **exact match to spec list**. No HALT triggered.
 
-*Pending — confirm query 2a returns no keys outside the spec's documented set: `case_number, dhs_198_received_date, authorization_start, authorization_end, approved_hours_per_period, family_contribution_amount, billing_basis, shared_with_other_provider, shared_provider_notes, provider_pin_required`. If any unknown keys are found, HALT and document here.*
+```
+approved_hours_per_period
+authorization_end
+authorization_start
+billing_basis
+case_number
+dhs_198_received_date
+family_contribution_amount
+provider_pin_required
+shared_provider_notes
+shared_with_other_provider
+```
 
-### Reclassification report
+### Query 2b — example values per key (single CDC row in production)
 
-*Pending — to be run after migration body lands. Rows that look mis-statused per spec § Step 6.*
+| Key | Example value | Type |
+|---|---|---|
+| `approved_hours_per_period` | `30` | numeric |
+| `authorization_end` | `2027-05-31` | ISO date |
+| `authorization_start` | `2026-06-01` | ISO date |
+| `billing_basis` | `'enrollment'` | text |
+| `case_number` | `866753452546` | 12-digit text |
+| `dhs_198_received_date` | `2026-05-05` | ISO date |
+| `family_contribution_amount` | `10` | numeric |
+| `provider_pin_required` | `true` | boolean |
+| `shared_provider_notes` | `''` (empty string — drives the NULLIF treatment in the backfill) | text |
+| `shared_with_other_provider` | `false` | boolean |
+
+### Query 2c — populated-vs-empty counts
+
+```
+null_details:        0
+empty_details:       0
+populated_details:   1
+total_cdc_rows:      1
+```
+
+Migration touches **1 row** of real production data. Low-stakes.
+
+### Query 2d — `dhs_198_issue_date` vs `dhs_198_received_date`
+
+```
+has_issue_date:    0
+has_received_date: 1
+has_both:          0
+```
+
+`dhs_198_issue_date` is genuinely new — the typed column lands NULL on the one backfilled row. Form rewire (queued) adds the field with a "Date on the DHS-198 letter (optional, defaults to received date if blank)" inline-help label per spec § Step 3.
+
+### Query 9 — status row counts (all `funding_source` types)
+
+```
+status: 'active'  — 15 rows
+status: 'paused'  —  0 rows
+status: 'ended'   —  0 rows
+```
+
+**No status reclassification needed** — spec § Step 6 reclassification report returns 0 rows on every branch (no 'active' rows past their authorization_end, no 'ended' rows requiring re-routing to 'expired' vs 'terminated'). Enum expansion is purely additive.
+
+## Backfill empty-string handling
+
+Per Query 2b, `shared_provider_notes` carries `''` in production. The backfill UPDATE wraps the **three text columns** in `NULLIF(…, '')`: `case_number`, `billing_basis`, `shared_provider_notes`. Date / numeric / boolean values are direct `::type` casts — production values are well-formed and no empty-string-on-date risk exists for this row. (My initial draft NULLIFd everything defensively; reverted to direct cast on non-text per the discovery handoff doc.)
+
+## Production data verification (post-apply)
+
+One-line spot-check after applying:
+
+```sql
+SELECT case_number, dhs_198_received_date, authorization_start, authorization_end,
+       approved_hours_per_period, family_contribution_amount, billing_basis,
+       shared_with_other_provider, shared_provider_notes, provider_pin_required,
+       details
+FROM public.funding_sources
+WHERE type = 'cdc_scholarship';
+```
+
+Single row; eyeball that each typed column equals the matching JSON key (with `''` → `NULL` for `shared_provider_notes`).
 
 ### Backfill sample verification
 
