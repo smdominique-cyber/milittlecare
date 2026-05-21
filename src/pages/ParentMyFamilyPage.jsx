@@ -52,8 +52,8 @@ export default function ParentMyFamilyPage() {
 
   async function loadFamilyData(familyId, parentId) {
     const [c, g, e, p] = await Promise.all([
-      supabase.from('children').select('*').eq('family_id', familyId).order('birth_date', { ascending: false }),
-      supabase.from('guardians').select('*').eq('family_id', familyId),
+      supabase.from('children').select('*').eq('family_id', familyId).order('date_of_birth', { ascending: false }),
+      supabase.from('guardians').select('*').eq('family_id', familyId).is('archived_at', null),
       supabase.from('emergency_contacts').select('*').eq('family_id', familyId),
       supabase.from('parent_profiles').select('*').eq('id', parentId).maybeSingle(),
     ])
@@ -343,9 +343,9 @@ function ChildCard({ child, family, isEditing, onEdit, onCancel, onSaved }) {
         <div className="myfamily-card-header">
           <div>
             <div className="myfamily-card-title">{child.first_name} {child.last_name}</div>
-            {child.birth_date && (
+            {child.date_of_birth && (
               <div className="myfamily-card-meta">
-                Born {new Date(child.birth_date + 'T12:00:00').toLocaleDateString()}
+                Born {new Date(child.date_of_birth + 'T12:00:00').toLocaleDateString()}
               </div>
             )}
           </div>
@@ -467,7 +467,7 @@ function GuardiansTab({ guardians, family, session, onSaved }) {
           relationship: form.relationship,
           phone: form.phone,
           email: form.email,
-          authorized_pickup: form.authorized_pickup,
+          can_pickup: form.authorized_pickup,  // canonical column is can_pickup (migration 016)
         }).eq('id', editingId).select().maybeSingle()
         savedGuardian = data
       } else {
@@ -479,7 +479,7 @@ function GuardiansTab({ guardians, family, session, onSaved }) {
           relationship: form.relationship,
           phone: form.phone,
           email: form.email,
-          authorized_pickup: form.authorized_pickup,
+          can_pickup: form.authorized_pickup,  // canonical column is can_pickup (migration 016)
         }).select().maybeSingle()
         savedGuardian = data
 
@@ -500,7 +500,11 @@ function GuardiansTab({ guardians, family, session, onSaved }) {
 
   const remove = async (g) => {
     if (!window.confirm(`Remove ${g.first_name} as a guardian?`)) return
-    await supabase.from('guardians').delete().eq('id', g.id)
+    // Soft-delete (migration 016 added archived_at). Audit retention.
+    await supabase
+      .from('guardians')
+      .update({ archived_at: new Date().toISOString() })
+      .eq('id', g.id)
     notifyStateChange('guardian_removed', family.id, {
       guardianName: `${g.first_name} ${g.last_name || ''}`.trim(),
       changedBy: session.user.user_metadata?.full_name || session.user.email,

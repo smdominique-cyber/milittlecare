@@ -94,7 +94,7 @@ export default function FamiliesPage() {
     const [f, c, g, e] = await Promise.all([
       supabase.from('families').select('*').eq('user_id', licenseeId).order('family_name'),
       supabase.from('children').select('*').eq('user_id', licenseeId),
-      supabase.from('guardians').select('*').eq('user_id', licenseeId),
+      supabase.from('guardians').select('*').eq('user_id', licenseeId).is('archived_at', null),
       supabase.from('emergency_contacts').select('*').eq('user_id', licenseeId),
     ])
     setFamilies(f.data || [])
@@ -926,7 +926,13 @@ function GuardiansTab({ userId, familyId, guardians, onChange }) {
               <button className="icon-btn" onClick={() => setEditing(g.id)}><Pencil /></button>
               <button className="icon-btn danger" onClick={async () => {
                 if (!window.confirm('Remove this guardian?')) return
-                await supabase.from('guardians').delete().eq('id', g.id)
+                // Soft-delete (migration 016 added archived_at). Record
+                // is preserved for audit; list queries filter it out
+                // via .is('archived_at', null) on read.
+                await supabase
+                  .from('guardians')
+                  .update({ archived_at: new Date().toISOString() })
+                  .eq('id', g.id)
                 await onChange()
               }}><Trash2 /></button>
             </div>
