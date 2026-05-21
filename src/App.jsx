@@ -24,6 +24,7 @@ import SubscriptionPage from '@/pages/SubscriptionPage'
 import HowMoneyWorksPage from '@/pages/HowMoneyWorksPage'
 import BusinessInfoPage from '@/pages/BusinessInfoPage'
 import StaffPage from '@/pages/StaffPage'
+import ProviderAcknowledgmentsPage from '@/pages/ProviderAcknowledgmentsPage'
 import MiRegistryPage from '@/pages/MiRegistryPage'
 import StaffTrainingPage from '@/pages/StaffTrainingPage'
 import CdcPayPeriodsPage from '@/pages/CdcPayPeriodsPage'
@@ -117,6 +118,7 @@ export default function App() {
                   <Route path="how-money-works" element={<HowMoneyWorksPage />} />
                   <Route path="business-info" element={<BusinessInfoPage />} />
                   <Route path="staff" element={<StaffPage />} />
+                  <Route path="acknowledgments" element={<ProviderAcknowledgmentsPage />} />
                   <Route path="miregistry" element={<MiRegistryPage />} />
                   <Route path="staff-training" element={<StaffTrainingPage />} />
                   <Route path="cdc-pay-periods" element={<CdcPayPeriodsPage />} />

@@ -26,6 +26,7 @@ import {
   CalendarClock,
   GraduationCap,
   ClipboardCheck,
+  UserCheck,
 } from 'lucide-react'
 
 function getInitials(name) {
@@ -102,6 +103,7 @@ export default function Sidebar({ isOpen = false }) {
       items: [
         { label: 'MiRegistry', icon: GraduationCap, path: '/miregistry', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.MIREGISTRY_TRACKER },
         { label: 'Staff Training', icon: ClipboardCheck, path: '/staff-training', roles: ['licensee', 'adult_staff', 'assistant'], module: MODULE_KEYS.STAFF_TRAINING },
+        { label: 'Parent Acknowledgments', icon: UserCheck, path: '/acknowledgments', roles: ['licensee', 'adult_staff'] },
         { label: 'CDC Pay Periods', icon: CalendarClock, path: '/cdc-pay-periods', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.CDC },
       ],
     },
