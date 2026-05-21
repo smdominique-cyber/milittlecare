@@ -383,44 +383,18 @@ create policy "Providers can view notifications for their roster"
 -- no UPDATE: notification log is append-only audit.
 
 -- -------------------------------------------------------
--- 4. Per-provider acknowledgment settings on public.profiles
+-- 4. Per-provider acknowledgment settings — MOVED TO MIGRATION 018
 -- -------------------------------------------------------
--- See header note (3). If PR #8.5c chose the new-table path, these
--- column adds get relocated to that table in a follow-up commit.
-alter table public.profiles
-  add column if not exists acknowledgment_cadence text
-    default 'weekly'
-    check (acknowledgment_cadence in ('weekly', 'daily')),
-  add column if not exists acknowledgment_strictness text
-    default 'warning'
-    check (acknowledgment_strictness in ('warning', 'strict')),
-  add column if not exists acknowledgment_email_enabled boolean
-    default true,
-  add column if not exists acknowledgment_email_send_day integer
-    default 5
-    check (acknowledgment_email_send_day between 0 and 6),
-  add column if not exists acknowledgment_email_send_hour integer
-    default 17
-    check (acknowledgment_email_send_hour between 0 and 23),
-  add column if not exists acknowledgment_email_timezone text
-    default 'America/Detroit';
-
-comment on column public.profiles.acknowledgment_cadence is
-  '''weekly'' (default) or ''daily''. Drives how often the Vercel cron job '
-  'composes and sends the parent-digest email.';
-
-comment on column public.profiles.acknowledgment_strictness is
-  '''warning'' (default) or ''strict''. Strict makes PR #9 Rule 8 block '
-  'export when any billed day is unacknowledged; warning surfaces it '
-  'without blocking.';
-
-comment on column public.profiles.acknowledgment_email_send_day is
-  '0 = Sunday … 6 = Saturday. 5 = Friday by default. Only honored when '
-  'acknowledgment_cadence = ''weekly''.';
-
-comment on column public.profiles.acknowledgment_email_send_hour is
-  '24h, in the provider''s local time as identified by '
-  'acknowledgment_email_timezone. Default 17 (5 PM).';
+-- The six provider-side acknowledgment-settings columns
+-- (acknowledgment_cadence, acknowledgment_strictness,
+-- acknowledgment_email_enabled, acknowledgment_email_send_day,
+-- acknowledgment_email_send_hour, acknowledgment_email_timezone)
+-- previously lived in this migration. Per the discovery handoff doc's
+-- recommendation, they were folded into migration 018 alongside the
+-- PR #8.5c CDC billing columns so that all provider-level setting
+-- additions land in one migration. This block intentionally left as a
+-- doc-only stub so the migration history reads coherently — no DDL
+-- here; see supabase/migrations/018_provider_cdc_billing_settings.sql.
 
 -- -------------------------------------------------------
 -- 5. Per-parent receive-email toggle on public.parent_profiles
@@ -443,13 +417,8 @@ comment on column public.parent_profiles.acknowledgment_email_opt_in is
 -- alter table public.parent_profiles
 --   drop column if exists acknowledgment_email_opt_in;
 --
--- alter table public.profiles
---   drop column if exists acknowledgment_email_timezone,
---   drop column if exists acknowledgment_email_send_hour,
---   drop column if exists acknowledgment_email_send_day,
---   drop column if exists acknowledgment_email_enabled,
---   drop column if exists acknowledgment_strictness,
---   drop column if exists acknowledgment_cadence;
+-- Note: the six profiles.acknowledgment_* columns are rolled back by
+-- migration 018's DOWN block (not this one) since they now live there.
 --
 -- drop table if exists public.notification_log;
 -- drop table if exists public.acknowledgment_flags;
