@@ -27,6 +27,7 @@ import { MODULE_KEYS } from '@/lib/modules'
 import PayPeriodPicker from '@/components/iBilling/PayPeriodPicker'
 import ReviewGrid from '@/components/iBilling/ReviewGrid'
 import IssueResolutionModal, { buildOverrideIndex, issueMatchKey } from '@/components/iBilling/IssueResolutionModal'
+import ExportPanel from '@/components/iBilling/ExportPanel'
 import { todayYMD } from '@/lib/cdcPayPeriods'
 import { runValidation } from '@/lib/iBilling'
 import { computeAttendanceHash } from '@/lib/parentAcknowledgment'
@@ -205,6 +206,24 @@ export default function IBillingPage() {
     () => allIssues.filter(i => overrideIndex.has(matchKeyForIssue(i))),
     [allIssues, overrideIndex]
   )
+
+  // Sanity-check summary at the top of the export panel.
+  const { totalBillableHours, totalBilledDays } = useMemo(() => {
+    let h = 0
+    const days = new Set()
+    for (const r of attendance) {
+      if (!r || r.status !== 'present') continue
+      const inH = parseTimeToHoursLocal(r.check_in)
+      const outH = parseTimeToHoursLocal(r.check_out)
+      if (inH == null || outH == null) continue
+      const diff = outH - inH
+      if (diff > 0) {
+        h += diff
+        days.add(r.date)
+      }
+    }
+    return { totalBillableHours: h, totalBilledDays: days.size }
+  }, [attendance])
 
   // ---- Gates ---------------------------------------------------------
   if (modulesLoading) {
@@ -437,23 +456,36 @@ export default function IBillingPage() {
         </>
       )}
 
-      {(stage === STAGE.EXPORT || stage === STAGE.RECONCILE) && (
+      {stage === STAGE.EXPORT && (
+        <ExportPanel
+          payPeriod={selectedPeriod}
+          attendance={attendance}
+          children={allChildren}
+          fundingSources={fundingSources}
+          profile={profile}
+          issues={issues}
+          acknowledgments={acknowledgments}
+          totalBillableHours={totalBillableHours}
+          totalBilledDays={totalBilledDays}
+          onBack={() => setStage(STAGE.REVIEW)}
+          onAdvance={() => setStage(STAGE.RECONCILE)}
+        />
+      )}
+
+      {stage === STAGE.RECONCILE && (
         <div style={{ marginTop: 24, padding: 24, background: '#f9fafb',
                       border: '1px dashed #d1d5db', borderRadius: 8 }}>
-          <h2 style={{ margin: 0, fontSize: 18 }}>
-            Next stage: {stage}
-          </h2>
+          <h2 style={{ margin: 0, fontSize: 18 }}>Next stage: reconcile</h2>
           <p style={{ margin: '8px 0 16px 0', color: '#4b5563' }}>
             Selected period: <strong>
               Period {selectedPeriod?.period_number}
               {' '}({selectedPeriod?.start_date} → {selectedPeriod?.end_date})
             </strong>.
-            The Export / Reconcile stages ship in the next commits on
-            this branch.
+            The Reconcile stage ships in the next commit on this branch.
           </p>
-          <button type="button" onClick={() => setStage(STAGE.REVIEW)}
+          <button type="button" onClick={() => setStage(STAGE.EXPORT)}
                   style={ghostButtonStyle}>
-            Back to review
+            Back to export
           </button>
         </div>
       )}
@@ -509,6 +541,14 @@ function matchKeyForIssue(iss) {
   // we strip date+segment from the key so a rule-level override
   // (e.g. "Missing provider name") covers all derived issues.
   return [iss.ruleId || '', iss.childId || '', '', ''].join('|')
+}
+
+function parseTimeToHoursLocal(hms) {
+  if (!hms) return null
+  const parts = String(hms).split(':').map(Number)
+  if (parts.length < 2 || parts.some(n => Number.isNaN(n))) return null
+  const [h, m, s = 0] = parts
+  return h + m / 60 + s / 3600
 }
 
 function overrideReasonFor(issue, overrides) {
