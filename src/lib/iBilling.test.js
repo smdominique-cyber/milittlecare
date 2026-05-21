@@ -4,10 +4,20 @@ import {
   checkBillingOutsideAuthorization,
   checkSubmissionWindowExpired,
   checkBillingWithoutActiveCdc,
+  checkMissingProviderName,
+  checkOvernightNotSplitAtMidnight,
+  checkMissingParentInitials,
+  checkFiscalYearAbsenceCap,
+  checkConsecutiveAbsenceDays,
+  checkBillingDuringSchoolHours,
+  checkConcurrentChildrenCap,
   runValidation,
   segmentHours,
   PAY_PERIOD_HOURS_CAP,
   SUBMISSION_WINDOW_DAYS,
+  CONSECUTIVE_ABSENCE_DAYS_CAP,
+  LEP_CONCURRENT_CHILDREN_CAP,
+  FISCAL_YEAR_ABSENCE_HOURS_CAP,
   SEVERITY,
   RULE,
 } from './iBilling'
@@ -275,25 +285,348 @@ describe('Rule 11 — billing without active CDC', () => {
   })
 })
 
+describe('Rule 9 — missing provider name', () => {
+  it('passes when profile.full_name is set', () => {
+    expect(checkMissingProviderName({ profile: { full_name: 'Venessa' } })).toEqual([])
+  })
+  it('warns when profile is null', () => {
+    const issues = checkMissingProviderName({ profile: null })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].severity).toBe(SEVERITY.WARNING)
+  })
+  it('warns when full_name is whitespace-only', () => {
+    expect(checkMissingProviderName({ profile: { full_name: '   ' } })).toHaveLength(1)
+  })
+})
+
+describe('Rule 7 — overnight not split at midnight', () => {
+  it('passes a normal same-day segment', () => {
+    expect(checkOvernightNotSplitAtMidnight({
+      attendance: [attendanceRow({ check_in: '07:00', check_out: '17:00' })],
+    })).toEqual([])
+  })
+  it('flags a segment that crosses midnight (out < in)', () => {
+    const issues = checkOvernightNotSplitAtMidnight({
+      attendance: [attendanceRow({ check_in: '21:00', check_out: '05:00' })],
+    })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].severity).toBe(SEVERITY.BLOCKING)
+    expect(issues[0].proposedFix.action.kind).toBe('split_at_midnight')
+  })
+  it('does not flag a degenerate segment that has equal times (treats as zero-length, not overnight)', () => {
+    expect(checkOvernightNotSplitAtMidnight({
+      attendance: [attendanceRow({ check_in: '08:00', check_out: '08:00' })],
+    })).toEqual([])
+  })
+  it('ignores absent records', () => {
+    expect(checkOvernightNotSplitAtMidnight({
+      attendance: [attendanceRow({ status: 'absent', check_in: '21:00', check_out: '05:00' })],
+    })).toEqual([])
+  })
+})
+
+describe('Rule 8 — missing parent initials', () => {
+  it('warns once at the provider level when any segment has billed hours', () => {
+    const issues = checkMissingParentInitials({
+      attendance: [
+        attendanceRow({ child_id: 'a', check_in: '08:00', check_out: '16:00' }),
+        attendanceRow({ child_id: 'b', check_in: '07:30', check_out: '17:30' }),
+      ],
+    })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].severity).toBe(SEVERITY.WARNING)
+  })
+  it('returns [] when there are no billed hours (absence-only or empty period)', () => {
+    expect(checkMissingParentInitials({
+      attendance: [attendanceRow({ status: 'absent' })],
+    })).toEqual([])
+    expect(checkMissingParentInitials({ attendance: [] })).toEqual([])
+  })
+})
+
+describe('Rule 2 — fiscal-year absence cap', () => {
+  // Each absence day counts as 8h (coarse approximation pending the
+  // spec's "historical schedule average" derivation in Screen 3).
+  // 360-hour cap → 45 days. Warning threshold (80%) → 36 days.
+  const absenceDay = (date, childId = 'child-1') => attendanceRow({ child_id: childId, date, status: 'absent', check_in: null, check_out: null })
+
+  it('returns [] when well below the warning threshold', () => {
+    const issues = checkFiscalYearAbsenceCap({
+      fiscalYearAttendance: [absenceDay('2026-01-15'), absenceDay('2026-02-01')],
+      today: TODAY,
+    })
+    expect(issues).toEqual([])
+  })
+
+  it('warns when at 80% of the cap (36 absence days = 288 hours)', () => {
+    const fy = []
+    for (let i = 0; i < 36; i++) {
+      const day = `2026-01-${String((i % 28) + 1).padStart(2, '0')}`
+      fy.push(absenceDay(day, `child-${i}`))
+    }
+    const issues = checkFiscalYearAbsenceCap({ fiscalYearAttendance: fy, today: TODAY })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].severity).toBe(SEVERITY.WARNING)
+  })
+
+  it('blocks when at 100% of the cap (45+ absence days)', () => {
+    const fy = []
+    for (let i = 0; i < 45; i++) {
+      // Spread across multiple children so dedupe doesn't collapse them
+      fy.push(absenceDay(`2026-02-${String((i % 28) + 1).padStart(2, '0')}`, `child-${i}`))
+    }
+    const issues = checkFiscalYearAbsenceCap({ fiscalYearAttendance: fy, today: TODAY })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].severity).toBe(SEVERITY.BLOCKING)
+  })
+
+  it('only counts absence rows since fiscal-year start (Oct 1)', () => {
+    // Today is 2026-05-20 → fiscal year start = 2025-10-01.
+    // An absence dated 2025-09-30 should NOT count.
+    const fy = []
+    for (let i = 0; i < 45; i++) {
+      fy.push(absenceDay('2025-09-30', `child-${i}`))
+    }
+    const issues = checkFiscalYearAbsenceCap({ fiscalYearAttendance: fy, today: TODAY })
+    expect(issues).toEqual([])
+  })
+
+  it('dedupes multi-segment absent days (same child, same date)', () => {
+    // 45 segments on the same day for the same child should count as 1 day.
+    const fy = []
+    for (let i = 0; i < 45; i++) {
+      fy.push({ ...absenceDay('2026-02-15', 'child-1'), id: `a-${i}`, segment_index: i })
+    }
+    expect(checkFiscalYearAbsenceCap({ fiscalYearAttendance: fy, today: TODAY })).toEqual([])
+  })
+
+  it('cap is 360 hours per the LEP handbook', () => {
+    expect(FISCAL_YEAR_ABSENCE_HOURS_CAP).toBe(360)
+  })
+})
+
+describe('Rule 3 — consecutive absence days', () => {
+  const period = payPeriod({ start_date: '2026-05-03', end_date: '2026-05-16' })
+
+  const absent = (date, childId = 'child-1') => attendanceRow({
+    child_id: childId, date, status: 'absent', check_in: null, check_out: null,
+  })
+
+  it('passes a 9-day absence streak (one below the cap)', () => {
+    const attendance = []
+    for (let d = 4; d <= 12; d++) {
+      attendance.push(absent(`2026-05-${String(d).padStart(2, '0')}`))
+    }
+    expect(checkConsecutiveAbsenceDays({
+      attendance, fiscalYearAttendance: [], payPeriod: period,
+    })).toEqual([])
+  })
+
+  it('blocks a 10-day consecutive absence streak overlapping the period', () => {
+    const attendance = []
+    for (let d = 4; d <= 13; d++) {
+      attendance.push(absent(`2026-05-${String(d).padStart(2, '0')}`))
+    }
+    const issues = checkConsecutiveAbsenceDays({
+      attendance, fiscalYearAttendance: [], payPeriod: period,
+    })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].severity).toBe(SEVERITY.BLOCKING)
+    expect(issues[0].childId).toBe('child-1')
+  })
+
+  it('billed care in the middle of the run breaks the streak', () => {
+    const attendance = [
+      absent('2026-05-04'), absent('2026-05-05'), absent('2026-05-06'),
+      absent('2026-05-07'), absent('2026-05-08'),
+      // Billed in the middle
+      attendanceRow({ child_id: 'child-1', date: '2026-05-09', check_in: '08:00', check_out: '16:00' }),
+      absent('2026-05-10'), absent('2026-05-11'), absent('2026-05-12'),
+      absent('2026-05-13'), absent('2026-05-14'),
+    ]
+    expect(checkConsecutiveAbsenceDays({ attendance, fiscalYearAttendance: [], payPeriod: period })).toEqual([])
+  })
+
+  it('considers fiscalYearAttendance for runs starting before the current period', () => {
+    // 6 days of absence in late April + 4 days in early May → 10 consecutive
+    const fy = []
+    for (let d = 28; d <= 30; d++) fy.push(absent(`2026-04-${String(d).padStart(2, '0')}`))
+    fy.push(absent('2026-05-01'), absent('2026-05-02'), absent('2026-05-03'))
+    const attendance = []
+    for (let d = 4; d <= 7; d++) attendance.push(absent(`2026-05-${String(d).padStart(2, '0')}`))
+    const issues = checkConsecutiveAbsenceDays({ attendance, fiscalYearAttendance: fy, payPeriod: period })
+    expect(issues).toHaveLength(1)
+  })
+
+  it('cap is 10 days per the LEP handbook', () => {
+    expect(CONSECUTIVE_ABSENCE_DAYS_CAP).toBe(10)
+  })
+})
+
+describe('Rule 6 — billing during school hours', () => {
+  const schoolKid = (overrides = {}) => ({
+    id: 'kid-1',
+    school_enrolled: true,
+    school_bell_schedule_json: {
+      monday:    { start: '08:00', end: '15:00' },
+      tuesday:   { start: '08:00', end: '15:00' },
+      wednesday: { start: '08:00', end: '15:00' },
+      thursday:  { start: '08:00', end: '15:00' },
+      friday:    { start: '08:00', end: '15:00' },
+    },
+    ...overrides,
+  })
+
+  it('rule does not apply when school_enrolled is false', () => {
+    const issues = checkBillingDuringSchoolHours({
+      attendance: [attendanceRow({ child_id: 'kid-1', date: '2026-05-04', check_in: '09:00', check_out: '14:00' })], // monday school hours
+      children: [schoolKid({ school_enrolled: false })],
+    })
+    expect(issues).toEqual([])
+  })
+
+  it('warns once per school-enrolled child with no schedule on file', () => {
+    const issues = checkBillingDuringSchoolHours({
+      attendance: [
+        attendanceRow({ child_id: 'kid-1', date: '2026-05-04', check_in: '09:00', check_out: '14:00' }),
+        attendanceRow({ id: 'a2', child_id: 'kid-1', date: '2026-05-05', check_in: '09:00', check_out: '14:00' }),
+      ],
+      children: [schoolKid({ school_bell_schedule_json: null })],
+    })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].severity).toBe(SEVERITY.WARNING)
+  })
+
+  it('blocks when a Monday segment overlaps the bell schedule (8-3)', () => {
+    const issues = checkBillingDuringSchoolHours({
+      attendance: [attendanceRow({ child_id: 'kid-1', date: '2026-05-04', check_in: '07:30', check_out: '12:00' })],
+      children: [schoolKid()],
+    })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].severity).toBe(SEVERITY.BLOCKING)
+    expect(issues[0].auditCitation).toMatch(/IPV/)
+  })
+
+  it('passes a strictly-before-school segment (7:00–7:59)', () => {
+    expect(checkBillingDuringSchoolHours({
+      attendance: [attendanceRow({ child_id: 'kid-1', date: '2026-05-04', check_in: '07:00', check_out: '07:59' })],
+      children: [schoolKid()],
+    })).toEqual([])
+  })
+
+  it('passes an after-school segment (15:00–18:00)', () => {
+    expect(checkBillingDuringSchoolHours({
+      attendance: [attendanceRow({ child_id: 'kid-1', date: '2026-05-04', check_in: '15:00', check_out: '18:00' })],
+      children: [schoolKid()],
+    })).toEqual([])
+  })
+
+  it('does not flag a Saturday segment (no school that day in fixture)', () => {
+    expect(checkBillingDuringSchoolHours({
+      attendance: [attendanceRow({ child_id: 'kid-1', date: '2026-05-02', check_in: '09:00', check_out: '14:00' })], // Saturday
+      children: [schoolKid()],
+    })).toEqual([])
+  })
+})
+
+describe('Rule 4 — concurrent children cap (LEP only)', () => {
+  const lepProfile = { provider_type: 'lep_unrelated' }
+  const licensedProfile = { provider_type: 'licensed_family' }
+
+  const block = (childId, date, check_in, check_out) => attendanceRow({
+    id: `${childId}-${date}-${check_in}`,
+    child_id: childId, date, check_in, check_out,
+  })
+
+  it('passes when no more than 6 children are concurrent', () => {
+    const issues = checkConcurrentChildrenCap({
+      attendance: [
+        block('c1', '2026-05-05', '08:00', '17:00'),
+        block('c2', '2026-05-05', '08:00', '17:00'),
+        block('c3', '2026-05-05', '08:00', '17:00'),
+        block('c4', '2026-05-05', '08:00', '17:00'),
+        block('c5', '2026-05-05', '08:00', '17:00'),
+        block('c6', '2026-05-05', '08:00', '17:00'),
+      ],
+      profile: lepProfile,
+    })
+    expect(issues).toEqual([])
+  })
+
+  it('blocks when 7 children are concurrent at any timestamp', () => {
+    const issues = checkConcurrentChildrenCap({
+      attendance: [
+        block('c1', '2026-05-05', '08:00', '17:00'),
+        block('c2', '2026-05-05', '08:00', '17:00'),
+        block('c3', '2026-05-05', '08:00', '17:00'),
+        block('c4', '2026-05-05', '08:00', '17:00'),
+        block('c5', '2026-05-05', '08:00', '17:00'),
+        block('c6', '2026-05-05', '08:00', '17:00'),
+        block('c7', '2026-05-05', '10:00', '14:00'),
+      ],
+      profile: lepProfile,
+    })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].severity).toBe(SEVERITY.BLOCKING)
+    expect(issues[0].auditCitation).toMatch(/IPV/)
+  })
+
+  it('does not double-count when one child checks out as another checks in (same instant)', () => {
+    // 6 children present 08:00-12:00; one leaves at 12:00 exactly; new child arrives 12:00.
+    // Peak should be 6, not 7.
+    const issues = checkConcurrentChildrenCap({
+      attendance: [
+        block('c1', '2026-05-05', '08:00', '12:00'),
+        block('c2', '2026-05-05', '08:00', '17:00'),
+        block('c3', '2026-05-05', '08:00', '17:00'),
+        block('c4', '2026-05-05', '08:00', '17:00'),
+        block('c5', '2026-05-05', '08:00', '17:00'),
+        block('c6', '2026-05-05', '08:00', '17:00'),
+        block('c7', '2026-05-05', '12:00', '17:00'),
+      ],
+      profile: lepProfile,
+    })
+    expect(issues).toEqual([])
+  })
+
+  it('returns [] for licensed providers regardless of concurrent count', () => {
+    const issues = checkConcurrentChildrenCap({
+      attendance: Array.from({ length: 12 }, (_, i) => block(`c${i}`, '2026-05-05', '08:00', '17:00')),
+      profile: licensedProfile,
+    })
+    expect(issues).toEqual([])
+  })
+
+  it('returns [] when profile is missing', () => {
+    expect(checkConcurrentChildrenCap({ attendance: [], profile: null })).toEqual([])
+  })
+
+  it('cap is 6 per the LEP handbook', () => {
+    expect(LEP_CONCURRENT_CHILDREN_CAP).toBe(6)
+  })
+})
+
 describe('runValidation — orchestration', () => {
   it('returns combined issues sorted blocking → warning → info', () => {
     const issues = runValidation({
       attendance: [attendanceRow({ child_id: 'no-source' })],
       fundingSources: [],
       payPeriod: payPeriod({ end_date: '2026-02-18' }),  // also triggers Rule 10
+      profile: { full_name: 'Venessa' },
       today: TODAY,
     })
     expect(issues.length).toBeGreaterThanOrEqual(2)
-    // All blocking issues first
+    // Severity-rank descending: blocking first.
+    const ranks = { blocking: 3, warning: 2, info: 1 }
     for (let i = 1; i < issues.length; i++) {
-      const a = issues[i - 1].severity
-      const b = issues[i].severity
-      expect(['blocking', 'warning', 'info'].indexOf(a))
-        .toBeLessThanOrEqual(['blocking', 'warning', 'info'].indexOf(b))
+      expect(ranks[issues[i - 1].severity]).toBeGreaterThanOrEqual(ranks[issues[i].severity])
     }
   })
 
-  it('returns [] when nothing is flagged across any of the 11 rules', () => {
+  it('clean-pass: only Rule 8 warning (parent-initials gap is a known schema limitation)', () => {
+    // Even a fully compliant provider gets one warning today, because
+    // the attendance schema has no parent-initials column. When that
+    // schema gap closes (future PR), this test changes.
     const issues = runValidation({
       attendance: [attendanceRow({ child_id: 'child-1', check_in: '07:00', check_out: '17:00' })],
       children: [{ id: 'child-1', school_enrolled: false }],
@@ -303,25 +636,16 @@ describe('runValidation — orchestration', () => {
       fiscalYearAttendance: [],
       today: TODAY,
     })
-    expect(issues).toEqual([])
+    expect(issues).toHaveLength(1)
+    expect(issues[0].ruleId).toBe(RULE.MISSING_PARENT_INITIALS)
+    expect(issues[0].severity).toBe(SEVERITY.WARNING)
   })
 
   it('does not crash when called with no arguments', () => {
     expect(() => runValidation()).not.toThrow()
-    expect(runValidation()).toEqual([])
-  })
-
-  it('stub rules (2, 3, 4, 6, 7, 8, 9) return empty without throwing', () => {
-    // Defensive check that the placeholder stubs don't accidentally
-    // emit issues. When each stub is filled in, the existing tests in
-    // this file should still pass — the stubs are opt-in.
-    const issues = runValidation({
-      attendance: [],
-      fundingSources: [],
-      payPeriod: payPeriod(),
-      profile: {},
-      today: TODAY,
-    })
-    expect(issues).toEqual([])
+    // With no args every rule short-circuits except Rule 9 (no profile = warning).
+    const issues = runValidation()
+    expect(issues).toHaveLength(1)
+    expect(issues[0].ruleId).toBe(RULE.MISSING_PROVIDER_NAME)
   })
 })

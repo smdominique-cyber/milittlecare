@@ -14,20 +14,7 @@
 // typed CDC columns preferred and a `details.X` JSON fallback for
 // pre-PR #8.5b legacy rows.
 //
-// Status of rule implementations (this commit):
-//   ✓ Rule 1  — 2,016-hour pay-period cap                 (implemented + tested)
-//   ✗ Rule 2  — 360-hour fiscal-year absence cap          (stub — returns [])
-//   ✗ Rule 3  — 10-consecutive-absence-days cap           (stub — returns [])
-//   ✗ Rule 4  — 6-children-concurrent cap (LEP)           (stub — returns [])
-//   ✓ Rule 5  — billing outside authorization dates       (implemented + tested)
-//   ✗ Rule 6  — billing during school hours               (stub — returns [])
-//   ✗ Rule 7  — overnight segment not split at midnight   (stub — returns [])
-//   ✗ Rule 8  — missing parent initials                   (stub — returns [])
-//   ✗ Rule 9  — missing provider name on T&A record       (stub — returns [])
-//   ✓ Rule 10 — 90-day submission window past expiry      (implemented + tested)
-//   ✓ Rule 11 — billing for child without active CDC      (implemented + tested)
-// Stubs are wired into runValidation and return empty; filling them in
-// is a same-PR follow-up commit.
+// All 11 rules implemented (this commit completes them all).
 
 // -----------------------------------------------------------------------------
 // Constants
@@ -314,18 +301,385 @@ export function checkBillingWithoutActiveCdc({ attendance, fundingSources, payPe
 }
 
 // -----------------------------------------------------------------------------
-// Stubs for Rules 2, 3, 4, 6, 7, 8, 9 — return [] until implemented.
-// Each is wired into runValidation so the top-level call surface is
-// stable across the remaining rule implementations.
+// Rule 9 — missing provider name on T&A record (LEP Handbook p.15, Warning)
 // -----------------------------------------------------------------------------
 
-export function checkFiscalYearAbsenceCap(/* { fiscalYearAttendance, today } */) { return [] }
-export function checkConsecutiveAbsenceDays(/* { attendance } */) { return [] }
-export function checkConcurrentChildrenCap(/* { attendance, profile } */) { return [] }
-export function checkBillingDuringSchoolHours(/* { attendance, children } */) { return [] }
-export function checkOvernightNotSplitAtMidnight(/* { attendance } */) { return [] }
-export function checkMissingParentInitials(/* { attendance } */) { return [] }
-export function checkMissingProviderName(/* { profile } */) { return [] }
+/**
+ * Warning if the provider's profile has no full_name. The MiLEAP T&A
+ * Record requires provider identification at the top; a blank name on
+ * the printed form is an audit defect, not a billing block.
+ */
+export function checkMissingProviderName({ profile }) {
+  if (profile && profile.full_name && String(profile.full_name).trim()) return []
+  return [makeIssue({
+    ruleId: RULE.MISSING_PROVIDER_NAME,
+    severity: SEVERITY.WARNING,
+    message: 'Provider name is missing from the profile. The MiLEAP T&A Record requires it; fill it in under Settings → Business Info before exporting.',
+    auditCitation: 'CDC LEP Handbook p.15',
+  })]
+}
+
+// -----------------------------------------------------------------------------
+// Rule 7 — overnight segment not split at midnight (I-Billing guide Step 3,
+// Blocking)
+// -----------------------------------------------------------------------------
+
+/**
+ * An attendance segment with check_out time earlier than check_in time
+ * (e.g. 21:00 → 05:00) is an overnight span that the I-Billing entry
+ * screen cannot accept as-is — it must be split into a same-day half
+ * and a next-day half. We flag every such segment as blocking with a
+ * proposed-fix payload Screen 3 can apply automatically.
+ */
+export function checkOvernightNotSplitAtMidnight({ attendance }) {
+  const safe = Array.isArray(attendance) ? attendance : []
+  const issues = []
+  for (const rec of safe) {
+    if (!rec || rec.status !== 'present') continue
+    const inH = parseTimeToHours(rec.check_in)
+    const outH = parseTimeToHours(rec.check_out)
+    if (inH == null || outH == null) continue
+    if (outH < inH) {
+      issues.push(makeIssue({
+        ruleId: RULE.OVERNIGHT_NOT_SPLIT_AT_MIDNIGHT,
+        severity: SEVERITY.BLOCKING,
+        childId: rec.child_id,
+        date: rec.date,
+        segmentIndex: rec.segment_index ?? 0,
+        message: `Overnight span ${rec.check_in}–${rec.check_out} crosses midnight; split into ${rec.check_in}–23:59 (${rec.date}) and 00:00–${rec.check_out} (next day) before exporting.`,
+        proposedFix: {
+          description: 'Auto-split this segment at midnight',
+          action: { kind: 'split_at_midnight', attendanceId: rec.id },
+        },
+        auditCitation: 'MiLEAP I-Billing Step-by-Step instructions, Step 3',
+      }))
+    }
+  }
+  return issues
+}
+
+// -----------------------------------------------------------------------------
+// Rule 8 — missing parent initials (LEP Handbook p.15, Warning)
+// -----------------------------------------------------------------------------
+
+/**
+ * The official T&A Record requires the parent to initial each day with
+ * billed hours. The `attendance` table as captured in PR #8.5a has no
+ * `parent_initials` column (verified by app-code grep); the current
+ * `checked_in_by` / `checked_out_by` text fields record provider
+ * actions, not parent sign-off. Until the schema captures parent
+ * initials, this rule downgrades to a single provider-level warning
+ * making the gap visible without flooding the UI with per-day issues.
+ */
+export function checkMissingParentInitials({ attendance }) {
+  const safe = Array.isArray(attendance) ? attendance : []
+  const hasBilledHours = safe.some(r => r && r.status === 'present' && segmentHours(r) > 0)
+  if (!hasBilledHours) return []
+  return [makeIssue({
+    ruleId: RULE.MISSING_PARENT_INITIALS,
+    severity: SEVERITY.WARNING,
+    message: 'Parent initials are not captured in the system. The MiLEAP T&A Record requires the parent to initial each billed day; have the parent sign the exported T&A PDF by hand before keeping it on file.',
+    auditCitation: 'CDC LEP Handbook p.15',
+  })]
+}
+
+// -----------------------------------------------------------------------------
+// Rule 2 — 360-hour fiscal-year absence cap (LEP Handbook p.16,
+// Warning at 80%, Blocking at 100%)
+// -----------------------------------------------------------------------------
+
+/**
+ * Sum absence-day equivalents since Oct 1 of the current fiscal year.
+ * Each absence day counts as 8 hours — a coarse approximation pending
+ * the spec's "historical schedule average" feature in Screen 3, which
+ * would derive a child-specific average from prior pay periods. The
+ * 8-hour figure is conservative for most LEP children (the handbook's
+ * 360-hour cap is roughly 45 × 8h days).
+ *
+ * One provider-level issue: warning at 80% of cap; blocking at 100%.
+ */
+export function checkFiscalYearAbsenceCap({ fiscalYearAttendance, today }) {
+  const safe = Array.isArray(fiscalYearAttendance) ? fiscalYearAttendance : []
+  if (safe.length === 0) return []
+
+  // Only count absences since fiscal-year start.
+  const fyStart = fiscalYearStartYMD(today || todayYMD())
+  const absentRows = safe.filter(r => r && r.status === 'absent' && r.date >= fyStart)
+  // Dedupe by (child_id, date) — absence is a per-day concept,
+  // segment_index doesn't multiply the hour count.
+  const seen = new Set()
+  let absenceDays = 0
+  for (const r of absentRows) {
+    const key = `${r.child_id}|${r.date}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    absenceDays += 1
+  }
+  const absenceHours = absenceDays * 8
+
+  if (absenceHours >= FISCAL_YEAR_ABSENCE_HOURS_CAP) {
+    return [makeIssue({
+      ruleId: RULE.FISCAL_YEAR_ABSENCE_CAP,
+      severity: SEVERITY.BLOCKING,
+      message: `Fiscal-year absence hours (${absenceHours}, est. from ${absenceDays} days × 8h) have reached the ${FISCAL_YEAR_ABSENCE_HOURS_CAP}-hour cap. No further absence may be billed this fiscal year.`,
+      auditCitation: 'CDC LEP Handbook p.16',
+    })]
+  }
+  const threshold = FISCAL_YEAR_ABSENCE_HOURS_CAP * FISCAL_YEAR_ABSENCE_WARNING_THRESHOLD
+  if (absenceHours >= threshold) {
+    return [makeIssue({
+      ruleId: RULE.FISCAL_YEAR_ABSENCE_CAP,
+      severity: SEVERITY.WARNING,
+      message: `Fiscal-year absence hours (${absenceHours}, est. from ${absenceDays} days × 8h) are at ${Math.round((absenceHours / FISCAL_YEAR_ABSENCE_HOURS_CAP) * 100)}% of the ${FISCAL_YEAR_ABSENCE_HOURS_CAP}-hour cap. Approaching the limit.`,
+      auditCitation: 'CDC LEP Handbook p.16',
+    })]
+  }
+  return []
+}
+
+/** Oct 1 of the fiscal year that `today` falls in. */
+function fiscalYearStartYMD(today) {
+  const [y, m, d] = String(today).split('-').map(Number)
+  const fy = (m > FISCAL_YEAR_START_MONTH || (m === FISCAL_YEAR_START_MONTH && d >= FISCAL_YEAR_START_DAY))
+    ? y
+    : y - 1
+  return `${fy}-${String(FISCAL_YEAR_START_MONTH).padStart(2, '0')}-${String(FISCAL_YEAR_START_DAY).padStart(2, '0')}`
+}
+
+// -----------------------------------------------------------------------------
+// Rule 3 — 10 consecutive absence days with no care billed (LEP Handbook
+// p.16, Blocking)
+// -----------------------------------------------------------------------------
+
+/**
+ * For each child, walk the union of fiscalYearAttendance + the current
+ * period's attendance day-by-day. Find the longest run of consecutive
+ * days on which the child has no "billed care" (i.e., no present
+ * segment with hours > 0). If any run is ≥ CONSECUTIVE_ABSENCE_DAYS_CAP
+ * AND the run overlaps the current pay period, emit a blocking issue.
+ */
+export function checkConsecutiveAbsenceDays({ attendance, fiscalYearAttendance, payPeriod }) {
+  const period = payPeriod || {}
+  if (!period.start_date || !period.end_date) return []
+
+  const all = [
+    ...(Array.isArray(attendance) ? attendance : []),
+    ...(Array.isArray(fiscalYearAttendance) ? fiscalYearAttendance : []),
+  ]
+  if (all.length === 0) return []
+
+  // Group billed-care days per child.
+  const billedByChild = new Map()
+  const absentByChild = new Map()
+  for (const r of all) {
+    if (!r || !r.child_id || !r.date) continue
+    const billed = r.status === 'present' && segmentHours(r) > 0
+    const absent = r.status === 'absent'
+    if (billed) {
+      const set = billedByChild.get(r.child_id) || new Set()
+      set.add(r.date)
+      billedByChild.set(r.child_id, set)
+    }
+    if (absent) {
+      const set = absentByChild.get(r.child_id) || new Set()
+      set.add(r.date)
+      absentByChild.set(r.child_id, set)
+    }
+  }
+
+  const issues = []
+  const childIds = new Set([
+    ...billedByChild.keys(),
+    ...absentByChild.keys(),
+  ])
+
+  for (const childId of childIds) {
+    const billedDays = billedByChild.get(childId) || new Set()
+    const absentDays = absentByChild.get(childId) || new Set()
+    // Walk days in absentDays in sorted order, group into consecutive runs
+    // where each day in the run has no billed care.
+    const sortedAbsent = [...absentDays].sort()
+    let runStart = null
+    let runEnd = null
+    for (const day of sortedAbsent) {
+      if (billedDays.has(day)) continue
+      if (runEnd && daysBetweenYMD(runEnd, day) === 1) {
+        runEnd = day
+      } else {
+        // Close prior run if it qualifies
+        if (runStart && runEnd) {
+          maybeFlagRun(runStart, runEnd, childId, period, issues)
+        }
+        runStart = day
+        runEnd = day
+      }
+    }
+    if (runStart && runEnd) {
+      maybeFlagRun(runStart, runEnd, childId, period, issues)
+    }
+  }
+  return issues
+}
+
+function maybeFlagRun(runStart, runEnd, childId, period, issues) {
+  const lengthDays = daysBetweenYMD(runStart, runEnd) + 1
+  if (lengthDays < CONSECUTIVE_ABSENCE_DAYS_CAP) return
+  // Only flag if the run overlaps the current pay period.
+  const overlap = !(runEnd < period.start_date || runStart > period.end_date)
+  if (!overlap) return
+  issues.push(makeIssue({
+    ruleId: RULE.CONSECUTIVE_ABSENCE_DAYS,
+    severity: SEVERITY.BLOCKING,
+    childId,
+    date: runStart,
+    message: `Child has ${lengthDays} consecutive absence days with no billed care (${runStart} through ${runEnd}). Cannot exceed ${CONSECUTIVE_ABSENCE_DAYS_CAP} consecutive days without break — billing for this child must pause.`,
+    auditCitation: 'CDC LEP Handbook p.16',
+  }))
+}
+
+// -----------------------------------------------------------------------------
+// Rule 6 — billing during school hours (LEP Handbook p.16, Blocking + IPV)
+// -----------------------------------------------------------------------------
+
+const DAY_OF_WEEK_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+
+/**
+ * For each attendance segment of a school-enrolled child, check whether
+ * the segment time-range overlaps the bell schedule for that day of
+ * week. Behaviour per spec § Rule 6 caveat:
+ *   - school_enrolled !== true → rule does not apply
+ *   - school_enrolled === true + no bell schedule → warning only
+ *   - school_enrolled === true + bell schedule present → blocking on overlap
+ */
+export function checkBillingDuringSchoolHours({ attendance, children }) {
+  const safeRecs = Array.isArray(attendance) ? attendance : []
+  const safeKids = Array.isArray(children) ? children : []
+  const childById = new Map(safeKids.map(c => [c.id, c]))
+
+  const issues = []
+  const seenSchedulelessKids = new Set()  // for the per-child schedule-missing warning
+
+  for (const rec of safeRecs) {
+    if (!rec || rec.status !== 'present') continue
+    const child = childById.get(rec.child_id)
+    if (!child || child.school_enrolled !== true) continue
+
+    const schedule = child.school_bell_schedule_json
+    if (!schedule || typeof schedule !== 'object') {
+      if (!seenSchedulelessKids.has(child.id)) {
+        seenSchedulelessKids.add(child.id)
+        issues.push(makeIssue({
+          ruleId: RULE.BILLING_DURING_SCHOOL_HOURS,
+          severity: SEVERITY.WARNING,
+          childId: child.id,
+          message: 'Child marked school-age but no school schedule on file. Cannot validate the school-hours billing rule. Add the bell schedule to the child profile.',
+          auditCitation: 'CDC LEP Handbook p.16',
+        }))
+      }
+      continue
+    }
+
+    // Day-of-week lookup.
+    const [yy, mm, dd] = String(rec.date).split('-').map(Number)
+    const dow = new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay()
+    const daySched = schedule[DAY_OF_WEEK_KEYS[dow]]
+    if (!daySched || !daySched.start || !daySched.end) continue  // no school that day
+
+    const segStart = parseTimeToHours(rec.check_in)
+    const segEnd   = parseTimeToHours(rec.check_out)
+    const schStart = parseTimeToHours(daySched.start)
+    const schEnd   = parseTimeToHours(daySched.end)
+    if (segStart == null || segEnd == null || schStart == null || schEnd == null) continue
+    if (segEnd <= segStart) continue  // Rule 7 handles overnight separately
+
+    // Half-open overlap test: [segStart, segEnd) ∩ [schStart, schEnd) ≠ ∅
+    const overlap = segStart < schEnd && schStart < segEnd
+    if (overlap) {
+      issues.push(makeIssue({
+        ruleId: RULE.BILLING_DURING_SCHOOL_HOURS,
+        severity: SEVERITY.BLOCKING,
+        childId: child.id,
+        date: rec.date,
+        segmentIndex: rec.segment_index ?? 0,
+        message: `Attendance ${rec.check_in}–${rec.check_out} overlaps school hours ${daySched.start}–${daySched.end}. Trim to before/after-school portions only.`,
+        proposedFix: {
+          description: `Trim out the school-hours portion (${daySched.start}–${daySched.end})`,
+          action: { kind: 'trim_school_hours', attendanceId: rec.id, schoolStart: daySched.start, schoolEnd: daySched.end },
+        },
+        auditCitation: 'CDC LEP Handbook p.16 (IPV)',
+      }))
+    }
+  }
+  return issues
+}
+
+// -----------------------------------------------------------------------------
+// Rule 4 — six children concurrent at any timestamp (LEP only;
+// LEP Handbook p.7 / p.16, Blocking + IPV)
+// -----------------------------------------------------------------------------
+
+const LEP_PROVIDER_TYPES = new Set(['lep_related', 'lep_unrelated'])
+
+/**
+ * Sweep-line over (start, end) timestamps from each present attendance
+ * segment. If the running concurrent-children count ever exceeds
+ * LEP_CONCURRENT_CHILDREN_CAP, emit a single blocking issue tagged
+ * with the first date the threshold was crossed.
+ *
+ * Provider-type gate: licensed providers see no issue here (their own
+ * concurrent-children rules differ — the spec defers them).
+ */
+export function checkConcurrentChildrenCap({ attendance, profile }) {
+  const providerType = profile && profile.provider_type
+  if (!LEP_PROVIDER_TYPES.has(providerType)) return []
+
+  const safe = Array.isArray(attendance) ? attendance : []
+  if (safe.length === 0) return []
+
+  // Build (timestampNumeric, delta, childId, date) events.
+  const events = []
+  for (const r of safe) {
+    if (!r || r.status !== 'present') continue
+    const startH = parseTimeToHours(r.check_in)
+    const endH = parseTimeToHours(r.check_out)
+    if (startH == null || endH == null) continue
+    if (endH <= startH) continue  // Rule 7's territory
+    // Encode (date as days-since-epoch + time-of-day) into one number so
+    // events from different days sort correctly.
+    const [yy, mm, dd] = String(r.date).split('-').map(Number)
+    const dayMillis = Date.UTC(yy, mm - 1, dd)
+    const dayHours = dayMillis / 3600000
+    events.push({ t: dayHours + startH, delta: +1, childId: r.child_id, date: r.date, kind: 'in' })
+    events.push({ t: dayHours + endH,   delta: -1, childId: r.child_id, date: r.date, kind: 'out' })
+  }
+
+  // Sort by timestamp; departures (-1) sort before arrivals (+1) at the
+  // same instant — when one child checks out at exactly the moment
+  // another checks in, they don't both count as concurrent.
+  events.sort((a, b) => {
+    if (a.t !== b.t) return a.t - b.t
+    return a.delta - b.delta
+  })
+
+  let concurrent = 0
+  let peak = 0
+  let peakEvent = null
+  for (const e of events) {
+    concurrent += e.delta
+    if (concurrent > peak) {
+      peak = concurrent
+      peakEvent = e
+    }
+  }
+  if (peak <= LEP_CONCURRENT_CHILDREN_CAP) return []
+  return [makeIssue({
+    ruleId: RULE.CONCURRENT_CHILDREN_CAP,
+    severity: SEVERITY.BLOCKING,
+    date: peakEvent ? peakEvent.date : null,
+    message: `Peak of ${peak} children concurrent — exceeds the LEP provider cap of ${LEP_CONCURRENT_CHILDREN_CAP}. Adjust the schedule or reduce billed segments so no more than ${LEP_CONCURRENT_CHILDREN_CAP} children are present at any one time.`,
+    auditCitation: 'CDC LEP Handbook p.7 / p.16 (IPV)',
+  })]
+}
 
 // -----------------------------------------------------------------------------
 // Top-level entry point
