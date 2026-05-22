@@ -731,3 +731,29 @@ inventory continue to exist as undocumented surface area. A standalone
 schema-audit PR that captures every production-only table — even just
 column lists committed to a single inventory doc — would prevent the
 next collision before it happens.
+
+## Acknowledgment cron disabled pending Vercel plan upgrade (2026-05-22)
+
+PR #12's `api/cron-send-acknowledgment-digest.js` is committed to the codebase but its schedule entry has been **removed from `vercel.json`'s `crons` array** because the project is on **Vercel Hobby** (2-cron limit) and both slots are already in use:
+
+- `/api/cron-generate-autopay-invoices` — `0 3 * * 1` (Mondays 03:00)
+- `/api/cron-charge-autopay` — `0 14 * * 1` (Mondays 14:00)
+
+The handler code, helpers (`acknowledgmentDigest.js`), migration 020, and all PR #12 UI surfaces remain live. Only the **automated digest cadence** is dormant — providers and parents can still see and use the acknowledgment workflow via `/acknowledgments` and `/parent/acknowledge`; the parent dashboard banner still surfaces unacknowledged days. What's missing is the proactive email reminder.
+
+`vercel.json` is strict JSON (no comment support), so the entry was removed rather than commented out. To re-enable, add this back to the `crons` array:
+
+```json
+{
+  "path": "/api/cron-send-acknowledgment-digest",
+  "schedule": "0 * * * *"
+}
+```
+
+Re-enable when one of:
+
+- Vercel plan is upgraded to Pro (or whichever tier raises the cron limit).
+- An existing cron is consolidated or removed (e.g. fold the two autopay crons into one dispatcher).
+- The acknowledgment cron is rewritten to run via a different trigger (manual "send reminders" button, Supabase `pg_cron`, or an external scheduler hitting the endpoint).
+
+Note for whoever re-enables: the handler is hourly (`0 * * * *`) by design — it checks each provider's `acknowledgment_email_send_day`/`_send_hour` against the current local time in their TZ and only sends in the matching window. A coarser schedule would miss providers whose chosen hour doesn't line up with the cron tick.

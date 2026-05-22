@@ -48,10 +48,6 @@
     {
       "path": "/api/cron-charge-autopay",
       "schedule": "0 14 * * 1"
-    },
-    {
-      "path": "/api/cron-send-acknowledgment-digest",
-      "schedule": "0 * * * *"
     }
   ]
 }
