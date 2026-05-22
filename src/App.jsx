@@ -27,6 +27,7 @@ import StaffPage from '@/pages/StaffPage'
 import MiRegistryPage from '@/pages/MiRegistryPage'
 import StaffTrainingPage from '@/pages/StaffTrainingPage'
 import CdcPayPeriodsPage from '@/pages/CdcPayPeriodsPage'
+import IBillingPage from '@/pages/IBillingPage'
 import OnboardingPage from '@/pages/OnboardingPage'
 import ContactPage from '@/pages/ContactPage'
 import PrivacyPage from '@/pages/PrivacyPage'
@@ -118,6 +119,7 @@ export default function App() {
                   <Route path="miregistry" element={<MiRegistryPage />} />
                   <Route path="staff-training" element={<StaffTrainingPage />} />
                   <Route path="cdc-pay-periods" element={<CdcPayPeriodsPage />} />
+                  <Route path="i-billing" element={<IBillingPage />} />
                   <Route path="contact" element={<ContactPage />} />
                   <Route path="admin" element={<AdminPage />} />
                 </Route>
