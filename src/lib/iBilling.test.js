@@ -162,6 +162,30 @@ describe('Rule 5 — billing outside authorization', () => {
     expect(issues).toEqual([])
   })
 
+  // Bug 5 (2026-05-21): a present record with no billed hours (e.g. checked
+  // in but not yet checked out) must not fire the blocking issue.
+  it('present records with zero billed hours do not generate out-of-window issues', () => {
+    const noCheckout = checkBillingOutsideAuthorization({
+      attendance: [attendanceRow({ date: '2026-03-31', check_in: '08:00', check_out: null })],
+      fundingSources: [cdcSource({ authorization_start: '2026-04-01' })],
+    })
+    expect(noCheckout).toEqual([])
+
+    const noTimes = checkBillingOutsideAuthorization({
+      attendance: [attendanceRow({ date: '2026-03-31', check_in: null, check_out: null })],
+      fundingSources: [cdcSource({ authorization_start: '2026-04-01' })],
+    })
+    expect(noTimes).toEqual([])
+
+    // Sanity: the SAME out-of-window day WITH real hours still fires, so the
+    // guard only suppresses zero-hour records.
+    const withHours = checkBillingOutsideAuthorization({
+      attendance: [attendanceRow({ date: '2026-03-31', check_in: '08:00', check_out: '16:00' })],
+      fundingSources: [cdcSource({ authorization_start: '2026-04-01' })],
+    })
+    expect(withHours).toHaveLength(1)
+  })
+
   it('passes the segment when ANY funding source covers it (multi-auth period coverage)', () => {
     const issues = checkBillingOutsideAuthorization({
       attendance: [attendanceRow({ date: '2026-05-05' })],

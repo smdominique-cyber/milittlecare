@@ -201,6 +201,12 @@ export function checkBillingOutsideAuthorization({ attendance, fundingSources })
   const issues = []
   for (const rec of safeRecs) {
     if (!rec || rec.status !== 'present') continue
+    // Only billed segments can be "billed outside authorization." A
+    // present record with no/zero hours (e.g. checked in but not yet
+    // checked out) isn't being billed, so it must not fire this blocking
+    // issue. Bug 5 (2026-05-21): Audrey showed an "Outside CDC
+    // authorization" issue on a day with no hours.
+    if (segmentHours(rec) <= 0) continue
     const cdcList = cdcByChild.get(rec.child_id)
     if (!cdcList || cdcList.length === 0) continue  // Rule 11's territory
 
