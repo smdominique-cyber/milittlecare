@@ -94,24 +94,39 @@ export function buildOverrideIndex(overrides) {
  * Props:
  *   issues       — current validation issues (already filtered for
  *                  active overrides by the orchestrator).
+ *   children     — children roster, for resolving childId → display name.
  *   overridden   — issues that match an active override row.
  *   onApplyFix   — async (issue) => void, supabase mutation in caller.
  *   onOverride   — async (issue, reason) => void
  *   onClose      — () => void
  *   initialIssue — optional; scrolls to and highlights this issue.
+ *   filterChildName — optional; when the modal was opened from a child's
+ *                  issue badge, the heading names that child.
  */
 export default function IssueResolutionModal({
   issues,
+  children,
   overridden,
   onApplyFix,
   onOverride,
   onClose,
   initialIssue,
+  filterChildName,
 }) {
   const [overrideTarget, setOverrideTarget] = useState(null)
   const [overrideReason, setOverrideReason] = useState('')
   const [busyKey, setBusyKey] = useState(null)
   const [err, setErr] = useState(null)
+
+  // childId → "First Last" for per-card labelling.
+  const childNameById = useMemo(() => {
+    const m = new Map()
+    for (const c of Array.isArray(children) ? children : []) {
+      if (!c || !c.id) continue
+      m.set(c.id, `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id)
+    }
+    return m
+  }, [children])
 
   // Sort blocking → warning → info; preserve insertion order within
   // each tier so consecutive renders don't reshuffle.
@@ -152,7 +167,7 @@ export default function IssueResolutionModal({
       <div style={modalStyle}>
         <header style={modalHeaderStyle}>
           <h2 id="iss-modal-title" style={{ margin: 0, fontSize: 18 }}>
-            Resolve validation issues
+            {filterChildName ? `Resolve issues — ${filterChildName}` : 'Resolve validation issues'}
           </h2>
           <button type="button" onClick={onClose} aria-label="Close" style={iconBtnStyle}>
             <X size={18} />
@@ -192,6 +207,9 @@ export default function IssueResolutionModal({
                       <strong style={{ fontSize: 14 }}>
                         {RULE_LABEL[iss.ruleId] || iss.ruleId}
                       </strong>
+                      {iss.childId && childNameById.get(iss.childId) && (
+                        <span style={childChipStyle}>{childNameById.get(iss.childId)}</span>
+                      )}
                       {iss.date && (
                         <span style={{ fontSize: 12, color: '#6b7280' }}>· {iss.date}</span>
                       )}
@@ -352,4 +370,9 @@ const ghostBtn = {
 
 const overriddenSectionStyle = {
   marginTop: 16, paddingTop: 12, borderTop: '1px dashed #e5e7eb',
+}
+
+const childChipStyle = {
+  fontSize: 12, fontWeight: 600, color: '#0f172a',
+  background: '#eef2ff', padding: '1px 8px', borderRadius: 10,
 }

@@ -474,6 +474,7 @@ export default function IBillingPage() {
               {issueModalOpen && (
                 <IssueResolutionModal
                   issues={issues}
+                  children={allChildren}
                   overridden={overriddenIssues.map(i => ({
                     rule_id: i.ruleId,
                     override_reason: overrideReasonFor(i, overrides),
