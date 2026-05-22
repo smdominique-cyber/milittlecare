@@ -132,3 +132,33 @@ Spec calls `ended` a "deprecated alias for `expired` or `terminated`" but doesn'
 ### Date math: `Date.UTC`, not naive subtraction
 
 The spec's pseudocode uses `new Date(authorization_end) - new Date()` which is DST-sensitive — twice a year the calculation produces an off-by-one. The helper here goes through `Date.UTC(y, m-1, d)` instead, matching the convention already established in `src/lib/miregistry.js`, `src/lib/cdcPayPeriods.js`, and `src/lib/staffTraining.js`. The deviation from spec pseudocode is intentional and documented in the function's JSDoc.
+
+## Form rewire shipped 2026-05-21 (+ one-time backfill for post-017 rows)
+
+The "form rewire" item queued in this doc was not shipped with the original PR #8.5b. It surfaced during PR #9 production verification on 2026-05-21: a CDC funding source added for **Aleshia Drambau** after migration 017 ran landed with `authorization_start = NULL` / `authorization_end = NULL` on the typed columns while the dates lived only in `details` JSON. PR #9's grid, pay-period picker, and validation engine all read typed-columns-first, so the new row was invisible to them.
+
+**Fix (commit on `fix/pr-9-review-grid-bugs`):** `src/components/funding/FundingSourceForm.jsx` → `buildPayload()` now dual-writes the typed CDC columns alongside the legacy `details` JSON whenever `type === 'cdc_scholarship'`. The 10 detail keys map 1:1 to migration 017's typed columns (`case_number`, `dhs_198_received_date`, `authorization_start`, `authorization_end`, `approved_hours_per_period`, `family_contribution_amount`, `billing_basis`, `shared_with_other_provider`, `shared_provider_notes`, `provider_pin_required`). Empty strings coerce to NULL via `strOrNull` (matching the migration's NULLIF backfill); numerics via `numOrNull`; the two flags to booleans. Both insert and update paths get the typed columns because they share the `base` payload.
+
+### One-time backfill — run via Supabase dashboard
+
+Migration 017 already backfilled the rows that existed when it ran. Only rows created **after** 017 by the un-rewired form (Aleshia's, and any others) have NULL typed columns with populated `details`. Run this once to repair them. The `WHERE` clause targets exactly those rows and is a no-op on already-correct rows, so it is safe to run more than once:
+
+```sql
+UPDATE public.funding_sources
+SET
+  authorization_start        = (details ->> 'authorization_start')::date,
+  authorization_end          = (details ->> 'authorization_end')::date,
+  case_number                = NULLIF(details ->> 'case_number', ''),
+  approved_hours_per_period  = NULLIF(details ->> 'approved_hours_per_period', '')::numeric,
+  family_contribution_amount = NULLIF(details ->> 'family_contribution_amount', '')::numeric,
+  dhs_198_received_date      = (details ->> 'dhs_198_received_date')::date,
+  billing_basis              = NULLIF(details ->> 'billing_basis', ''),
+  shared_with_other_provider = (details ->> 'shared_with_other_provider')::boolean,
+  shared_provider_notes      = NULLIF(details ->> 'shared_provider_notes', ''),
+  provider_pin_required      = (details ->> 'provider_pin_required')::boolean
+WHERE type = 'cdc_scholarship'
+  AND authorization_start IS NULL
+  AND details ->> 'authorization_start' IS NOT NULL;
+```
+
+After running, verify Aleshia's row shows non-NULL `authorization_start` / `authorization_end` on the typed columns. Per CLAUDE.md, save the dashboard query result as evidence before marking this done in the runbook.

@@ -717,6 +717,27 @@ function buildPayload({ type, childId, familyId, form, userId, existingSource })
     }
   }
 
+  // CDC dual-write (PR #8.5b form-rewire, shipped 2026-05-21). The typed
+  // columns (migration 017) are the column-of-record; the details JSON is
+  // retained as a legacy fallback during the transition window. Every
+  // detail key maps 1:1 to a typed column. Without this, new CDC rows land
+  // with NULL typed columns and PR #9's grid/picker/validation — which read
+  // typed-columns-first — can't see them. Both insert and update get this
+  // because `base` is the shared payload for both paths below.
+  if (type === 'cdc_scholarship') {
+    const d = form.details || {}
+    base.case_number                = strOrNull(d.case_number)
+    base.dhs_198_received_date      = strOrNull(d.dhs_198_received_date)
+    base.authorization_start        = strOrNull(d.authorization_start)
+    base.authorization_end          = strOrNull(d.authorization_end)
+    base.approved_hours_per_period  = numOrNull(d.approved_hours_per_period)
+    base.family_contribution_amount = numOrNull(d.family_contribution_amount)
+    base.billing_basis              = strOrNull(d.billing_basis)
+    base.shared_with_other_provider = !!d.shared_with_other_provider
+    base.shared_provider_notes      = strOrNull(d.shared_provider_notes)
+    base.provider_pin_required      = !!d.provider_pin_required
+  }
+
   if (existingSource) return base
 
   const payload = { ...base, user_id: userId }
@@ -732,6 +753,14 @@ function numOrNull(v) {
   if (v === '' || v === null || v === undefined) return null
   const n = Number(v)
   return Number.isFinite(n) ? n : null
+}
+
+// Empty string / null / undefined → null, so empty typed columns are
+// semantically NULL rather than '' (matches migration 017's NULLIF backfill).
+function strOrNull(v) {
+  if (v === '' || v === null || v === undefined) return null
+  const s = String(v).trim()
+  return s === '' ? null : s
 }
 
 // -----------------------------------------------------------------------------
