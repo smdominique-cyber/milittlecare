@@ -24,6 +24,7 @@ import SubscriptionPage from '@/pages/SubscriptionPage'
 import HowMoneyWorksPage from '@/pages/HowMoneyWorksPage'
 import BusinessInfoPage from '@/pages/BusinessInfoPage'
 import StaffPage from '@/pages/StaffPage'
+import ProviderAcknowledgmentsPage from '@/pages/ProviderAcknowledgmentsPage'
 import MiRegistryPage from '@/pages/MiRegistryPage'
 import StaffTrainingPage from '@/pages/StaffTrainingPage'
 import CdcPayPeriodsPage from '@/pages/CdcPayPeriodsPage'
@@ -38,6 +39,7 @@ import ParentDashboardPage from '@/pages/ParentDashboardPage'
 import ParentMyFamilyPage from '@/pages/ParentMyFamilyPage'
 import ParentMessagesPage from '@/pages/ParentMessagesPage'
 import ParentMessageThreadPage from '@/pages/ParentMessageThreadPage'
+import ParentAcknowledgePage from '@/pages/ParentAcknowledgePage'
 import MessagesPage from '@/pages/MessagesPage'
 import MessageThreadPage from '@/pages/MessageThreadPage'
 import {
@@ -70,6 +72,7 @@ export default function App() {
                 <Route path="/parent/family" element={<ParentMyFamilyPage />} />
                 <Route path="/parent/messages" element={<ParentMessagesPage />} />
                 <Route path="/parent/messages/:childId" element={<ParentMessageThreadPage />} />
+                <Route path="/parent/acknowledge" element={<ParentAcknowledgePage />} />
 
                 {/* Staff invitation accept */}
                 <Route path="/staff-invite/:token" element={<StaffInviteAcceptPage />} />
@@ -116,6 +119,7 @@ export default function App() {
                   <Route path="how-money-works" element={<HowMoneyWorksPage />} />
                   <Route path="business-info" element={<BusinessInfoPage />} />
                   <Route path="staff" element={<StaffPage />} />
+                  <Route path="acknowledgments" element={<ProviderAcknowledgmentsPage />} />
                   <Route path="miregistry" element={<MiRegistryPage />} />
                   <Route path="staff-training" element={<StaffTrainingPage />} />
                   <Route path="cdc-pay-periods" element={<CdcPayPeriodsPage />} />
