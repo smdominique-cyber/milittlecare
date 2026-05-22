@@ -101,13 +101,23 @@ export function buildReviewGrid({
   const safeIss   = Array.isArray(issues)         ? issues         : []
   const days      = daysInPeriod(payPeriod)
 
-  // Identify the child set: any kid with attendance in the period UNION
-  // any kid with an *active* CDC funding source whose authorization window
-  // *overlaps* the period. Previously this included any child with any
-  // non-archived CDC row regardless of status or dates, so children with
-  // expired/non-overlapping authorizations (and no attendance) showed up
-  // with empty rows.
-  const childIdsWithAttendance = new Set(safeAtt.map(r => r && r.child_id).filter(Boolean))
+  // Identify the child set: any kid with *billable* attendance in the
+  // period UNION any kid with an *active* CDC funding source whose
+  // authorization window *overlaps* the period.
+  //
+  // "Billable attendance" means a present segment that produces positive
+  // hours per segmentHours(). A bare attendance row is not enough: rows
+  // with a null check_out (checked in, never out), both timestamps null,
+  // check_in === check_out (zero duration), or check_out < check_in
+  // (overnight not yet split — Rule 7's territory) all yield 0 hours and
+  // must NOT pull a child onto the grid on their own. Such a child only
+  // appears if they ALSO have active overlapping CDC funding.
+  const childIdsWithAttendance = new Set()
+  for (const rec of safeAtt) {
+    if (!rec || !rec.child_id) continue
+    if (rec.status !== 'present') continue
+    if (segmentHours(rec) > 0) childIdsWithAttendance.add(rec.child_id)
+  }
   const childIdsWithCdc = new Set()
   for (const fs of safeFs) {
     if (!cdcActiveOverlapsPeriod(fs, payPeriod)) continue

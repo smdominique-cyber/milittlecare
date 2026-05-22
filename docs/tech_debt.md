@@ -674,3 +674,20 @@ WHERE pp.id IS NULL;
 If that returns rows, those parents need their profile rows backfilled before the FK can land. The follow-up PR is a small two-step migration: (a) backfill any missing parent_profiles rows from auth.users; (b) add the FK constraint.
 
 Once the FK lands, the two-query fallback in the two hotfix sites can be replaced with the plain `parent_profiles(…)` embed — PostgREST will then have a real `pg_constraint` row to infer the embed from. The temporary `console.log` diagnostic in `api/send-message-notification.js` should also come out at that time.
+
+## Overnight segments parse as zero hours → invisible on the grid (2026-05-22)
+
+**Surfaced alongside the Bug 2 billable-attendance filter fix (`fix/pr-9-grid-billable-attendance-filter`).**
+
+`segmentHours()` in `src/lib/iBilling.js` returns `0` when `check_out <= check_in`, which is the case for an unsplit overnight span (e.g. Audrey's real row `check_in 22:09 → check_out 12:09`). That's correct for billing — an overnight span genuinely can't be billed until it's split at midnight. But it has two knock-on effects worth tracking:
+
+1. **The Review Grid excludes such a child if they have no other billable attendance and no active CDC funding.** The grid's `childIdsWithAttendance` set (correctly) only counts present segments with `segmentHours > 0`. A child whose *only* attendance in the period is an unsplit overnight span, with no overlapping active CDC source, won't get a row.
+
+2. **Consequence: the Rule 7 ("overnight not split at midnight") blocking issue for that child can become invisible in the grid.** Rule 7 itself fires correctly — it keys on `outH < inH` directly, not on `segmentHours` (confirmed by test `flags the real overnight case 22:09 -> 12:09`). So the blocking issue *is* produced by `runValidation` and *is* counted in the grid's "N blocking issues must be resolved before export" banner (which sums the raw `issues` array). But because no row is rendered for the child, the provider can't see *which* child/day to fix — the export stays gated with no visible target.
+
+**This is not a Rule 7 bug** (Rule 7 works). It's a grid-rendering completeness gap. Options for the fix-later PR:
+
+- **Preferred:** auto-split overnight spans at midnight on attendance entry (the `split_at_midnight` proposed-fix already exists in Rule 7 / Screen 3) so the data never carries an unsplit overnight row into billing. After the split, both halves have positive `segmentHours` and the child appears normally.
+- **Alternative:** include in `childIdsWithAttendance` any child who has a present segment that produces a Rule-7 issue (i.e. `outH < inH`), so unsplit overnight rows pull the child onto the grid specifically so the blocking issue is visible and resolvable there.
+
+Until then, a provider hitting this sees a blocked export with a blocking count they can't visually locate in the grid — they'd resolve it via the "Resolve N issues" button (which reads the full issues list, not the rendered rows), so it's not a hard block, just a discoverability gap.

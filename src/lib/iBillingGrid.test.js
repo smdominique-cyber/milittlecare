@@ -125,12 +125,76 @@ describe('buildReviewGrid', () => {
     expect(g.rows).toHaveLength(0)
   })
 
-  it('still includes a child with attendance even if their CDC source is inactive/non-overlapping', () => {
+  it('still includes a child with billable attendance even if their CDC source is inactive/non-overlapping', () => {
     const g = buildReviewGrid({
       payPeriod: payPeriod(),
-      attendance: [att()],  // kid-1 has attendance in the period
+      attendance: [att()],  // kid-1 has 8 billable hours in the period
       children: [child()],
       fundingSources: [cdc({ status: 'ended', authorization_end: '2026-02-28' })],
+      issues: [],
+    })
+    expect(g.rows).toHaveLength(1)
+  })
+
+  // -- Bug 2 follow-up (2026-05-22): a bare attendance row with zero
+  // billable hours must NOT pull a child onto the grid. Only present
+  // segments with positive segmentHours() count as "billable attendance."
+  it('excludes a child whose only attendance row has a null check_out (no CDC)', () => {
+    const g = buildReviewGrid({
+      payPeriod: payPeriod(),
+      attendance: [att({ check_in: '08:00', check_out: null })],
+      children: [child()],
+      fundingSources: [],
+      issues: [],
+    })
+    expect(g.rows).toHaveLength(0)
+  })
+
+  it('excludes a child whose only attendance row has both timestamps null (no CDC)', () => {
+    const g = buildReviewGrid({
+      payPeriod: payPeriod(),
+      attendance: [att({ check_in: null, check_out: null })],
+      children: [child()],
+      fundingSources: [],
+      issues: [],
+    })
+    expect(g.rows).toHaveLength(0)
+  })
+
+  it('excludes a child whose only attendance row has check_in === check_out (zero duration, no CDC)', () => {
+    const g = buildReviewGrid({
+      payPeriod: payPeriod(),
+      attendance: [att({ check_in: '09:00', check_out: '09:00' })],
+      children: [child()],
+      fundingSources: [],
+      issues: [],
+    })
+    expect(g.rows).toHaveLength(0)
+  })
+
+  // Overnight row (check_out earlier than check_in) currently parses as
+  // zero/negative duration via segmentHours, so it's excluded here. This
+  // is the Audrey 22:09→12:09 case — genuinely overnight care that should
+  // be split at midnight (Rule 7). Until that split happens, segmentHours
+  // returns 0 and the child won't appear on the grid on attendance alone.
+  // Tracked in docs/tech_debt.md § overnight segments parse as zero hours.
+  it('excludes a child whose only attendance row is an unsplit overnight span (no CDC)', () => {
+    const g = buildReviewGrid({
+      payPeriod: payPeriod(),
+      attendance: [att({ check_in: '22:09', check_out: '12:09' })],
+      children: [child()],
+      fundingSources: [],
+      issues: [],
+    })
+    expect(g.rows).toHaveLength(0)
+  })
+
+  it('zero-hour attendance still appears if the child has active overlapping CDC funding', () => {
+    const g = buildReviewGrid({
+      payPeriod: payPeriod(),
+      attendance: [att({ check_in: '08:00', check_out: null })],  // zero billable
+      children: [child()],
+      fundingSources: [cdc()],  // active + overlapping
       issues: [],
     })
     expect(g.rows).toHaveLength(1)

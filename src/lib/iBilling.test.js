@@ -338,6 +338,17 @@ describe('Rule 7 — overnight not split at midnight', () => {
     expect(issues[0].severity).toBe(SEVERITY.BLOCKING)
     expect(issues[0].proposedFix.action.kind).toBe('split_at_midnight')
   })
+  // Confirms the Audrey 2026-05-21 case fires Rule 7 even though
+  // segmentHours() reports 0 for the same row. Rule 7 keys on outH < inH
+  // directly, NOT on billable duration, so it is unaffected by the grid's
+  // billable-attendance filter. See docs/tech_debt.md § overnight segments.
+  it('flags the real overnight case 22:09 -> 12:09 (Rule 7 independent of segmentHours)', () => {
+    const issues = checkOvernightNotSplitAtMidnight({
+      attendance: [attendanceRow({ check_in: '22:09', check_out: '12:09' })],
+    })
+    expect(issues).toHaveLength(1)
+    expect(issues[0].severity).toBe(SEVERITY.BLOCKING)
+  })
   it('does not flag a degenerate segment that has equal times (treats as zero-length, not overnight)', () => {
     expect(checkOvernightNotSplitAtMidnight({
       attendance: [attendanceRow({ check_in: '08:00', check_out: '08:00' })],
