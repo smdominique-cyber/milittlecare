@@ -77,6 +77,7 @@ export default function IBillingPage() {
   // Screen 3 modal state.
   const [issueModalOpen, setIssueModalOpen] = useState(false)
   const [initialIssue, setInitialIssue] = useState(null)
+  const [filterChildId, setFilterChildId] = useState(null)
   const [refreshKey, setRefreshKey] = useState(0)
 
   const today = useMemo(() => todayYMD(), [])
@@ -262,13 +263,21 @@ export default function IBillingPage() {
   }
 
   function handleOpenIssue(issue) {
+    setFilterChildId(null)      // cell click shows all issues (highlights this one)
     setInitialIssue(issue || null)
+    setIssueModalOpen(true)
+  }
+
+  function handleOpenChildIssues(childId) {
+    setFilterChildId(childId || null)
+    setInitialIssue(null)
     setIssueModalOpen(true)
   }
 
   function handleCloseIssueModal() {
     setIssueModalOpen(false)
     setInitialIssue(null)
+    setFilterChildId(null)
   }
 
   // -- Issue resolution mutations -------------------------------------
@@ -461,11 +470,12 @@ export default function IBillingPage() {
                 onAdvance={handleAdvanceFromReview}
                 onBack={handleBackToPicker}
                 onOpenIssue={handleOpenIssue}
+                onOpenChildIssues={handleOpenChildIssues}
               />
               {issues.length > 0 && (
                 <div style={{ marginTop: 12 }}>
                   <button type="button"
-                          onClick={() => { setInitialIssue(null); setIssueModalOpen(true) }}
+                          onClick={() => { setFilterChildId(null); setInitialIssue(null); setIssueModalOpen(true) }}
                           style={ghostButtonStyle}>
                     Resolve {issues.length} issue{issues.length === 1 ? '' : 's'} →
                   </button>
@@ -473,8 +483,9 @@ export default function IBillingPage() {
               )}
               {issueModalOpen && (
                 <IssueResolutionModal
-                  issues={issues}
+                  issues={filterChildId ? issues.filter(i => i.childId === filterChildId) : issues}
                   children={allChildren}
+                  filterChildName={filterChildId ? childDisplayName(allChildren, filterChildId) : null}
                   overridden={overriddenIssues.map(i => ({
                     rule_id: i.ruleId,
                     override_reason: overrideReasonFor(i, overrides),
@@ -576,6 +587,12 @@ function parseTimeToHoursLocal(hms) {
   if (parts.length < 2 || parts.some(n => Number.isNaN(n))) return null
   const [h, m, s = 0] = parts
   return h + m / 60 + s / 3600
+}
+
+function childDisplayName(children, childId) {
+  const c = (Array.isArray(children) ? children : []).find(x => x && x.id === childId)
+  if (!c) return ''
+  return `${c.first_name || ''} ${c.last_name || ''}`.trim() || childId
 }
 
 function overrideReasonFor(issue, overrides) {

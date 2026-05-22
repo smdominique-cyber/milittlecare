@@ -41,6 +41,7 @@ export default function ReviewGrid({
   onAdvance,
   onBack,
   onOpenIssue,
+  onOpenChildIssues,
 }) {
   const grid = useMemo(
     () => buildReviewGrid({ payPeriod, attendance, children, fundingSources, issues }),
@@ -109,14 +110,18 @@ export default function ReviewGrid({
                   <div style={{ fontWeight: 600 }}>
                     {row.child.first_name} {row.child.last_name}
                   </div>
-                  {row.childIssues.length > 0 && (
+                  {childIssueCount(row) > 0 && (
                     <HelpTooltip
-                      label={`${row.childIssues.length} issue(s) for this child`}
-                      text={row.childIssues.map(i => RULE_LABEL[i.ruleId] || i.ruleId).join(', ')}
+                      label={`${childIssueCount(row)} issue(s) for ${row.child.first_name || 'this child'} — click to resolve`}
+                      text={childIssueRuleList(row).map(id => RULE_LABEL[id] || id).join(', ')}
                     >
-                      <span style={badgePill(worstOf(row.childIssues))}>
-                        {row.childIssues.length} issue{row.childIssues.length === 1 ? '' : 's'}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onOpenChildIssues?.(row.child.id)}
+                        style={badgePillButton(worstOf(allChildIssues(row)))}
+                      >
+                        {childIssueCount(row)} issue{childIssueCount(row) === 1 ? '' : 's'}
+                      </button>
                     </HelpTooltip>
                   )}
                 </th>
@@ -224,6 +229,27 @@ function worstOf(issues) {
   return SEVERITY.INFO
 }
 
+// Every issue belonging to a child: the child-level ones (no date) plus
+// the per-cell ones across the row. The badge counts these and the
+// click opens the modal filtered to the same set, so Audrey's cell-level
+// "Outside CDC authorization" issue is reachable from the name badge,
+// not only by clicking the day cell.
+function allChildIssues(row) {
+  const cellIssues = []
+  for (const date of Object.keys(row.cells || {})) {
+    for (const iss of row.cells[date].issues || []) cellIssues.push(iss)
+  }
+  return [...(row.childIssues || []), ...cellIssues]
+}
+
+function childIssueCount(row) {
+  return allChildIssues(row).length
+}
+
+function childIssueRuleList(row) {
+  return [...new Set(allChildIssues(row).map(i => i.ruleId))]
+}
+
 function toneFor(severity) {
   if (severity === SEVERITY.BLOCKING) return TONE_PALETTE.bad
   if (severity === SEVERITY.WARNING)  return TONE_PALETTE.warn
@@ -312,6 +338,14 @@ const badgePill = (severity) => ({
   fontWeight: 600,
   background: toneFor(severity).bg,
   color:      toneFor(severity).fg,
+})
+
+// Same look as badgePill, but an actual <button>: clickable, keyboard-
+// focusable, opens the issue modal filtered to this child (Bug 4).
+const badgePillButton = (severity) => ({
+  ...badgePill(severity),
+  border: `1px solid ${toneFor(severity).fg}33`,
+  cursor: 'pointer',
 })
 
 const cellBadge = (tone) => ({
