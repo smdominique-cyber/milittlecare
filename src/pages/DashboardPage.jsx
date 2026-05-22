@@ -11,6 +11,7 @@ import SetupWidget from '@/components/dashboard/SetupWidget'
 import TodayWidget from '@/components/dashboard/TodayWidget'
 import StaffClockWidget from '@/components/dashboard/StaffClockWidget'
 import InstallBanner from '@/components/ui/InstallBanner'
+import AnnualTrainingBanner from '@/components/dashboard/AnnualTrainingBanner'
 import OnboardingCompletionCard from '@/components/onboarding/OnboardingCompletionCard'
 import OnboardingNextStepPrompt from '@/components/onboarding/OnboardingNextStepPrompt'
 import { useOnboardingStatus } from '@/hooks/useOnboardingStatus'
@@ -194,6 +195,12 @@ export default function DashboardPage() {
     </>
   ) : null
 
+  // Annual Dec 16 training banner — self-gates internally on
+  // is_license_exempt and self-renders nothing when no nudge is due.
+  const annualTrainingBanner = isLicensee && user?.id ? (
+    <AnnualTrainingBanner userId={user.id} />
+  ) : null
+
   if (loading) {
     return (
       <div style={{ padding: 'var(--space-12)', textAlign: 'center' }}>
@@ -208,6 +215,7 @@ export default function DashboardPage() {
       <>
         <InstallBanner />
         {onboardingBanner}
+        {annualTrainingBanner}
         {staffMembership && (
           <StaffClockWidget userId={user.id} membership={staffMembership} />
         )}
@@ -280,6 +288,7 @@ export default function DashboardPage() {
     <>
       <InstallBanner />
       {onboardingBanner}
+      {annualTrainingBanner}
       {staffMembership && (
         <StaffClockWidget userId={user.id} membership={staffMembership} />
       )}
