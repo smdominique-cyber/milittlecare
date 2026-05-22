@@ -40,6 +40,30 @@ export function daysInPeriod(payPeriod) {
 }
 
 // -----------------------------------------------------------------------------
+// CDC inclusion test
+// -----------------------------------------------------------------------------
+
+/**
+ * True iff `fs` is an active, non-archived CDC funding source with a
+ * `child_id` whose authorization window overlaps the pay period. Reads
+ * the typed columns first (post-PR #8.5b) and falls back to `details.X`
+ * for legacy / not-yet-backfilled rows. Missing endpoints are treated as
+ * unbounded (matches src/lib/iBillingPicker.js#periodOverlapsAnyCdc).
+ */
+function cdcActiveOverlapsPeriod(fs, payPeriod) {
+  if (!fs || fs.archived_at) return false
+  if (fs.type !== 'cdc_scholarship') return false
+  if (!fs.child_id) return false
+  if (fs.status !== 'active') return false
+  if (!payPeriod || !payPeriod.start_date || !payPeriod.end_date) return false
+  const start = fs.authorization_start || (fs.details && fs.details.authorization_start) || null
+  const end   = fs.authorization_end   || (fs.details && fs.details.authorization_end)   || null
+  if (start && start > payPeriod.end_date) return false
+  if (end   && end   < payPeriod.start_date) return false
+  return true
+}
+
+// -----------------------------------------------------------------------------
 // Grid builder
 // -----------------------------------------------------------------------------
 
@@ -77,14 +101,16 @@ export function buildReviewGrid({
   const safeIss   = Array.isArray(issues)         ? issues         : []
   const days      = daysInPeriod(payPeriod)
 
-  // Identify the child set: any kid with attendance OR an active CDC
-  // funding source touching this period.
+  // Identify the child set: any kid with attendance in the period UNION
+  // any kid with an *active* CDC funding source whose authorization window
+  // *overlaps* the period. Previously this included any child with any
+  // non-archived CDC row regardless of status or dates, so children with
+  // expired/non-overlapping authorizations (and no attendance) showed up
+  // with empty rows.
   const childIdsWithAttendance = new Set(safeAtt.map(r => r && r.child_id).filter(Boolean))
   const childIdsWithCdc = new Set()
   for (const fs of safeFs) {
-    if (!fs || fs.archived_at) continue
-    if (fs.type !== 'cdc_scholarship') continue
-    if (!fs.child_id) continue
+    if (!cdcActiveOverlapsPeriod(fs, payPeriod)) continue
     childIdsWithCdc.add(fs.child_id)
   }
   const allChildIds = new Set([...childIdsWithAttendance, ...childIdsWithCdc])

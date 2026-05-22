@@ -88,7 +88,7 @@ describe('buildReviewGrid', () => {
     expect(g.rows).toHaveLength(1)
   })
 
-  it('includes CDC-funded children with no attendance (empty row)', () => {
+  it('includes active+overlapping CDC-funded children with no attendance (empty row)', () => {
     const g = buildReviewGrid({
       payPeriod: payPeriod(),
       attendance: [],
@@ -98,6 +98,57 @@ describe('buildReviewGrid', () => {
     })
     expect(g.rows).toHaveLength(1)
     expect(g.rows[0].totalHours).toBe(0)
+  })
+
+  // -- Bug 2 (2026-05-21): grid was showing every child with any CDC row,
+  // regardless of status or period overlap.
+  it('excludes children whose only CDC source is non-active (no attendance)', () => {
+    const g = buildReviewGrid({
+      payPeriod: payPeriod(),
+      attendance: [],
+      children: [child()],
+      fundingSources: [cdc({ status: 'ended' })],
+      issues: [],
+    })
+    expect(g.rows).toHaveLength(0)
+  })
+
+  it('excludes children whose CDC authorization does not overlap the period (no attendance)', () => {
+    const g = buildReviewGrid({
+      payPeriod: payPeriod(),  // 2026-05-03 → 2026-05-16
+      attendance: [],
+      children: [child()],
+      // authorization ended in February — well before the period.
+      fundingSources: [cdc({ authorization_start: '2026-01-01', authorization_end: '2026-02-28' })],
+      issues: [],
+    })
+    expect(g.rows).toHaveLength(0)
+  })
+
+  it('still includes a child with attendance even if their CDC source is inactive/non-overlapping', () => {
+    const g = buildReviewGrid({
+      payPeriod: payPeriod(),
+      attendance: [att()],  // kid-1 has attendance in the period
+      children: [child()],
+      fundingSources: [cdc({ status: 'ended', authorization_end: '2026-02-28' })],
+      issues: [],
+    })
+    expect(g.rows).toHaveLength(1)
+  })
+
+  it('reads the authorization window from details JSON when typed columns are null (pre-backfill rows)', () => {
+    const g = buildReviewGrid({
+      payPeriod: payPeriod(),
+      attendance: [],
+      children: [child()],
+      fundingSources: [cdc({
+        authorization_start: null,
+        authorization_end: null,
+        details: { authorization_start: '2026-04-01', authorization_end: '2026-09-30' },
+      })],
+      issues: [],
+    })
+    expect(g.rows).toHaveLength(1)
   })
 
   it('aggregates multi-segment days correctly', () => {
