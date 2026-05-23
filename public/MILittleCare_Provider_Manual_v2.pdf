@@ -1,0 +1,197 @@
+MI Little Care
+Provider Operations Manual
+For Michigan License-Exempt Provider (LEP) home daycares
+Last updated: May 2026
+ 
+
+Welcome to MI Little Care
+MI Little Care is built for one specific job: keeping a home daycare's daily records organized, audit-ready, and accurate enough to bill the Michigan Child Development and Care (CDC) scholarship program with confidence.
+This manual walks through the screens you'll use every week and the workflows that connect them. It is not a substitute for the MDHHS CDC LEP Handbook or your state-issued provider guidance — rather, it explains how to do the operational work inside this app.
+How to use this manual
+Each section below describes one major screen or workflow. For each, you'll find:
+What this screen is for and when to use it
+Step-by-step instructions for the common tasks
+Common issues and how to resolve them
+What's still in development (where applicable)
+
+A note on what's in this manual
+MI Little Care is a working product, not a frozen one. Some features described here are fully deployed and ready to use today. Others are in active development and will be expanded in upcoming releases. Where a workflow is incomplete, this manual will say so directly.
+ 
+
+Dashboard
+The Dashboard is the first screen you see after signing in. It's designed to surface what needs your attention today — children to check in, training deadlines approaching, billing periods closing, and any data issues that could block compliance.
+
+
+ 
+Provider Dashboard with Today widget, training status banner, and CDC billing setup CTA
+
+What you'll see
+Today widget
+Lists every child enrolled, showing who is currently checked in, who has been checked out, and who has not arrived yet. From here you can record drop-offs and pickups in one click.
+Training & compliance banners
+If you have an annual training deadline approaching (December 16 each year for LEP providers), fingerprint reprint due, or a background check expiring, a banner appears at the top of the Dashboard. These are tied to dates in your provider profile under Settings.
+Acknowledgments summary
+Once parents start using the acknowledgment workflow, you'll see counts here for how many attendance days have been confirmed, flagged, or remain unacknowledged. Click into the count to open the Parent Acknowledgments dashboard.
+Daily routine: a typical morning
+Open the app. Dashboard loads.
+Scan the Today widget. Confirm the children you expect today are listed.
+As each child arrives, click the Drop Off button next to their name.
+If a banner indicates a deadline coming up (training, fingerprints), make a note of it.
+When children leave, click Check Out next to their name.
+Common issues
+Drop Off button doesn't seem to do anything
+If you click Drop Off and the screen doesn't update, refresh the page once. If the problem persists, use the Contact / Support link in the sidebar.
+A child shows as 'present' but I never recorded a drop-off
+This usually means a previous day's check-in was never completed with a check-out. Open that child's Attendance tab on the Families screen, find the incomplete day, and either edit the times or delete the row.
+ 
+
+Attendance
+Attendance is the most important workflow in MI Little Care. Every reimbursement claim, every audit defense, and every parent acknowledgment depends on accurate attendance records. This section explains how to record, edit, and clean up attendance data.
+
+ 
+Attendance screen showing weekly grid by child
+
+Recording attendance
+Drop Off (check in)
+From the Today widget on the Dashboard, click Drop Off next to a child's name. The app records the current time as the child's check-in. The button changes to Check Out.
+Check Out
+Click Check Out when the child leaves. The app records the current time, calculates total hours for that day, and saves the segment. If the same child leaves and returns later (e.g., for an appointment), Drop Off again creates a second segment for the same day.
+Editing past attendance
+If you forgot to record a check-out or need to fix a time, navigate to Families, click the child's family, then the Attendance tab. You can edit any day's check-in, check-out, or status (present / absent / sick).
+Status types
+Present — the child attended care that day (default when you click Drop Off)
+Absent — the child did not attend
+Sick — the child was unable to attend due to illness (tracked separately for some reporting)
+Common issues
+Incomplete check-outs
+If a child is dropped off but never checked out (you closed the laptop before the day ended, or forgot), the day will show as 'present' with zero billable hours. These show up as warnings in the CDC I-Billing review and need to be resolved before you can submit a claim. To fix:
+Open Families ? the child's family ? Attendance tab
+Find the day with missing check-out time
+Click Edit, fill in the actual departure time, save
+Overnight care
+If a child is in your care overnight (you check them in at 10 PM and they leave at 7 AM the next day), record this as two segments: one ending at 11:59 PM on the first day, one starting at 12:00 AM on the second day. The system flags single-segment overnight rows as an issue that needs to be split before billing.
+
+Coming soon
+Automatic overnight splitting at midnight, in-app nudges to complete pending check-outs at end of day, and a 'data hygiene' report on the Dashboard showing attendance rows that need attention are all on the development roadmap.
+ 
+
+Families & Children
+The Families screen is the master record for everyone in your care. Each family contains one or more children, their guardians, emergency contacts, funding sources, and access settings for the parent portal.
+
+ 
+Family modal showing tabs: Overview, Access, Children, Funding, Guardians, Emergency, Attendance
+
+The seven tabs
+Overview
+Quick summary of the family — name, primary contact, enrolled children, active funding.
+Access
+Manage parent portal invitations. Each guardian who needs to view invoices, acknowledge attendance, or update family info gets their own invitation. Invitations expire in 7 days; you can resend or revoke at any time.
+Children
+Add and edit child records — first/last name, date of birth, age group (infant/toddler/preschool/school-age), any special notes, and enrollment status.
+Funding
+Each child can have one or more funding sources: Private Pay, CDC Scholarship, Tri-Share, GSRP, or CACFP. Each source has its own fields. For CDC Scholarship, this includes the DHS-198 case number, authorization start and end dates, approved hours per pay period, and family contribution amount.
+Guardians
+Authorized people who can drop off or pick up the child. Each guardian has a relationship to the child (parent, grandparent, aunt/uncle, etc.) and contact information.
+Emergency
+Emergency contacts — typically people not already listed as guardians who should be reached if you can't get hold of a parent.
+Attendance
+All attendance records for any child in this family, viewable as a calendar or list. Edit historical records here when needed.
+Setting up a new family
+From the Families screen, click Add Family
+Enter the family name (e.g., 'Drambau' or 'The Smith Family')
+Add at least one child under the Children tab
+Add at least one funding source under the Funding tab — even if it's Private Pay
+Add at least one guardian under the Guardians tab
+Optionally, send a parent portal invitation under the Access tab
+Common issues
+CDC funding shows but doesn't appear in I-Billing
+Check that the funding source status is 'Active' and that the authorization start and end dates overlap with the pay period you're trying to bill. A CDC source with an expired authorization, or one set to 'Pending' or 'Ended', will not appear on the I-Billing grid.
+Parent invitation expired
+Invitations expire after 7 days. If a parent didn't accept in time, click Send Invitation again on the Access tab to generate a fresh link. The old link becomes invalid automatically.
+ 
+
+Parent Acknowledgments
+Parent acknowledgment is how parents confirm — on the record — that the attendance hours you've recorded for their child are accurate. This is required for CDC scholarship billing, and provides an audit-defensible trail showing parents agreed with what you reported to MDHHS.
+
+ 
+Parent Acknowledgments dashboard showing counts and active flags
+
+How acknowledgment works
+When you record attendance for a child whose family has set up parent portal access, that day's billable hours become 'unacknowledged' until the parent reviews them. Parents have three options for each day:
+Confirm — the hours are accurate, the parent agrees
+Flag — there's a discrepancy (wrong times, wrong attendance status, etc.)
+Override — in some cases, the provider can mark a day as acknowledged with a documented reason
+Where parents see it
+Parents who have accepted a portal invitation see acknowledgments two places: as a banner on their Parent Dashboard ('You have X days awaiting your review') and on a dedicated /parent/acknowledge page where they can confirm or flag each day individually.
+Where you (the provider) see it
+The Parent Acknowledgments entry in your sidebar opens a dashboard showing:
+Counts: acknowledged, flagged, unacknowledged, and tampered days
+Active flags — what each parent flagged and their reason
+Cadence settings — when reminders go out, how strict the rules are, what gets included
+Settings to configure
+Cadence
+How often parents are reminded — weekly is the default. You can also choose daily or disable reminders entirely.
+Send day and time
+When during the week (or day) the reminder goes out. Default is Friday at 5 PM Detroit time.
+Strictness
+Whether the system requires every day to be acknowledged before billing, or allows some override.
+Email enabled
+Whether digest emails go out at all. Toggle this off to use only the in-app acknowledgment workflow without emails.
+
+Important: digest emails currently disabled
+Automated digest emails to parents are temporarily disabled at the platform level pending an infrastructure upgrade. All other parts of the acknowledgment workflow are fully functional — parents can still log into their portal, see attendance days awaiting review, and confirm or flag each one. Email-based reminders will be re-enabled in a future update.
+Resolving a flagged day
+Open Parent Acknowledgments from the sidebar
+Scroll to Active flags — each one shows the child, date, and parent's stated reason
+Open Families ? the child's family ? Attendance tab
+Review the original record against what the parent claims
+Either edit the record (and the flag clears once the parent re-confirms), or apply a provider override with a documented reason
+ 
+
+CDC I-Billing Review
+The CDC I-Billing workflow is how you turn two weeks of recorded attendance into a clean submission for the Michigan Department of Health and Human Services. It validates your data against MDHHS rules before you ever try to submit, catches problems early, and produces the official Time & Attendance Record PDF for each pay period.
+
+ 
+
+CDC I-Billing Transfer wizard, Review step showing the validation grid
+
+The four steps
+1. Pick
+Choose the CDC pay period you want to bill. Periods that have unbilled attendance with active CDC funding show as available. Periods that are too far in the future, already submitted, or have no CDC activity are hidden.
+2. Review
+The main validation screen. Shows a grid of every CDC-funded child with active authorization for this period, across every day in the period. Each cell shows hours; cells with issues are highlighted in color. Below the grid is a summary of blocking issues, warnings, and informational notes.
+3. Export
+Generate the official MiLEAP Time & Attendance Record PDF. Each CDC family gets their own PDF, pre-filled with the child's name, case number, daily hours, totals, and parent initial fields. Print, sign, and submit per MDHHS instructions.
+4. Reconcile
+After you submit and MDHHS responds, record the actual reimbursement received against what you expected. This creates the closed-loop record auditors look for.
+Validation rules that may fire
+MI Little Care runs your attendance through a set of validation rules before allowing export. Each rule is either blocking (must be resolved or overridden before export), warning (worth reviewing but doesn't block), or informational. Common rules:
+Billing for a child without active CDC funding for the period — blocking
+Attendance recorded outside the authorization window — blocking
+Overnight care recorded as a single segment instead of split at midnight — blocking
+Hours exceeding daily limits for the child's age group — warning
+Day attended but parent has not yet acknowledged — depends on strictness settings
+Attendance during school hours for a school-age child — warning, may not be billable depending on school calendar
+Resolving issues
+Each issue offers one or more resolutions. For most cases:
+Fix the data (edit attendance, update funding dates, etc.)
+Apply a provider override with a written reason — this satisfies the rule and creates an audit trail
+You can click the issue count badge under any child's name to open a focused view of just that child's issues. Or click 'Resolve N issues' at the bottom of the grid to work through them all in sequence.
+Common issues
+Child appears on the grid but has no funding
+If a child shows up but has zero hours and a 'No active CDC funding' issue, check that the funding source for that child is set to status 'Active' and that the authorization dates cover the pay period. If the child is intentionally not on CDC, remove the issue with a provider override, or check that they don't have any spurious attendance rows for the period.
+Audit-defensible documentation
+Every override is logged with who applied it, when, and the stated reason. During an audit, you can show this trail as evidence that you reviewed each issue before submission rather than ignoring it.
+ 
+
+Appendix
+Regulatory references
+This manual describes how to use MI Little Care, not the regulations themselves. For authoritative guidance on what is required of you as a provider, consult:
+MDHHS CDC LEP Provider Handbook (current edition)
+Michigan Compiled Laws — Family Childcare Home Act and related rules (R 400.8113 et al.)
+MiLEAP provider notices and bulletins
+Your local MDHHS specialist for case-specific questions
+Getting help
+Use the Contact / Support link in the left sidebar to reach the MI Little Care team with questions, bug reports, or feature requests.
+
+— End of manual —
