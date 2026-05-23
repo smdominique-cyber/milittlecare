@@ -28,6 +28,7 @@ import {
   ClipboardCheck,
   FileSpreadsheet,
   UserCheck,
+  BookOpen,
 } from 'lucide-react'
 
 function getInitials(name) {
@@ -117,6 +118,8 @@ export default function Sidebar({ isOpen = false }) {
         { label: 'Subscription', icon: CreditCard, path: '/subscription', roles: ['licensee'] },
         { label: 'How Money Works', icon: Shield, path: '/how-money-works' },
         { label: 'Contact / Support', icon: MessageSquare, path: '/contact' },
+        // Static asset, not a route: opens the manual PDF in a new tab.
+        { label: 'Provider Manual', icon: BookOpen, href: '/MILittleCare_Provider_Manual_v2.pdf', external: true },
       ],
     },
   ]
@@ -160,16 +163,30 @@ export default function Sidebar({ isOpen = false }) {
           <div key={section.section}>
             <div className="nav-section-label">{section.section}</div>
             {section.items.map((item) => (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                end={item.path === '/dashboard'}
-                className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
-              >
-                <item.icon size={18} />
-                <span>{item.label}</span>
-                {item.badge && <span className="nav-badge">{item.badge}</span>}
-              </NavLink>
+              item.external ? (
+                <a
+                  key={item.href}
+                  href={item.href}
+                  target="_blank"
+                  rel="noopener"
+                  className="nav-item"
+                >
+                  <item.icon size={18} />
+                  <span>{item.label}</span>
+                  {item.badge && <span className="nav-badge">{item.badge}</span>}
+                </a>
+              ) : (
+                <NavLink
+                  key={item.path}
+                  to={item.path}
+                  end={item.path === '/dashboard'}
+                  className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+                >
+                  <item.icon size={18} />
+                  <span>{item.label}</span>
+                  {item.badge && <span className="nav-badge">{item.badge}</span>}
+                </NavLink>
+              )
             ))}
           </div>
         ))}
