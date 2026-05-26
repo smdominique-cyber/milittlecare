@@ -68,6 +68,8 @@ export default function AttendanceExportButton({ licenseeId, businessName, provi
           .gte('date', startDate)
           .lte('date', endDate)
           .order('date', { ascending: true }),
+        // Includes archived children (PR #13): the export is a name lookup
+        // for historical attendance, which can reference now-archived kids.
         supabase
           .from('children')
           .select('id, first_name, last_name, family_id, date_of_birth')

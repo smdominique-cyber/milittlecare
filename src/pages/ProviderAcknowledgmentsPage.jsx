@@ -110,6 +110,8 @@ export default function ProviderAcknowledgmentsPage() {
         setLoading(false); return
       }
 
+      // Includes archived children (PR #13): a recently-archived child may
+      // still have pending acknowledgment flags/segments to resolve.
       const { data: kids } = await supabase
         .from('children')
         .select('id, first_name, last_name, family_id')

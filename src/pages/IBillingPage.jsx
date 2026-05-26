@@ -97,6 +97,8 @@ export default function IBillingPage() {
         .select('pay_period_number')
         .eq('provider_id', user.id),
       supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+      // Includes archived children (PR #13): an archived child may still
+      // have billable attendance in the pay period being reconciled.
       supabase.from('children').select('*').eq('user_id', user.id),
     ]).then(([catRes, fsRes, subRes, profRes, kidRes]) => {
       if (cancelled) return

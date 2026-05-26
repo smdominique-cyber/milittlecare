@@ -72,6 +72,8 @@ export default function BillingPage() {
       supabase.from('invoice_items').select('*').eq('user_id', licenseeId),
       supabase.from('payments').select('*').eq('user_id', licenseeId).order('payment_date', { ascending: false }),
       supabase.from('attendance').select('*').eq('user_id', licenseeId),
+      // Includes archived children (PR #13): historical invoices/attendance
+      // can reference a now-archived child whose name must still resolve.
       supabase.from('children').select('*').eq('user_id', licenseeId),
       supabase.from('business_policies').select('*').eq('user_id', licenseeId).maybeSingle(),
     ])

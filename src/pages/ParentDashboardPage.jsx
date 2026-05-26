@@ -149,7 +149,8 @@ export default function ParentDashboardPage() {
       supabase
         .from('children')
         .select('id, first_name, last_name, family_id')
-        .in('family_id', familyIds),
+        .in('family_id', familyIds)
+        .is('archived_at', null),
       supabase
         .from('attendance')
         .select('*')

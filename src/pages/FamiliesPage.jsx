@@ -5,9 +5,10 @@ import { supabase } from '@/lib/supabase'
 import {
   Plus, X, Users, Phone, Mail, AlertCircle, Save, Trash2,
   ChevronLeft, ChevronRight, Pencil, UserPlus, Shield, Baby,
-  Send, Copy, ExternalLink,
+  Send, Copy, ExternalLink, Archive, ArchiveRestore,
 } from 'lucide-react'
 import { getNextInvoicePeriod, describeFrequency, computeInvoiceAmount } from '@/lib/billing'
+import { partitionChildren } from '@/lib/children'
 import FundingSourceList from '@/components/funding/FundingSourceList'
 import FundingSourceForm from '@/components/funding/FundingSourceForm'
 import MiRegistryWarningBanner from '@/components/miregistry/MiRegistryWarningBanner'
@@ -93,6 +94,10 @@ export default function FamiliesPage() {
     setLoading(true)
     const [f, c, g, e] = await Promise.all([
       supabase.from('families').select('*').eq('user_id', licenseeId).order('family_name'),
+      // Management surface: load ALL children incl. archived (PR #13) so the
+      // Children tab's "show archived" view works. Each render filters: the
+      // summary stat and family-card chips show active only; the Children tab
+      // splits active vs archived via partitionChildren.
       supabase.from('children').select('*').eq('user_id', licenseeId),
       supabase.from('guardians').select('*').eq('user_id', licenseeId).is('archived_at', null),
       supabase.from('emergency_contacts').select('*').eq('user_id', licenseeId),
@@ -110,7 +115,7 @@ export default function FamiliesPage() {
 
   const activeFamilies = families.filter(f => f.enrollment_status === 'active')
   const activeChildren = children.filter(c =>
-    activeFamilies.some(f => f.id === c.family_id)
+    !c.archived_at && activeFamilies.some(f => f.id === c.family_id)
   )
   const weeklyRevenue = activeFamilies.reduce((sum, f) => {
     if (f.billing_type === 'weekly') return sum + parseFloat(f.weekly_rate || 0)
@@ -189,7 +194,7 @@ export default function FamiliesPage() {
       ) : (
         <div className="families-grid">
           {filteredFamilies.map(family => {
-            const fChildren = children.filter(c => c.family_id === family.id)
+            const fChildren = children.filter(c => c.family_id === family.id && !c.archived_at)
             const fGuardians = guardians.filter(g => g.family_id === family.id)
             const primary = fGuardians.find(g => g.is_primary) || fGuardians[0]
 
@@ -749,6 +754,38 @@ function FundingTab({ family, childrenList, onChange }) {
 function ChildrenTab({ userId, familyId, children, onChange }) {
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState(null)
+  const [showArchived, setShowArchived] = useState(false)
+  const [busyId, setBusyId] = useState(null)
+
+  const { active, archived } = partitionChildren(children)
+
+  // Soft-delete (PR #13): never hard-delete a child. attendance,
+  // invoice_items, and attendance_acknowledgments reference children(id),
+  // and Rule 7 / R 400.1907 requires the record be retained for 2 years
+  // after care ends. Archiving sets archived_at; restoring clears it.
+  const archiveChild = async (child) => {
+    if (!window.confirm(
+      `Archive ${child.first_name}? Archived children are kept for ` +
+      `compliance — Michigan requires child records for 2 years after care ` +
+      `ends — but no longer appear in active lists. You can restore them ` +
+      `anytime.`
+    )) return
+    setBusyId(child.id)
+    await supabase.from('children')
+      .update({ archived_at: new Date().toISOString() })
+      .eq('id', child.id)
+    setBusyId(null)
+    await onChange()
+  }
+
+  const unarchiveChild = async (child) => {
+    setBusyId(child.id)
+    await supabase.from('children')
+      .update({ archived_at: null })
+      .eq('id', child.id)
+    setBusyId(null)
+    await onChange()
+  }
 
   return (
     <div className="subsection">
@@ -768,11 +805,11 @@ function ChildrenTab({ userId, familyId, children, onChange }) {
         />
       )}
 
-      {children.length === 0 && !adding && (
+      {active.length === 0 && !adding && (
         <div className="empty-mini">No children yet. Click "Add child" above.</div>
       )}
 
-      {children.map(child =>
+      {active.map(child =>
         editing === child.id ? (
           <ChildForm
             key={child.id}
@@ -793,16 +830,60 @@ function ChildrenTab({ userId, familyId, children, onChange }) {
               </div>
             </div>
             <div className="person-actions">
-              <button className="icon-btn" onClick={() => setEditing(child.id)}><Pencil /></button>
-              <button className="icon-btn danger" onClick={async () => {
-                if (!window.confirm('Remove this child?')) return
-                await supabase.from('children').delete().eq('id', child.id)
-                await onChange()
-              }}><Trash2 /></button>
+              <button className="icon-btn" title="Edit" onClick={() => setEditing(child.id)}><Pencil /></button>
+              <button
+                className="icon-btn"
+                title="Archive"
+                disabled={busyId === child.id}
+                onClick={() => archiveChild(child)}
+              ><Archive /></button>
             </div>
           </div>
         )
       )}
+
+      {archived.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowArchived(s => !s)}
+          style={{
+            background: 'none', border: 'none', padding: '8px 0',
+            color: 'var(--clr-ink-soft)', fontSize: '0.8125rem',
+            textDecoration: 'underline', cursor: 'pointer', alignSelf: 'flex-start',
+          }}
+        >
+          {showArchived ? 'Hide' : 'Show'} archived ({archived.length})
+        </button>
+      )}
+
+      {showArchived && archived.map(child => (
+        <div key={child.id} className="person-card" style={{ opacity: 0.6 }}>
+          <div className="person-avatar">{getInitials(child.first_name + ' ' + (child.last_name || ''))}</div>
+          <div className="person-info">
+            <div className="person-name">
+              {child.first_name} {child.last_name}
+              <span style={{
+                marginLeft: 8, fontSize: '0.6875rem', fontWeight: 600,
+                textTransform: 'uppercase', letterSpacing: '0.04em',
+                color: 'var(--clr-ink-soft)', background: 'var(--clr-warm-mid)',
+                padding: '1px 6px', borderRadius: 'var(--radius-full)',
+              }}>Archived</span>
+            </div>
+            <div className="person-meta">
+              {child.date_of_birth && <span>Age: {calcAge(child.date_of_birth)}</span>}
+              {child.allergies && <span>⚠ Allergies: {child.allergies}</span>}
+            </div>
+          </div>
+          <div className="person-actions">
+            <button
+              className="icon-btn"
+              title="Restore"
+              disabled={busyId === child.id}
+              onClick={() => unarchiveChild(child)}
+            ><ArchiveRestore /></button>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

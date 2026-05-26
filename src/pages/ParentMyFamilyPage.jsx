@@ -52,7 +52,8 @@ export default function ParentMyFamilyPage() {
 
   async function loadFamilyData(familyId, parentId) {
     const [c, g, e, p] = await Promise.all([
-      supabase.from('children').select('*').eq('family_id', familyId).order('date_of_birth', { ascending: false }),
+      // Active roster only — archived children (PR #13) are former enrollees.
+      supabase.from('children').select('*').eq('family_id', familyId).is('archived_at', null).order('date_of_birth', { ascending: false }),
       supabase.from('guardians').select('*').eq('family_id', familyId).is('archived_at', null),
       supabase.from('emergency_contacts').select('*').eq('family_id', familyId),
       supabase.from('parent_profiles').select('*').eq('id', parentId).maybeSingle(),

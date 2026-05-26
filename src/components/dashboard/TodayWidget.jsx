@@ -75,9 +75,11 @@ export default function TodayWidget({ licenseeId, userId, businessName, provider
         .select('id, family_name, enrollment_status')
         .eq('user_id', licenseeId)
         .eq('enrollment_status', 'active'),
+      // Active roster only — archived children (PR #13) drop off today's list.
       supabase.from('children')
         .select('id, first_name, last_name, family_id, date_of_birth')
-        .eq('user_id', licenseeId),
+        .eq('user_id', licenseeId)
+        .is('archived_at', null),
       supabase.from('attendance')
         .select('*')
         .eq('user_id', licenseeId)
