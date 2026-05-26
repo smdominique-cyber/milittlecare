@@ -1,5 +1,43 @@
 # Tech Debt
 
+## `is_license_exempt` is now a derived mirror of `license_type` (PR #14)
+
+Migration 022 added `profiles.license_type` as the compliance source of
+truth ('family_home' / 'group_home' / 'license_exempt'). The legacy
+`is_license_exempt` boolean (migration 004) is intentionally kept so the
+~10 existing readers (MiRegistry tracker activation, AnnualTrainingBanner,
+FundingSourceForm 2016-hour CDC cap, FundingDocumentSlot, MiRegistryPage
+view-mode, modules.js's miregistry_tracker / staff_training gates,
+onboarding, the LicenseStatusPrompt fire path, licenseStatusPrompt helpers)
+keep working untouched. PR #14 enforces the invariant in **app code, not
+the DB:** every capture surface — LicenseStatusPromptModal,
+BusinessInfoPage Licensing tab, and the onboarding wizard
+(`onboarding.js#getWriteTargets`) — writes both columns in lockstep
+(`is_license_exempt = (license_type === 'license_exempt')`) and clears
+`license_type_review_needed` alongside.
+
+Why this is fine for now: the invariant is enforced at exactly three write
+sites, all of which now share the same three-target descriptor in
+`getWriteTargets('license_status', …)`. Drift would require a new
+license-type write path that forgets the mirror.
+
+Why this won't be fine forever: any future writer that touches
+`license_type` from a Supabase function, a backfill script, or a future
+admin tool can break the invariant silently. The long-term fix is a
+database-level guarantee — a `BEFORE INSERT/UPDATE` trigger on
+`public.profiles` that sets `is_license_exempt = (license_type = 'license_exempt')`
+whenever `license_type` is non-null. Deferred from PR #14 because it would
+have widened the migration scope and required app-code changes to drop
+explicit `is_license_exempt` writes from the three capture surfaces;
+shipping the trigger is a small follow-up PR once the V1 capture flow has
+soaked.
+
+Convention going forward: do NOT add a new code path that writes
+`license_type` without also writing the mirrored `is_license_exempt` and
+clearing `license_type_review_needed`. Until the trigger lands, keep using
+the three-target pattern from `getWriteTargets` / the modal / the
+BusinessInfoPage save handler as the reference.
+
 ## Migrations folder is out of sync with production schema
 
 As of 2026-05-13, `supabase/migrations/` contains only:

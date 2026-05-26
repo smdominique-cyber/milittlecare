@@ -114,8 +114,20 @@ export function getActiveModules({ profile, fundingSources, isTrackedStaffCaregi
   ) {
     modules.add(MODULE_KEYS.STAFF_TRAINING)
   }
-  if (safeProfile.michigan_license_number) modules.add(MODULE_KEYS.LICENSED_COMPLIANCE)
-  if (safeProfile.is_license_exempt) modules.add(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)
+  // PR #14: license_type is the compliance source of truth (migration 022).
+  // The gates explicitly read license_type — NOT michigan_license_number or
+  // is_license_exempt — so LEPs (license_exempt) get no licensed-home
+  // compliance UI and a licensed provider with a blank license number still
+  // sees their modules. is_license_exempt remains a derived mirror written
+  // in lockstep at every capture surface; non-compliance gates above
+  // (miregistry_tracker, staff_training) continue keying on it without change.
+  if (safeProfile.license_type === 'family_home' ||
+      safeProfile.license_type === 'group_home') {
+    modules.add(MODULE_KEYS.LICENSED_COMPLIANCE)
+  }
+  if (safeProfile.license_type === 'license_exempt') {
+    modules.add(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)
+  }
   if (settings.cacfp === true) modules.add(MODULE_KEYS.CACFP)
 
   return modules

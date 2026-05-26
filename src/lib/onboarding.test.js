@@ -118,7 +118,7 @@ describe('getStepSequence (conditional branch)', () => {
   })
 
   it('routes a licensed provider through the license-number question', () => {
-    const seq = getStepSequence({ license_status: LICENSE_STATUS.LICENSED })
+    const seq = getStepSequence({ license_status: LICENSE_STATUS.FAMILY_HOME })
     expect(seq).toEqual([
       'license_status', 'license_number', 'cdc', 'tri_share',
       'gsrp', 'cacfp', 'child_count', 'care_hours',
@@ -128,7 +128,7 @@ describe('getStepSequence (conditional branch)', () => {
 
   it('is always 8 steps long', () => {
     expect(getStepSequence({ license_status: LICENSE_STATUS.EXEMPT })).toHaveLength(8)
-    expect(getStepSequence({ license_status: LICENSE_STATUS.LICENSED })).toHaveLength(8)
+    expect(getStepSequence({ license_status: LICENSE_STATUS.FAMILY_HOME })).toHaveLength(8)
     expect(getStepSequence({})).toHaveLength(8)
   })
 
@@ -150,7 +150,7 @@ describe('getNextStep', () => {
   })
 
   it('branches to license_number after a licensed answer', () => {
-    expect(getNextStep('license_status', { license_status: LICENSE_STATUS.LICENSED }))
+    expect(getNextStep('license_status', { license_status: LICENSE_STATUS.FAMILY_HOME }))
       .toBe('license_number')
   })
 
@@ -237,7 +237,7 @@ describe('isComplete', () => {
 
   it('checks the licensed branch (license_number, not miregistry_id)', () => {
     const licensed = {
-      license_status: LICENSE_STATUS.LICENSED,
+      license_status: LICENSE_STATUS.FAMILY_HOME,
       license_number: { license_number: 'DC-99' },
       cdc: YES_NO.NO,
       tri_share: TRI_SHARE_ANSWER.NO,
@@ -261,7 +261,7 @@ describe('isComplete', () => {
 
 describe('getMissingFields', () => {
   it('reports license_status plus the program questions for an empty profile', () => {
-    // is_license_exempt is null -> branch unknown -> no branch field.
+    // license_type is null -> branch unknown -> no branch field.
     expect(getMissingFields({})).toEqual([
       'license_status', 'cdc', 'tri_share', 'gsrp', 'cacfp',
       'child_count', 'care_hours',
@@ -269,34 +269,51 @@ describe('getMissingFields', () => {
   })
 
   it('reports miregistry_id for a license-exempt provider with no ID', () => {
-    const missing = getMissingFields({ is_license_exempt: true })
+    const missing = getMissingFields({ license_type: 'license_exempt' })
     expect(missing).toContain('miregistry_id')
     expect(missing).not.toContain('license_number')
     expect(missing).not.toContain('license_status')
   })
 
   it('does not report miregistry_id once the exempt provider has an ID', () => {
-    const missing = getMissingFields({ is_license_exempt: true, miregistry_id: 'MR-1' })
+    const missing = getMissingFields({ license_type: 'license_exempt', miregistry_id: 'MR-1' })
     expect(missing).not.toContain('miregistry_id')
   })
 
   it('reports license_number for a licensed provider with no number', () => {
-    const missing = getMissingFields({ is_license_exempt: false })
+    const missing = getMissingFields({ license_type: 'family_home' })
+    expect(missing).toContain('license_number')
+    expect(missing).not.toContain('miregistry_id')
+  })
+
+  it('reports license_number for a group_home provider with no number', () => {
+    const missing = getMissingFields({ license_type: 'group_home' })
     expect(missing).toContain('license_number')
     expect(missing).not.toContain('miregistry_id')
   })
 
   it('does not report license_number once the licensed provider has one', () => {
     const missing = getMissingFields({
-      is_license_exempt: false,
+      license_type: 'family_home',
       michigan_license_number: 'DC-99',
     })
     expect(missing).not.toContain('license_number')
   })
 
+  it('reports license_status when the row is flagged for review (PR #14 backfill case)', () => {
+    // license_type is set but the backfill could not confirm family vs group
+    // — re-prompt the human via license_status.
+    const missing = getMissingFields({
+      license_type: 'family_home',
+      license_type_review_needed: true,
+      michigan_license_number: 'DC-99',
+    })
+    expect(missing).toContain('license_status')
+  })
+
   it('drops program questions once program_settings carries a value', () => {
     const profile = {
-      is_license_exempt: true,
+      license_type: 'license_exempt',
       miregistry_id: 'MR-1',
       program_settings: {
         cdc: 'force_on',
@@ -312,7 +329,7 @@ describe('getMissingFields', () => {
 
   it('treats a present-but-false cacfp setting as not missing', () => {
     const missing = getMissingFields({
-      is_license_exempt: true,
+      license_type: 'license_exempt',
       miregistry_id: 'MR-1',
       program_settings: { cacfp: false },
     })
@@ -330,12 +347,21 @@ describe('getMissingFields', () => {
 // -----------------------------------------------------------------------------
 
 describe('getWriteTargets', () => {
-  it('maps license_status to the is_license_exempt boolean', () => {
+  it('maps license_status to license_type + mirrored is_license_exempt + cleared review_needed (PR #14)', () => {
     expect(getWriteTargets('license_status', LICENSE_STATUS.EXEMPT)).toEqual([
+      { store: 'profile', field: 'license_type', value: 'license_exempt' },
       { store: 'profile', field: 'is_license_exempt', value: true },
+      { store: 'profile', field: 'license_type_review_needed', value: false },
     ])
-    expect(getWriteTargets('license_status', LICENSE_STATUS.LICENSED)).toEqual([
+    expect(getWriteTargets('license_status', LICENSE_STATUS.FAMILY_HOME)).toEqual([
+      { store: 'profile', field: 'license_type', value: 'family_home' },
       { store: 'profile', field: 'is_license_exempt', value: false },
+      { store: 'profile', field: 'license_type_review_needed', value: false },
+    ])
+    expect(getWriteTargets('license_status', LICENSE_STATUS.GROUP_HOME)).toEqual([
+      { store: 'profile', field: 'license_type', value: 'group_home' },
+      { store: 'profile', field: 'is_license_exempt', value: false },
+      { store: 'profile', field: 'license_type_review_needed', value: false },
     ])
   })
 
@@ -445,24 +471,34 @@ describe('reconstructAnswers', () => {
   })
 
   it('reconstructs a license-exempt provider with a MiRegistry ID', () => {
-    expect(reconstructAnswers({ is_license_exempt: true, miregistry_id: 'MR-1' }))
+    expect(reconstructAnswers({ license_type: 'license_exempt', miregistry_id: 'MR-1' }))
       .toEqual({ license_status: LICENSE_STATUS.EXEMPT, miregistry_id: 'MR-1' })
   })
 
-  it('reconstructs a licensed provider with license and provider numbers', () => {
+  it('reconstructs a family_home provider with license and provider numbers', () => {
     expect(reconstructAnswers({
-      is_license_exempt: false,
+      license_type: 'family_home',
       michigan_license_number: 'DC-99',
       michigan_provider_id: 'PRV-7',
     })).toEqual({
-      license_status: LICENSE_STATUS.LICENSED,
+      license_status: LICENSE_STATUS.FAMILY_HOME,
       license_number: { license_number: 'DC-99', provider_id: 'PRV-7' },
+    })
+  })
+
+  it('reconstructs a group_home provider', () => {
+    expect(reconstructAnswers({
+      license_type: 'group_home',
+      michigan_license_number: 'DC-12345',
+    })).toEqual({
+      license_status: LICENSE_STATUS.GROUP_HOME,
+      license_number: { license_number: 'DC-12345' },
     })
   })
 
   it('reads the three participation gates from onboarding_state.gate_answers', () => {
     const answers = reconstructAnswers({
-      is_license_exempt: true,
+      license_type: 'license_exempt',
       program_settings: { cdc: 'force_on' },
       onboarding_state: {
         gate_answers: { cdc: 'yes', tri_share: 'never_heard', gsrp: 'no' },
@@ -547,13 +583,15 @@ describe('isDraftSubmittable', () => {
 describe('buildProfileUpdate', () => {
   const NOW = '2026-05-18T12:00:00.000Z'
 
-  it('writes a profile column and advances last_step for a non-gate answer', () => {
+  it('writes license_type + mirrored is_license_exempt + cleared review_needed for a license_status answer (PR #14)', () => {
     const { update } = buildProfileUpdate({
       profile: {},
-      event: { type: 'answer', stepKey: 'license_status', answer: LICENSE_STATUS.LICENSED },
+      event: { type: 'answer', stepKey: 'license_status', answer: LICENSE_STATUS.FAMILY_HOME },
       now: NOW,
     })
+    expect(update.license_type).toBe('family_home')
     expect(update.is_license_exempt).toBe(false)
+    expect(update.license_type_review_needed).toBe(false)
     expect(update.onboarding_state.version).toBe(1)
     expect(update.onboarding_state.last_step).toBe('license_number')
     expect(update.onboarding_state.completed_at).toBeNull()
@@ -592,7 +630,7 @@ describe('buildProfileUpdate', () => {
 
   it('stamps completed_at when an answer resolves the final step', () => {
     const { update } = buildProfileUpdate({
-      profile: { is_license_exempt: true },
+      profile: { license_type: 'license_exempt' },
       event: { type: 'answer', stepKey: 'care_hours', answer: 'under_20' },
       now: NOW,
     })
@@ -611,7 +649,7 @@ describe('buildProfileUpdate', () => {
 
   it('stamps completed_at when a skip resolves the final step', () => {
     const { update } = buildProfileUpdate({
-      profile: { is_license_exempt: true },
+      profile: { license_type: 'license_exempt' },
       event: { type: 'skip', stepKey: 'care_hours' },
       now: NOW,
     })
@@ -653,12 +691,14 @@ describe('buildProfileUpdate', () => {
 
   it('returns a nextProfile snapshot reflecting the update', () => {
     const { nextProfile } = buildProfileUpdate({
-      profile: { id: 'u1', is_license_exempt: null },
+      profile: { id: 'u1', license_type: null },
       event: { type: 'answer', stepKey: 'license_status', answer: LICENSE_STATUS.EXEMPT },
       now: NOW,
     })
     expect(nextProfile.id).toBe('u1')
+    expect(nextProfile.license_type).toBe('license_exempt')
     expect(nextProfile.is_license_exempt).toBe(true)
+    expect(nextProfile.license_type_review_needed).toBe(false)
     expect(nextProfile.onboarding_state.last_step).toBe('miregistry_id')
   })
 })
@@ -679,9 +719,9 @@ describe('getOnboardingProgress', () => {
   })
 
   it('counts resolved steps for a wizard in progress', () => {
-    // license_status answered, miregistry_id skipped — two steps resolved.
+    // license_status answered (via license_type), miregistry_id skipped — two steps resolved.
     const p = getOnboardingProgress({
-      is_license_exempt: true,
+      license_type: 'license_exempt',
       onboarding_state: { last_step: 'cdc', skipped: ['miregistry_id'] },
     })
     expect(p.started).toBe(true)
@@ -699,7 +739,7 @@ describe('getOnboardingProgress', () => {
 
   it('reports completed when completed_at is set', () => {
     const p = getOnboardingProgress({
-      is_license_exempt: true,
+      license_type: 'license_exempt',
       onboarding_state: { completed_at: '2026-05-18T00:00:00Z', skipped: [] },
     })
     expect(p.completed).toBe(true)
@@ -707,7 +747,7 @@ describe('getOnboardingProgress', () => {
 
   it('lists a skipped, still-empty field as outstanding', () => {
     const p = getOnboardingProgress({
-      is_license_exempt: true,
+      license_type: 'license_exempt',
       miregistry_id: null,
       onboarding_state: {
         completed_at: '2026-05-18T00:00:00Z',
@@ -721,7 +761,7 @@ describe('getOnboardingProgress', () => {
     // cdc answered "no" -> program_settings.cdc absent (looks "missing"),
     // but it is not in skipped[], so it is not an outstanding field.
     const p = getOnboardingProgress({
-      is_license_exempt: true,
+      license_type: 'license_exempt',
       miregistry_id: 'MR-1',
       onboarding_state: {
         completed_at: '2026-05-18T00:00:00Z',

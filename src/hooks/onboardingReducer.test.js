@@ -102,7 +102,7 @@ describe('ANSWER_SUCCESS', () => {
   it('follows the conditional branch when license_status is answered', () => {
     const licensed = onboardingReducer(
       { ...initialOnboardingState, status: STATUS.READY, currentStep: 'license_status' },
-      { type: 'ANSWER_SUCCESS', stepKey: 'license_status', answer: LICENSE_STATUS.LICENSED },
+      { type: 'ANSWER_SUCCESS', stepKey: 'license_status', answer: LICENSE_STATUS.FAMILY_HOME },
     )
     expect(licensed.currentStep).toBe('license_number')
 
@@ -171,7 +171,7 @@ describe('BACK', () => {
 
   it('crosses the conditional branch correctly', () => {
     // Licensed branch: the step before cdc is license_number, not miregistry_id.
-    const state = readyAt('cdc', { answers: { license_status: LICENSE_STATUS.LICENSED } })
+    const state = readyAt('cdc', { answers: { license_status: LICENSE_STATUS.FAMILY_HOME } })
     const next = onboardingReducer(state, { type: 'BACK' })
     expect(next.currentStep).toBe('license_number')
   })

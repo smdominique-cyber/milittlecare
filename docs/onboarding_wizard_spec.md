@@ -1,5 +1,25 @@
 # MILittleCare: Onboarding Wizard Spec
 
+> **PR #14 update (2026-05-25) — license-status question is now ternary.**
+> The Screen 1 `license_status` question shipped binary
+> (`license_exempt` / `licensed`) in PR #7. PR #14 expanded it to three
+> values matching `profiles.license_type` 1:1: **`family_home`**,
+> **`group_home`**, **`license_exempt`**. Mechanics:
+> - `LICENSE_STATUS` (in `src/lib/onboarding.js`) now has three keys:
+>   `FAMILY_HOME`, `GROUP_HOME`, `EXEMPT`. The `LICENSED` key was removed.
+> - `BRANCH_STEP_BY_STATUS` maps `family_home` and `group_home` to the
+>   `license_number` branch; `license_exempt` to the `miregistry_id` branch
+>   (unchanged route, three keys feeding it).
+> - `getWriteTargets('license_status', …)` now returns three profile
+>   targets per save: `license_type` (source of truth), `is_license_exempt`
+>   (mirrored derived value), and `license_type_review_needed = false`.
+> - `getMissingFields` and `reconstructAnswers` branch on `license_type`,
+>   not `is_license_exempt`.
+> The rest of this spec (steps 3–8, completion semantics, gate_answers
+> bookkeeping, etc.) is unchanged. The question prompts, why-strings, and
+> option help-text below describe the original binary copy; the in-product
+> ternary copy lives in `src/lib/onboarding.js` and `LicenseStatusPromptModal.jsx`.
+
 **Status:** Approved for PR #7. Decisions recorded in § 9 (spec review
 2026-05-17). Implementation in progress on `feature/onboarding-wizard`.
 **Goal:** Capture a provider's 9 **structural-identity** fields once, at

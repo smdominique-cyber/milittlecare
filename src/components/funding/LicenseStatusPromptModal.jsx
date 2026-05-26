@@ -8,9 +8,16 @@ import { Check } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 
-// One UI moment that captures profiles.is_license_exempt. Copy is reviewed
-// in docs/license_status_prompt_spec.md § 6. Fires from FundingSourceForm's
-// post-save path — see that file and § 3 of the spec.
+// One UI moment that captures profiles.license_type (the PR #14 compliance
+// source of truth, migration 022) and mirrors is_license_exempt for
+// backward compatibility. Copy is reviewed in
+// docs/license_status_prompt_spec.md § 6 and updated to ternary in PR #14.
+//
+// Fires from two places:
+//   1. FundingSourceForm post-save path — see shouldFireLicenseStatusPrompt
+//      in src/lib/licenseStatusPrompt.js and § 3 of the spec.
+//   2. The dashboard re-prompt on mount when license_type is null OR
+//      license_type_review_needed = true — see LicenseTypeReviewBanner.
 
 const CONFIRM_LICENSE_EXEMPT =
   'Got it. Refresh your browser to see the new MiRegistry entry in your ' +
@@ -18,15 +25,23 @@ const CONFIRM_LICENSE_EXEMPT =
   'December 16 deadline.'
 
 const CONFIRM_LICENSED =
-  'Got it — thanks. That helps us show you the right tools.'
+  'Got it — thanks. We’ll show you the licensed-home compliance tools ' +
+  '(drill log, medication log, child files, etc.) as they roll out.'
 
 const SAVE_ERROR_GENERIC =
   'Couldn’t save your answer. Try again, or email ' +
   'support@milittlecare.com if it keeps happening.'
 
+// The three answer values — match profiles.license_type 1:1 (migration 022).
+const CHOICE = Object.freeze({
+  FAMILY_HOME:    'family_home',
+  GROUP_HOME:     'group_home',
+  LICENSE_EXEMPT: 'license_exempt',
+})
+
 export default function LicenseStatusPromptModal({ onClose, onSaved }) {
   const { user } = useAuth()
-  const [choice, setChoice] = useState(null)      // 'license_exempt' | 'licensed'
+  const [choice, setChoice] = useState(null)      // CHOICE.* | null
   const [phase, setPhase] = useState('question')  // 'question' | 'confirmed'
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
@@ -40,13 +55,20 @@ export default function LicenseStatusPromptModal({ onClose, onSaved }) {
     setSaving(true)
     setSaveError(null)
     try {
-      const isLicenseExempt = choice === 'license_exempt'
+      // PR #14: write license_type (source of truth), mirror is_license_exempt
+      // so the ~10 legacy readers keep working, and clear the review flag
+      // since the human just confirmed.
+      const isLicenseExempt = choice === CHOICE.LICENSE_EXEMPT
       const { error } = await supabase
         .from('profiles')
-        .update({ is_license_exempt: isLicenseExempt })
+        .update({
+          license_type: choice,
+          is_license_exempt: isLicenseExempt,
+          license_type_review_needed: false,
+        })
         .eq('id', user.id)
       if (error) throw error
-      onSaved?.(isLicenseExempt)
+      onSaved?.({ licenseType: choice, isLicenseExempt })
       setPhase('confirmed')
     } catch (err) {
       console.error('LicenseStatusPromptModal: save failed', err)
@@ -63,7 +85,7 @@ export default function LicenseStatusPromptModal({ onClose, onSaved }) {
   // ── Confirmation phase ─────────────────────────────────────────────
   if (phase === 'confirmed') {
     const message =
-      choice === 'license_exempt' ? CONFIRM_LICENSE_EXEMPT : CONFIRM_LICENSED
+      choice === CHOICE.LICENSE_EXEMPT ? CONFIRM_LICENSE_EXEMPT : CONFIRM_LICENSED
     return (
       <div className="modal-overlay">
         <div
@@ -145,13 +167,53 @@ export default function LicenseStatusPromptModal({ onClose, onSaved }) {
           <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
             <legend style={visuallyHidden}>Which describes your child care?</legend>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <label style={radioOptionStyle(choice === 'license_exempt')}>
+              <label style={radioOptionStyle(choice === CHOICE.FAMILY_HOME)}>
                 <input
                   type="radio"
                   name={radioGroupId}
-                  value="license_exempt"
-                  checked={choice === 'license_exempt'}
-                  onChange={() => setChoice('license_exempt')}
+                  value={CHOICE.FAMILY_HOME}
+                  checked={choice === CHOICE.FAMILY_HOME}
+                  onChange={() => setChoice(CHOICE.FAMILY_HOME)}
+                  disabled={saving}
+                  style={{ marginTop: 3, flexShrink: 0 }}
+                />
+                <span>
+                  <strong>I hold a Michigan Family Child Care Home license</strong>{' '}
+                  <span style={parentheticalStyle}>(up to 6 children)</span>
+                  <span style={optionSubStyle}>
+                    Licensed by the State of Michigan. Family homes care for
+                    up to 6 children at a time.
+                  </span>
+                </span>
+              </label>
+
+              <label style={radioOptionStyle(choice === CHOICE.GROUP_HOME)}>
+                <input
+                  type="radio"
+                  name={radioGroupId}
+                  value={CHOICE.GROUP_HOME}
+                  checked={choice === CHOICE.GROUP_HOME}
+                  onChange={() => setChoice(CHOICE.GROUP_HOME)}
+                  disabled={saving}
+                  style={{ marginTop: 3, flexShrink: 0 }}
+                />
+                <span>
+                  <strong>I hold a Michigan Group Child Care Home license</strong>{' '}
+                  <span style={parentheticalStyle}>(up to 12 children)</span>
+                  <span style={optionSubStyle}>
+                    Licensed by the State of Michigan. Group homes care for
+                    up to 12 children at a time.
+                  </span>
+                </span>
+              </label>
+
+              <label style={radioOptionStyle(choice === CHOICE.LICENSE_EXEMPT)}>
+                <input
+                  type="radio"
+                  name={radioGroupId}
+                  value={CHOICE.LICENSE_EXEMPT}
+                  checked={choice === CHOICE.LICENSE_EXEMPT}
+                  onChange={() => setChoice(CHOICE.LICENSE_EXEMPT)}
                   disabled={saving}
                   style={{ marginTop: 3, flexShrink: 0 }}
                 />
@@ -164,27 +226,6 @@ export default function LicenseStatusPromptModal({ onClose, onSaved }) {
                   <span style={optionSubStyle}>
                     Not licensed by the State of Michigan. This is the most
                     common setup for in-home CDC providers.
-                  </span>
-                </span>
-              </label>
-
-              <label style={radioOptionStyle(choice === 'licensed')}>
-                <input
-                  type="radio"
-                  name={radioGroupId}
-                  value="licensed"
-                  checked={choice === 'licensed'}
-                  onChange={() => setChoice('licensed')}
-                  disabled={saving}
-                  style={{ marginTop: 3, flexShrink: 0 }}
-                />
-                <span>
-                  <strong>I hold a Michigan child care license from LARA</strong>{' '}
-                  <span style={parentheticalStyle}>
-                    (licensed provider — Family or Group Child Care Home)
-                  </span>
-                  <span style={optionSubStyle}>
-                    Most centers and some larger home programs are licensed.
                   </span>
                 </span>
               </label>

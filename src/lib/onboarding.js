@@ -37,9 +37,14 @@ export const ONBOARDING_STATE_VERSION = 1
 export const STEPS_PER_PROVIDER = 8
 
 // License-status answer values (wizard screen 1, the branch question).
+// PR #14 expanded this from binary to ternary: family/group home are now
+// distinct licensed branches, and the answer values match
+// profiles.license_type 1:1 (migration 022). EXEMPT stays at its
+// pre-PR-#14 string value 'license_exempt'.
 export const LICENSE_STATUS = Object.freeze({
+  FAMILY_HOME: 'family_home',
+  GROUP_HOME: 'group_home',
   EXEMPT: 'license_exempt',
-  LICENSED: 'licensed',
 })
 
 // Plain yes/no answer values (CDC, GSRP).
@@ -98,18 +103,26 @@ const RAW_CATALOG = [
       + 'for you — they are different for each.',
     options: [
       {
+        value: LICENSE_STATUS.FAMILY_HOME,
+        copyKey: 'onboarding.q.license_status.opt.family_home',
+        label: 'I hold a Michigan Family Child Care Home license (up to 6 children)',
+        help: 'Licensed by the State of Michigan. Family homes care for up '
+          + 'to 6 children at a time (R 400.1925 / R 400.1927).',
+      },
+      {
+        value: LICENSE_STATUS.GROUP_HOME,
+        copyKey: 'onboarding.q.license_status.opt.group_home',
+        label: 'I hold a Michigan Group Child Care Home license (up to 12 children)',
+        help: 'Licensed by the State of Michigan. Group homes care for up '
+          + 'to 12 children at a time (R 400.1925 / R 400.1928).',
+      },
+      {
         value: LICENSE_STATUS.EXEMPT,
         copyKey: 'onboarding.q.license_status.opt.exempt',
         label: 'I care for children I am related to or already know, '
           + 'registered with MDHHS',
         help: 'The most common setup for in-home providers. Not licensed '
           + 'by the State of Michigan.',
-      },
-      {
-        value: LICENSE_STATUS.LICENSED,
-        copyKey: 'onboarding.q.license_status.opt.licensed',
-        label: 'I hold a Michigan child care license',
-        help: 'A licensed Family or Group Child Care Home.',
       },
     ],
   },
@@ -293,9 +306,12 @@ const QUESTION_BY_KEY = Object.freeze(
 )
 
 // The branch step a provider sees at screen 2, by license-status answer.
+// Both licensed branches (family + group) route to the same license_number
+// question; only license-exempt routes to miregistry_id.
 const BRANCH_STEP_BY_STATUS = Object.freeze({
+  [LICENSE_STATUS.FAMILY_HOME]: 'license_number',
+  [LICENSE_STATUS.GROUP_HOME]: 'license_number',
   [LICENSE_STATUS.EXEMPT]: 'miregistry_id',
-  [LICENSE_STATUS.LICENSED]: 'license_number',
 })
 
 // -----------------------------------------------------------------------------
@@ -419,13 +435,20 @@ export function getMissingFields(profile = {}) {
   const p = profile || {}
   const settings = p.program_settings || {}
   const missing = []
-  const isExempt = p.is_license_exempt
+  // PR #14: branch on license_type (compliance source of truth, migration
+  // 022). A null license_type means the provider still owes the screen-1
+  // answer; license_type_review_needed=true means the backfill flagged the
+  // row (legacy is_license_exempt=false with no provider_type granularity
+  // → cannot tell family vs group). Both surface as a missing license_status.
+  const lt = p.license_type
+  const reviewNeeded = p.license_type_review_needed === true
 
-  if (isExempt === null || isExempt === undefined) {
+  if (lt == null || reviewNeeded) {
     missing.push('license_status')
-  } else if (isExempt === true) {
+  } else if (lt === 'license_exempt') {
     if (!p.miregistry_id) missing.push('miregistry_id')
   } else {
+    // 'family_home' or 'group_home'
     if (!p.michigan_license_number) missing.push('license_number')
   }
 
@@ -483,8 +506,17 @@ export function getWriteTargets(questionKey, answer) {
   if (answer === null || answer === undefined) return []
 
   switch (questionKey) {
-    case 'license_status':
-      return [profileTarget('is_license_exempt', answer === LICENSE_STATUS.EXEMPT)]
+    case 'license_status': {
+      // PR #14: write license_type (compliance source of truth, migration
+      // 022), mirror is_license_exempt for legacy readers, and clear
+      // review_needed since the human just confirmed the value.
+      const isExempt = answer === LICENSE_STATUS.EXEMPT
+      return [
+        profileTarget('license_type', answer),  // family_home | group_home | license_exempt
+        profileTarget('is_license_exempt', isExempt),
+        profileTarget('license_type_review_needed', false),
+      ]
+    }
 
     case 'miregistry_id':
       return [profileTarget('miregistry_id', String(answer))]
@@ -564,8 +596,12 @@ export function reconstructAnswers(profile = {}) {
   const gate = (p.onboarding_state && p.onboarding_state.gate_answers) || {}
   const answers = {}
 
-  if (p.is_license_exempt === true) answers.license_status = LICENSE_STATUS.EXEMPT
-  else if (p.is_license_exempt === false) answers.license_status = LICENSE_STATUS.LICENSED
+  // PR #14: reconstruct from license_type (compliance source of truth,
+  // migration 022). Legacy is_license_exempt-only rows have license_type=null
+  // and are surfaced as a missing license_status by getMissingFields.
+  if (p.license_type === LICENSE_STATUS.FAMILY_HOME) answers.license_status = LICENSE_STATUS.FAMILY_HOME
+  else if (p.license_type === LICENSE_STATUS.GROUP_HOME) answers.license_status = LICENSE_STATUS.GROUP_HOME
+  else if (p.license_type === LICENSE_STATUS.EXEMPT) answers.license_status = LICENSE_STATUS.EXEMPT
 
   if (p.miregistry_id) answers.miregistry_id = p.miregistry_id
 

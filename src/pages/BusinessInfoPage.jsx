@@ -154,7 +154,11 @@ export default function BusinessInfoPage() {
       supabase.from('business_hours').select('*').eq('user_id', user.id),
       supabase.from('closures').select('*').eq('user_id', user.id).order('start_date'),
       supabase.from('business_policies').select('*').eq('user_id', user.id).maybeSingle(),
-      supabase.from('profiles').select('is_license_exempt').eq('id', user.id).maybeSingle(),
+      // PR #14: license_type is the compliance source of truth (migration 022);
+      // is_license_exempt is the mirrored legacy column.
+      supabase.from('profiles')
+        .select('license_type, license_type_review_needed, is_license_exempt')
+        .eq('id', user.id).maybeSingle(),
     ])
 
     const hoursMap = {}
@@ -333,24 +337,35 @@ export default function BusinessInfoPage() {
   }
 
   // First profiles write on this page. Switching an already-set value
-  // shows a window.confirm spelling out the MiRegistry module consequence
-  // (docs/license_status_prompt_spec.md § 7); first-time set does not.
-  const saveLicenseStatus = async (isLicenseExempt) => {
-    const previous = profile?.is_license_exempt
-    const isSwitch =
-      (previous === true || previous === false) && previous !== isLicenseExempt
+  // shows a window.confirm spelling out the consequences (PR #14 ternary).
+  // PR #14: writes license_type (source of truth) + mirrors is_license_exempt
+  // + clears review_needed.
+  const saveLicenseStatus = async (licenseType) => {
+    const previous = profile?.license_type
+    const previousSet = previous === 'family_home' || previous === 'group_home' || previous === 'license_exempt'
+    const isSwitch = previousSet && previous !== licenseType
     if (isSwitch) {
-      const confirmMsg = previous === true
-        ? LICENSE_SWITCH_CONFIRM.exemptToLicensed
-        : LICENSE_SWITCH_CONFIRM.licensedToExempt
-      if (!window.confirm(confirmMsg)) return
+      // Two transitions need a heads-up: switching INTO license_exempt
+      // turns on MiRegistry; switching OUT OF license_exempt hides it.
+      // Family ↔ Group is a quiet rename.
+      const becomingExempt = licenseType === 'license_exempt'
+      const leavingExempt = previous === 'license_exempt' && licenseType !== 'license_exempt'
+      let confirmMsg = null
+      if (leavingExempt) confirmMsg = LICENSE_SWITCH_CONFIRM.exemptToLicensed
+      else if (becomingExempt) confirmMsg = LICENSE_SWITCH_CONFIRM.licensedToExempt
+      if (confirmMsg && !window.confirm(confirmMsg)) return
     }
     setSaving(true)
     setMessage(null)
     try {
+      const isLicenseExempt = licenseType === 'license_exempt'
       const { error } = await supabase
         .from('profiles')
-        .update({ is_license_exempt: isLicenseExempt })
+        .update({
+          license_type: licenseType,
+          is_license_exempt: isLicenseExempt,
+          license_type_review_needed: false,
+        })
         .eq('id', user.id)
       if (error) throw error
       setMessage({
@@ -384,12 +399,13 @@ export default function BusinessInfoPage() {
       id: 'licensing',
       label: 'Licensing',
       icon: ScrollText,
-      // "Done" once the provider has answered either way. Not `!== null`:
-      // during load `profile` is null and the value reads `undefined`,
-      // which `!== null` would wrongly mark done.
+      // "Done" once the provider has answered AND the backfill isn't
+      // flagging the row for human review (PR #14).
       done:
-        profile?.is_license_exempt === true ||
-        profile?.is_license_exempt === false,
+        (profile?.license_type === 'family_home' ||
+         profile?.license_type === 'group_home' ||
+         profile?.license_type === 'license_exempt') &&
+        profile?.license_type_review_needed !== true,
     },
   ]
 
@@ -841,7 +857,8 @@ export default function BusinessInfoPage() {
 
       {activeSection === 'licensing' && (
         <LicensingSection
-          currentValue={profile?.is_license_exempt ?? null}
+          currentValue={profile?.license_type ?? null}
+          reviewNeeded={profile?.license_type_review_needed === true}
           onSave={saveLicenseStatus}
           saving={saving}
         />
@@ -1046,7 +1063,13 @@ function ClosureItem({ closure, onDelete, recurring, muted }) {
 }
 
 // -----------------------------------------------------------------------------
-// Licensing tab — license-status control (profiles.is_license_exempt)
+// Licensing tab — license_type control (profiles.license_type, PR #14 / mig 022)
+//
+// PR #14 renamed this section header from the misleading "Provider Type"
+// (which was easily confused with the unrelated profiles.provider_type CDC-
+// billing column) to "License Type" — the compliance source of truth.
+// Writes go through saveLicenseStatus, which mirrors is_license_exempt and
+// clears license_type_review_needed alongside the license_type write.
 // -----------------------------------------------------------------------------
 
 const LICENSE_SWITCH_CONFIRM = {
@@ -1060,25 +1083,53 @@ const LICENSE_SWITCH_CONFIRM = {
     'you’ll find it in the Compliance section of your sidebar. Continue?',
 }
 
-// Presentational — mirrors the ClosuresSection pattern (data + handlers in
-// as props). Copy is intentionally identical to LicenseStatusPromptModal so
-// the provider sees the same wording on both surfaces.
-function LicensingSection({ currentValue, onSave, saving }) {
-  // currentValue: true (license-exempt) | false (licensed) | null (unanswered)
+// The three answer values — match profiles.license_type 1:1 (migration 022).
+const LT_CHOICE = Object.freeze({
+  FAMILY_HOME:    'family_home',
+  GROUP_HOME:     'group_home',
+  LICENSE_EXEMPT: 'license_exempt',
+})
+
+// Presentational — copy intentionally identical to LicenseStatusPromptModal
+// so the provider sees the same wording on both surfaces.
+function LicensingSection({ currentValue, reviewNeeded, onSave, saving }) {
+  // currentValue: 'family_home' | 'group_home' | 'license_exempt' | null
   const [choice, setChoice] = useState(currentValue)
 
-  const answered = choice === true || choice === false
+  const answered =
+    choice === LT_CHOICE.FAMILY_HOME ||
+    choice === LT_CHOICE.GROUP_HOME ||
+    choice === LT_CHOICE.LICENSE_EXEMPT
   const dirty = choice !== currentValue
 
   return (
     <div className="bi-section">
       <div className="bi-section-header">
-        <h3>Provider Type</h3>
+        <h3>License Type</h3>
         <p>
-          Whether you’re license-exempt or licensed shapes which Michigan
-          compliance tools MILittleCare shows you. Update this here if your
-          status ever changes.
+          Whether you’re a Family Home, Group Home, or license-exempt
+          provider shapes which Michigan compliance tools MILittleCare shows
+          you. Update this here if your status ever changes.
         </p>
+        {reviewNeeded && (
+          <div
+            role="alert"
+            style={{
+              marginTop: 10,
+              padding: '8px 12px',
+              background: 'var(--clr-warn-pale, #fdf3d8)',
+              border: '1px solid var(--clr-warn-mid, #e8d196)',
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--clr-warn-ink, #8a6a1a)',
+              fontSize: '0.875rem',
+              lineHeight: 1.5,
+            }}
+          >
+            <strong>Please confirm your license type.</strong> We weren’t
+            able to determine Family vs Group Home from your existing data —
+            pick the one that applies and save.
+          </div>
+        )}
       </div>
 
       <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
@@ -1093,12 +1144,48 @@ function LicensingSection({ currentValue, onSave, saving }) {
           Which describes your child care?
         </legend>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <label style={licenseRadioStyle(choice === true)}>
+          <label style={licenseRadioStyle(choice === LT_CHOICE.FAMILY_HOME)}>
             <input
               type="radio"
-              name="license_status"
-              checked={choice === true}
-              onChange={() => setChoice(true)}
+              name="license_type"
+              checked={choice === LT_CHOICE.FAMILY_HOME}
+              onChange={() => setChoice(LT_CHOICE.FAMILY_HOME)}
+              disabled={saving}
+              style={{ marginTop: 3, flexShrink: 0 }}
+            />
+            <span>
+              <strong>I hold a Michigan Family Child Care Home license</strong>{' '}
+              <span style={licenseParenStyle}>(up to 6 children)</span>
+              <span style={licenseSubStyle}>
+                Licensed by the State of Michigan. Family homes care for up
+                to 6 children at a time.
+              </span>
+            </span>
+          </label>
+          <label style={licenseRadioStyle(choice === LT_CHOICE.GROUP_HOME)}>
+            <input
+              type="radio"
+              name="license_type"
+              checked={choice === LT_CHOICE.GROUP_HOME}
+              onChange={() => setChoice(LT_CHOICE.GROUP_HOME)}
+              disabled={saving}
+              style={{ marginTop: 3, flexShrink: 0 }}
+            />
+            <span>
+              <strong>I hold a Michigan Group Child Care Home license</strong>{' '}
+              <span style={licenseParenStyle}>(up to 12 children)</span>
+              <span style={licenseSubStyle}>
+                Licensed by the State of Michigan. Group homes care for up
+                to 12 children at a time.
+              </span>
+            </span>
+          </label>
+          <label style={licenseRadioStyle(choice === LT_CHOICE.LICENSE_EXEMPT)}>
+            <input
+              type="radio"
+              name="license_type"
+              checked={choice === LT_CHOICE.LICENSE_EXEMPT}
+              onChange={() => setChoice(LT_CHOICE.LICENSE_EXEMPT)}
               disabled={saving}
               style={{ marginTop: 3, flexShrink: 0 }}
             />
@@ -1114,25 +1201,6 @@ function LicensingSection({ currentValue, onSave, saving }) {
               </span>
             </span>
           </label>
-          <label style={licenseRadioStyle(choice === false)}>
-            <input
-              type="radio"
-              name="license_status"
-              checked={choice === false}
-              onChange={() => setChoice(false)}
-              disabled={saving}
-              style={{ marginTop: 3, flexShrink: 0 }}
-            />
-            <span>
-              <strong>I hold a Michigan child care license from LARA</strong>{' '}
-              <span style={licenseParenStyle}>
-                (licensed provider — Family or Group Child Care Home)
-              </span>
-              <span style={licenseSubStyle}>
-                Most centers and some larger home programs are licensed.
-              </span>
-            </span>
-          </label>
         </div>
       </fieldset>
 
@@ -1141,7 +1209,7 @@ function LicensingSection({ currentValue, onSave, saving }) {
         onClick={() => onSave(choice)}
         disabled={!answered || !dirty || saving}
       >
-        <Save size={14} /> {saving ? 'Saving…' : 'Save provider type'}
+        <Save size={14} /> {saving ? 'Saving…' : 'Save license type'}
       </button>
     </div>
   )

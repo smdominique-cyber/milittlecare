@@ -235,20 +235,50 @@ describe('getActiveModules', () => {
       expect(modules.has(MODULE_KEYS.AGENCY_BILLING)).toBe(true)
     })
 
-    it('michigan_license_number activates licensed_compliance', () => {
+    // PR #14: compliance gates read license_type (migration 022), not the
+    // legacy michigan_license_number / is_license_exempt signals.
+    it('license_type=family_home activates LICENSED_COMPLIANCE', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, license_type: 'family_home' },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.LICENSED_COMPLIANCE)).toBe(true)
+      expect(modules.has(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)).toBe(false)
+    })
+
+    it('license_type=group_home activates LICENSED_COMPLIANCE', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, license_type: 'group_home' },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.LICENSED_COMPLIANCE)).toBe(true)
+      expect(modules.has(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)).toBe(false)
+    })
+
+    it('license_type=license_exempt activates LICENSE_EXEMPT_COMPLIANCE (and NOT LICENSED_COMPLIANCE)', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, license_type: 'license_exempt' },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)).toBe(true)
+      expect(modules.has(MODULE_KEYS.LICENSED_COMPLIANCE)).toBe(false)
+    })
+
+    it('license_type null activates neither compliance gate', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, license_type: null },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.LICENSED_COMPLIANCE)).toBe(false)
+      expect(modules.has(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)).toBe(false)
+    })
+
+    it('michigan_license_number alone (no license_type) does NOT activate LICENSED_COMPLIANCE — PR #14 dropped that trigger', () => {
       const modules = getActiveModules({
         profile: { program_settings: {}, michigan_license_number: 'DC-1234' },
         fundingSources: [],
       })
-      expect(modules.has(MODULE_KEYS.LICENSED_COMPLIANCE)).toBe(true)
-    })
-
-    it('is_license_exempt activates license_exempt_compliance', () => {
-      const modules = getActiveModules({
-        profile: { program_settings: {}, is_license_exempt: true },
-        fundingSources: [],
-      })
-      expect(modules.has(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)).toBe(true)
+      expect(modules.has(MODULE_KEYS.LICENSED_COMPLIANCE)).toBe(false)
     })
 
     it('program_settings.cacfp=true activates the CACFP module', () => {

@@ -12,6 +12,7 @@ import TodayWidget from '@/components/dashboard/TodayWidget'
 import StaffClockWidget from '@/components/dashboard/StaffClockWidget'
 import InstallBanner from '@/components/ui/InstallBanner'
 import AnnualTrainingBanner from '@/components/dashboard/AnnualTrainingBanner'
+import LicenseTypeReviewBanner from '@/components/dashboard/LicenseTypeReviewBanner'
 import OnboardingCompletionCard from '@/components/onboarding/OnboardingCompletionCard'
 import OnboardingNextStepPrompt from '@/components/onboarding/OnboardingNextStepPrompt'
 import { useOnboardingStatus } from '@/hooks/useOnboardingStatus'
@@ -201,6 +202,13 @@ export default function DashboardPage() {
     <AnnualTrainingBanner userId={user.id} />
   ) : null
 
+  // PR #14 license-type review banner — self-gates on license_type being
+  // null OR license_type_review_needed=true; auto-opens the ternary
+  // LicenseStatusPromptModal so the answer can be captured in one motion.
+  const licenseTypeReviewBanner = isLicensee && user?.id ? (
+    <LicenseTypeReviewBanner userId={user.id} />
+  ) : null
+
   if (loading) {
     return (
       <div style={{ padding: 'var(--space-12)', textAlign: 'center' }}>
@@ -215,6 +223,7 @@ export default function DashboardPage() {
       <>
         <InstallBanner />
         {onboardingBanner}
+        {licenseTypeReviewBanner}
         {annualTrainingBanner}
         {staffMembership && (
           <StaffClockWidget userId={user.id} membership={staffMembership} />
@@ -288,6 +297,7 @@ export default function DashboardPage() {
     <>
       <InstallBanner />
       {onboardingBanner}
+      {licenseTypeReviewBanner}
       {annualTrainingBanner}
       {staffMembership && (
         <StaffClockWidget userId={user.id} membership={staffMembership} />

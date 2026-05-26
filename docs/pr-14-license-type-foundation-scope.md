@@ -1,5 +1,11 @@
 # PR #14 — License-Type Foundation: Implementation Scope (2026-05-24)
 
+**Implemented in PR #14 (2026-05-25)** on branch `feature/pr-14-license-type-foundation`
+— migration 022 (`license_type` + `license_type_review_needed` + backfill),
+modules.js gate rewrite, ternary capture (modal + BusinessInfoPage +
+onboarding wizard), and the dashboard review banner. See the PR commit for
+the file inventory.
+
 **Scoping pass only. No code was changed, no branch created, no migration
 run.** This document is the spec for a follow-on implementation pass.
 

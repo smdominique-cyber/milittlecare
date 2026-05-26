@@ -44,7 +44,7 @@ export function useActiveModules() {
       const [profileResp, sourcesResp, caregiverResp] = await Promise.all([
         supabase
           .from('profiles')
-          .select('program_settings, miregistry_id, michigan_license_number, is_license_exempt')
+          .select('program_settings, miregistry_id, michigan_license_number, is_license_exempt, license_type, license_type_review_needed')
           .eq('id', user.id)
           .maybeSingle(),
         // Server-side filter mirrors getActiveModules's own filter; keeping
