@@ -1,15 +1,23 @@
 # PR #15 — Opt-in Reminder System: Implementation Scope (2026-05-26)
 
 **Scoping pass only. No code was changed, no branch created, no migration
-run.** This document is the spec for a follow-on implementation pass.
+run.** Open questions resolved 2026-05-26 review; doc reads as
+authoritative.
 
 **Source decisions** (from
 `docs/licensed-home-compliance-decisions-2026-05-23.md` §§ OQ4 + Updated
 PR sequence): build the opt-in reminder system as a foundation PR
 **before** the six compliance category PRs (#16–#21). Channels: in-app
-banners + email (Vercel Pro upgrade removes the 2-cron cap). All reminders
-opt-in per category, all defaults OFF, configurable lead time, per-channel
-selection (in-app only / email only / both).
+banners **and** email — **both are V1 scope** (post-review decision; not
+a follow-up). All reminders opt-in per category, all defaults OFF,
+configurable lead time, per-channel selection (in-app only / email only /
+both).
+
+**Vercel Pro is assumed active** by the implementation pass. PR #15 ships
+two cron entries in the same deploy: **re-enables**
+`/api/cron-send-acknowledgment-digest` (disabled in `vercel.json` per
+`docs/tech_debt.md` 2026-05-22) and **adds**
+`/api/cron-dispatch-reminders`. Total Vercel cron count post-deploy = 4.
 
 **Cross-PR constraint A (general-purpose):** the reminder system must
 serve **arbitrary** reminder types — not just licensed-home compliance.
@@ -272,27 +280,52 @@ optional `subject_type` if reminders are always bound to a subject.
 
 ```js
 export const REMINDER_CATEGORIES = Object.freeze({
-  // Licensed-home compliance categories (PR #18–#21 consumers):
-  drill_fire:                  { /* R 400.1939, quarterly */ },
-  drill_tornado:               { /* R 400.1939, 2× March–Nov */ },
-  drill_other:                 { /* R 400.1939, annual */ },
-  cpr_first_aid_expiration:    { /* R 400.1920(3), per-caregiver */ },
-  physician_attestation:       { /* R 400.1933, annual per-caregiver */ },
-  medication_authorization:    { /* R 400.1931, per-authorization scheduled doses */ },
-  radon_test:                  { /* R 400.1915, 4-year recurring */ },
-  heating_inspection:          { /* R 400.1945, 4-year recurring */ },
-  child_annual_review:         { /* R 400.1907, per-child annual */ },
+  // ── PR #16 — Child files (R 400.1907) ──────────────────────────────
+  child_annual_review:              { /* per-child annual records review */ },
 
-  // LEP / CDC categories (existing surfaces this PR optionally migrates):
-  miregistry_annual_training:  { /* R 400.1924 / Dec 16, LEP only */ },
-  fingerprint_reprint:         { /* LEP-Unrelated, 5-yr */ },
+  // ── PR #17 — Discipline policy (R 400.1942) ────────────────────────
+  staff_discipline_policy_ack_pending: { /* per-caregiver, fires when a new
+                                            hire has no discipline-policy ack
+                                            on file */ },
 
-  // Future non-compliance categories (placeholders documented here so the
-  // schema design is validated; not implemented in PR #15):
-  // cdc_redetermination:      { /* post-July; see docs/redetermination-ownership-spec.md */ },
-  // billing_overdue:          { /* "remember to bill" — provider feedback */ },
+  // ── PR #18 — Staff files (R 400.1920, R 400.1933) ──────────────────
+  cpr_first_aid_expiration:         { /* per-caregiver, cert expiry */ },
+  physician_attestation_expiration: { /* per-caregiver, annual */ },
+
+  // ── PR #19 — Drills (R 400.1939) ───────────────────────────────────
+  drill_fire:                       { /* every 3 months from last_completed_on */ },
+  drill_tornado:                    { /* 2× annually in March–November */ },
+  drill_other:                      { /* annual catch-all: lockdown,
+                                          shelter-in-place, reunification */ },
+
+  // ── PR #20 — Medication (R 400.1931) ───────────────────────────────
+  medication_authorization_renewal: { /* per-authorization, fires near
+                                          ends_on or on schedule change */ },
+
+  // ── PR #21 — Property records (R 400.1915, R 400.1945, R 400.1948) ─
+  radon_test_due:                   { /* 4-year recurring per radon test */ },
+  heating_inspection_due:           { /* 4-year recurring per inspection */ },
+  detector_check_overdue:           { /* annual default; smoke + CO detectors */ },
+
+  // ── LEP / CDC categories (existing surfaces this PR optionally migrates):
+  miregistry_annual_training:       { /* R 400.1924 / Dec 16, LEP only */ },
+  fingerprint_reprint:              { /* LEP-Unrelated, 5-yr */ },
+
+  // ── Future non-compliance categories (placeholders documented so the
+  //    schema design is validated; not implemented in PR #15):
+  // cdc_redetermination:           { /* post-July; "parent responsibility"
+  //                                     ack + escalating reminder series */ },
+  // billing_overdue:               { /* "remember to bill" — provider feedback */ },
 })
 ```
+
+Each entry carries: `key`, `label`, `description`,
+`default_lead_time_days`, `license_type_gating` (the `license_type`
+values that activate the category), `subject_type` (when always bound),
+and an optional `severity_thresholds` override. Names above match
+exactly the strings other scope docs reference; do not rename without
+updating the consumers (`docs/pr-17-…`, `docs/pr-18-…`, `docs/pr-19-…`,
+`docs/pr-20-…`, `docs/pr-21-…`).
 
 This catalog is what `useReminderPreferences` and the settings UI
 enumerate; the dispatcher cron does not consult it directly (it reads
@@ -312,6 +345,36 @@ Generalizes `cdcProviderCompliance.js`'s severity ladder so any
 category's banner gets the same `info/warning/urgent/critical/expired`
 treatment without re-deriving thresholds. Per-category override is via
 the `REMINDER_CATEGORIES` entry's optional `severity_thresholds` field.
+
+#### B.3a Audit-state helper (`getReminderSystemAuditState()`, new — cross-cutting requirement)
+
+Per the post-review **audit-state mandate**: every domain PR exposes a
+`getXxxAuditState(licensee_id)` pure helper returning a structured
+signal-object consumed by the future PR #22 (Compliance Health Score).
+For PR #15 the helper lives in `src/lib/reminderSystem.js` and returns:
+
+```js
+// Signature (illustrative).
+export async function getReminderSystemAuditState(licenseeId) {
+  return {
+    domain: 'reminder_system',
+    type: 'type_2',                    // MILittleCare-owned (vs PR #18 type_1
+                                        // mirror data). Documented in
+                                        // CLAUDE.md per the audit-state mandate.
+    preferences_configured_count: 0,    // distinct categories the provider
+                                        // enabled
+    pending_instances_count: 0,         // active reminder_instances rows
+    overdue_instances_count: 0,         // pending AND trigger_at < now
+    last_dispatch_at: null,             // most recent notification_log
+                                        // entry for change_type LIKE 'reminder_%'
+    email_channel_enabled: true,        // derived from any preference with
+                                        // channel IN ('email','both')
+  }
+}
+```
+
+The helper is read-only, single round-trip, and exists from V1 of PR #15
+so PR #22 can compose all seven domain helpers without retrofit.
 
 #### B.4 `useReminderPreferences` hook (`src/hooks/useReminderPreferences.js`, new)
 
@@ -437,10 +500,9 @@ nav entry: `Settings → Reminders`.
 
 ### G. Rollout
 
-1. **Pre-flight:** confirm Vercel Pro is active (per OQ4); the cron-cap
-   block is the only environmental blocker. Re-add the disabled
+1. **Pre-flight:** Vercel Pro is assumed active. Re-add the disabled
    `cron-send-acknowledgment-digest` schedule entry to `vercel.json`
-   alongside the new `cron-dispatch-reminders` entry.
+   alongside the new `cron-dispatch-reminders` entry in the same deploy.
 2. Apply migration 023; verify columns + indexes + RLS via dashboard
    screenshot per CLAUDE.md.
 3. Deploy app; the new settings page is live, all categories default off,
@@ -450,41 +512,42 @@ nav entry: `Settings → Reminders`.
 
 ---
 
-## Step 4 — Open questions
+## Step 4 — Open questions (RESOLVED 2026-05-26 review)
 
 1. **In-app banner dismissal semantics — until next tick, or permanent?**
-   Recommend "until next tick" (the dispatcher writes a new instance the
-   next time `trigger_at <= now()` for a recurring schedule; for one-shot
-   reminders, `resolved_at` should be set when the underlying deadline is
-   satisfied — done by the category-specific code, not by the banner).
-   *Defaulting to per-tick redisplay.*
+   **RESOLVED — "until next tick" for recurring categories; "until
+   resolved" for one-shot.** For recurring (drills, radon, heating), the
+   dispatcher writes a new `reminder_instances` row on the next cadence
+   tick and the banner reappears. For one-shot (a specific
+   medication-authorization renewal, a child's first annual review),
+   `resolved_at` is set when the underlying deadline is satisfied
+   (category-specific code, NOT the banner). Dismissing a one-shot
+   banner suppresses display until `resolved_at` is set — at which point
+   the banner disappears permanently.
 
-2. **Per-recipient or provider-only?** The schema has `provider_id` but
-   no per-recipient targeting (e.g. send the CPR-expiration reminder to
-   the *caregiver* whose cert is expiring, not just the licensee).
-   Recommend **provider-only for V1**; add `recipient_user_id` later when
-   the staff-self-clock and staff-self-MiRegistry flows demand it. Flag
-   for owner.
+2. **Per-recipient or provider-only?** **RESOLVED — provider-only for
+   V1.** Schema carries `provider_id` only. `recipient_user_id` is
+   **deferred** to a future PR (staff-self-clock + staff-self-MiRegistry
+   flows will be its first consumers). No schema change in PR #15.
 
-3. **`subject_type` enumeration — pre-declare in CHECK, or stay free-text?**
-   Recommend free text (matches the `category` decision and constraint A);
-   the application owns the catalog. Documentation in
-   `src/lib/reminderCategories.js` enumerates the valid subject_types per
-   category.
+3. **`subject_type` enumeration — pre-declare in CHECK, or stay
+   free-text?** **RESOLVED — defer to Claude Code at implementation
+   time.** The implementation pass picks the shape that fits best given
+   the up-to-the-minute set of consumers; both shapes are acceptable per
+   constraint A. Document the choice in the migration header.
 
 4. **Replacing legacy banners (`AnnualTrainingBanner`,
-   `LicenseTypeReviewBanner`) in this PR or a follow-up?** Recommend
-   follow-up to keep PR #15 focused. Banner-host is the V1 deliverable
-   alongside the existing ones; consolidation is a small later PR once
-   the host has soaked.
+   `LicenseTypeReviewBanner`, `MiRegistryWarningBanner`) in this PR or a
+   follow-up?** **RESOLVED — follow-up PR.** V1 keeps the bespoke
+   banners stacked alongside the new host. Consolidation is a separate
+   small later PR once the host has soaked.
 
 5. **Customer-research and redetermination-ownership spec docs are
-   referenced but absent.** `CLAUDE.md` § Critical Domain Knowledge and
-   `docs/backlog.md` both reference `docs/customer-research-2026-05-23.md`
-   and `docs/redetermination-ownership-spec.md`, but neither file exists
-   in the repo. Flag for owner — PR #15's design accommodates the future
-   redetermination use case based on the prompt's verbal description, but
-   the missing docs are a doc-discipline gap.
+   referenced but absent.** **RESOLVED — leave as dead references for
+   now.** PR #15's design accommodates the future CDC-redetermination
+   use case based on verbal description in the bulk-scoping prompt and
+   `CLAUDE.md` § Critical Domain Knowledge. Authoring those docs is
+   tracked separately; not a blocker for PR #15.
 
 ---
 
@@ -502,17 +565,20 @@ The DB design is the load-bearing decision, not the code.
 
 ## Step 6 — Out of scope (future PRs)
 
-- **Per-recipient targeting** (recipient_user_id) — see OQ #2.
+- **Per-recipient targeting** (`recipient_user_id`) — OQ #2 resolved
+  to deferred.
 - **Replacement of `AnnualTrainingBanner` / `LicenseTypeReviewBanner` /
-  `MiRegistryWarningBanner`** with the new host — a small later PR.
-- **CDC redetermination reminders** (post-July, per backlog).
+  `MiRegistryWarningBanner`** with the new host — OQ #4 resolved to
+  follow-up PR.
+- **CDC redetermination reminders** (post-July, per backlog). The PR #15
+  schema accommodates without change.
 - **"Remember to bill" reminders** (post-July).
-- **SMS channel** — out of scope; email + in-app only for V1.
+- **SMS channel** — V1 ships in-app + email only.
 - **Reminder snoozing UX** (a dropdown to push a single instance by N
   days) — deferred to a follow-up.
 - **Reminder digest / consolidation** (one email summarizing N pending) —
   PR #12's ack-digest pattern is the template if/when needed; not in V1.
-- **`src/lib/dates.js` extraction** — standing tech-debt; will be touched
+- **`src/lib/dates.js` extraction** — standing tech-debt; touched
   *but not introduced* by this PR.
 
 ---
@@ -523,7 +589,8 @@ The DB design is the load-bearing decision, not the code.
   gates use it.
 - **PR #13 (children.archived_at) — soft dependency.** Not directly
   needed by this PR, but the convention applies to the new tables.
-- Vercel Pro upgrade (operational, not a PR) — REQUIRED for email channel.
+- **Vercel Pro — ASSUMED ACTIVE** (operational, not a PR). Per the
+  2026-05-26 review decisions; email channel ships in V1.
 
 ---
 
