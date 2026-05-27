@@ -1,7 +1,11 @@
 # PR #18 — Staff File Gaps (Rules 3, 6, 19, 20, 22, 33): Implementation Scope (2026-05-26)
 
 **Scoping pass only. No code was changed, no branch created, no migration
-run.** This document is the spec for a follow-on implementation pass.
+run.** Open questions resolved 2026-05-26 review; doc reads as
+authoritative. **Production introspection of `staff_time_entries`
+complete:** column shape today is `staff_user_id uuid NOT NULL` with no
+`caregiver_id` column — the XOR pattern in § A.3 is required to make
+non-app-user clock entries possible.
 
 **Source decisions** (from
 `docs/licensed-home-compliance-decisions-2026-05-23.md` §§ OQ8 + Updated
@@ -134,16 +138,20 @@ established this contract; PR #18 inherits it.
 
 #### A.1 Add `physician_attestation` to `staff_training_category`
 
+Per OQ1 resolution: **run normally**; the fallback two-migration
+sequence applies **only if it fails at apply time** (it shouldn't on
+modern Supabase Postgres).
+
 ```sql
--- staff_training_category is a Postgres ENUM (migration 012). ALTER TYPE ADD VALUE
--- cannot run inside a transaction in older Postgres versions; verify the deployed
--- version supports it (Supabase Postgres ≥12 does, with caveats).
+-- staff_training_category is a Postgres ENUM (migration 012). Supabase
+-- Postgres supports ALTER TYPE ADD VALUE inside a transaction; we
+-- proceed on that basis.
 alter type public.staff_training_category add value if not exists 'physician_attestation';
 ```
 
-If transactional ALTER TYPE proves a problem at apply time (it can in
-edge cases), the fallback is a two-migration sequence: a no-op
-"reserve the name" patch first, then the consuming code.
+Fallback (if apply fails): a no-op "reserve the name" patch first, then
+the consuming code in a separate apply. Treat this as a contingency,
+not the plan.
 
 #### A.2 Add `check_type` to `staff_training_records` (registry discriminator)
 
@@ -157,18 +165,48 @@ alter table public.staff_training_records
 -- The existing `background_check_status` column stays as-is.
 ```
 
-Backfill: existing `background_check_eligibility` rows get
-`check_type = 'ccbc'` (most plausible default for what providers have
-been recording — confirm per-row via screenshot before applying).
+**Backfill — automatic** per OQ2 resolution. Existing
+`background_check_eligibility` rows get `check_type = 'ccbc'` as the
+default. The migration includes a **pre-UPDATE `SELECT` count** so the
+provider's screenshot captures how many rows the backfill touched:
+
+```sql
+begin;
+
+-- Audit signal: how many rows are about to be backfilled?
+select count(*) as rows_to_backfill
+from public.staff_training_records
+where category = 'background_check_eligibility'
+  and check_type is null
+  and archived_at is null;
+
+update public.staff_training_records
+   set check_type = 'ccbc'
+ where category = 'background_check_eligibility'
+   and check_type is null
+   and archived_at is null;
+
+-- Post-UPDATE check (informational): per-type counts.
+select check_type, count(*)
+  from public.staff_training_records
+ where category = 'background_check_eligibility'
+ group by check_type;
+
+commit;
+```
+
+A licensee who needs to re-categorize a row as `sex_offender_registry`
+can do so via the matrix UI; no migration re-run required.
 
 #### A.3 Extend `staff_time_entries` for non-app-user caregivers
 
-`staff_time_entries` is production-only (no migration file). Production
-introspection required first per CLAUDE.md / PR #17 § Pre-implementation
-convention.
+`staff_time_entries` is production-only (no migration file).
+**Production introspection complete 2026-05-26:** today's shape is
+`staff_user_id uuid NOT NULL` with no `caregiver_id`. The XOR pattern
+below is required and correct.
 
 ```sql
--- Assumes staff_user_id is currently NOT NULL on staff_time_entries.
+-- Today's column: staff_user_id uuid NOT NULL. Drop NOT NULL, add caregiver_id.
 alter table public.staff_time_entries
   alter column staff_user_id drop not null,
   add column if not exists caregiver_id uuid
@@ -204,13 +242,13 @@ Add `'physician_attestation'` with label "Physician attestation
 (annual)". Default `expires_on` for this category = `completed_on + 1
 year`.
 
-#### B.2 Caregiver clock surface
+#### B.2 Caregiver clock surface (on `/staff`, per OQ3)
 
-A new sub-tab on `StaffPage` (or a new mini-page
-`/staff/clock-log`): the licensee picks a non-app-user caregiver from
-their roster, enters clock_in / clock_out times (today or backdated),
-and the row is written with `caregiver_id` and
-`entered_by = auth.uid()`.
+A new sub-tab on `StaffPage` (`/staff`): the licensee picks a non-app-user
+caregiver from their roster, enters clock_in / clock_out times (today
+or backdated), and the row is written with `caregiver_id` and
+`entered_by = auth.uid()`. **Not** on `/staff-training` — the training
+matrix carries a presence indicator only, not the detailed log.
 
 The existing `StaffClockWidget` (dashboard) for app-user staff is
 unchanged.
@@ -241,11 +279,81 @@ index on `reminder_instances`.
 #### B.5 Pure helpers (`src/lib/staffTraining.js` extensions)
 
 - `getPhysicianAttestationState(record, today)` → matches the existing
-  `getCprFirstAidState` shape; returns severity ladder.
+  `getCprFirstAidState` shape; returns severity ladder. **Per OQ4 the
+  attestation is per-personnel including the licensee themselves**
+  (PR #8 already models the licensee as a caregiver row via
+  `regulatory_role = 'licensee'`).
 - `splitBackgroundChecksByType(records)` → returns
   `{ ccbc: [...], sex_offender_registry: [...] }`.
 - `getCaregiverClockPresence(entries, days = 30)` → returns
   `{ hasRecentEntries, lastEntryDate }` for the matrix indicator.
+
+#### B.5a Audit-state helper (`getStaffFilesAuditState(licenseeId)`, new — cross-cutting requirement, **Type 1 + Type 2**)
+
+PR #18 is the **only** PR in this scoping pass with mixed-source
+data. Per the audit-state mandate and cross-cutting addition B, the
+helper distinguishes:
+
+- **Type 1 — MiRegistry mirror data.** Items mirrored from MiRegistry
+  (annual ongoing training completion dates, professional-development
+  hours, MiRegistry account status). MiRegistry is the system of record
+  (constraint E); MILittleCare displays them but **does NOT count them
+  in the audit score by default**. PR #22 (Compliance Health Score)
+  applies opt-in rules for these.
+- **Type 2 — MILittleCare-owned data.** CPR/First Aid expirations the
+  provider records here, physician attestations, background-check
+  status, clock entries, discipline-policy receipts (PR #17). These ARE
+  counted by default.
+
+Helper signature:
+
+```js
+export async function getStaffFilesAuditState(licenseeId) {
+  return {
+    domain: 'staff_files',
+    type: 'mixed',                            // signals "see per-field type tags"
+    type_1_fields: {                          // MiRegistry mirror — NOT counted by default
+      annual_training_completion: { /* per-caregiver completion dates */ },
+      professional_development_hours: { /* per-caregiver hours by year */ },
+      miregistry_account_status: { /* per-caregiver miregistry_status */ },
+      _tag: 'type_1_miregistry_mirror',
+    },
+    type_2_fields: {                          // MILittleCare-owned — counted
+      cpr_first_aid: {
+        active_count: 0,
+        expiring_within_30d_count: 0,
+        expired_count: 0,
+      },
+      physician_attestation: {
+        active_count: 0,
+        expiring_within_30d_count: 0,
+        expired_count: 0,
+        personnel_missing_count: 0,           // caregivers with NO attestation on file
+      },
+      background_check_ccbc: {
+        eligible_count: 0,
+        pending_count: 0,
+        ineligible_count: 0,
+        personnel_missing_count: 0,
+      },
+      background_check_sex_offender_registry: {
+        eligible_count: 0,
+        pending_count: 0,
+        personnel_missing_count: 0,
+      },
+      daily_clock_log: {
+        caregivers_with_recent_entries_count: 0,
+        caregivers_missing_entries_count: 0,  // active caregivers, no entries last 30 days
+      },
+      _tag: 'type_2_milittlecare_owned',
+    },
+  }
+}
+```
+
+The two top-level groups (`type_1_fields`, `type_2_fields`) carry the
+`_tag` discriminator PR #22 reads to apply scoring rules. Read-only,
+single round-trip.
 
 ### C. UI surfaces
 
@@ -265,14 +373,31 @@ index on `reminder_instances`.
 
 ### D. Module gating
 
-All PR #18 surfaces gate on `MODULE_KEYS.STAFF_TRAINING` (already exists
-from PR #8 — activated by `is_license_exempt === false` OR
-`isTrackedStaffCaregiver`). Per the PR #14 contract, the equivalent
-gate is `license_type IN ('family_home', 'group_home')`. **Confirm at
-implementation time** that PR #14's STAFF_TRAINING rule aligns with
-license_type or needs a small follow-up — the PR #14 scope notes the
-existing `is_license_exempt === false` keying is fine because of the
-mirror, but PR #18 is a natural moment to align if needed.
+All PR #18 surfaces gate on `MODULE_KEYS.STAFF_TRAINING`. **Per OQ5
+resolution: this PR migrates the gate from `is_license_exempt === false`
+to `license_type IN ('family_home', 'group_home')`** (plus the
+`isTrackedStaffCaregiver` self-view path, which stays). The migration is
+a one-line change in `src/lib/modules.js`:
+
+```js
+// Before (PR #8):
+//   if (safeProfile.is_license_exempt === false || isTrackedStaffCaregiver === true) {
+//     modules.add(MODULE_KEYS.STAFF_TRAINING)
+//   }
+// After (PR #18):
+if (
+  safeProfile.license_type === 'family_home' ||
+  safeProfile.license_type === 'group_home' ||
+  isTrackedStaffCaregiver === true
+) {
+  modules.add(MODULE_KEYS.STAFF_TRAINING)
+}
+```
+
+The post-PR-14 mirror invariant (`is_license_exempt = (license_type ===
+'license_exempt')`) means this is a no-op for every existing licensed
+provider; the change is about source-of-truth correctness, not behavior.
+Update `src/lib/modules.test.js` to reflect.
 
 ### E. Tests
 
@@ -295,47 +420,45 @@ mirror, but PR #18 is a natural moment to align if needed.
 
 ### G. Rollout
 
-1. **Pre-implementation:** introspect `staff_time_entries` (column list,
-   RLS policies). Backfill plan for existing
-   `background_check_eligibility` rows: confirm `check_type = 'ccbc'`
-   default is correct via Venessa's data.
-2. Apply migration 026. Verify enum value + new columns + CHECK via
-   dashboard screenshot.
-3. Deploy app; matrix gains three columns, clock-log sub-tab is live.
-4. **Communicate to Venessa:** "Two new compliance columns are showing
+1. Apply migration 026. Verify enum value addition + new columns + CHECK
+   + the pre-UPDATE backfill row count via dashboard screenshot.
+   Production introspection already done at scoping time.
+2. Deploy app; matrix gains three columns; clock-log sub-tab is live on
+   `/staff`; the STAFF_TRAINING module gate now reads `license_type`.
+3. **Communicate to Venessa:** "Two new compliance columns are showing
    for your staff — please record physician attestations and sex
-   offender registry clearances. New 'Daily Clock' sub-tab supports
-   non-app-user staff."
+   offender registry clearances. New 'Daily Clock' sub-tab on the Staff
+   page supports non-app-user caregivers."
 
 ---
 
-## Step 4 — Open questions
+## Step 4 — Open questions (RESOLVED 2026-05-26 review)
 
-1. **ALTER TYPE ADD VALUE compatibility.** Postgres 12+ supports adding
-   ENUM values inside a transaction, but some Supabase versions have
-   historically had edge-case bugs. If this fails at apply time, fall
-   back to a two-migration sequence. Flag for owner; should be a
-   non-issue.
+1. **ALTER TYPE ADD VALUE compatibility.** **RESOLVED — run normally.**
+   Supabase Postgres supports ALTER TYPE ADD VALUE inside a transaction;
+   we proceed on that basis. Fallback (two-migration sequence) is a
+   contingency only if apply fails — not the plan.
 
 2. **Backfill `check_type='ccbc'` for existing rows — automatic or
-   case-by-case?** Recommend automatic with a flag for the licensee to
-   re-categorize. Existing rows are most likely CCBC. Flag for owner.
+   case-by-case?** **RESOLVED — automatic.** The migration sets
+   `check_type = 'ccbc'` for all existing `background_check_eligibility`
+   rows with `check_type IS NULL`. The migration includes a pre-UPDATE
+   `SELECT count(*)` so the verification screenshot captures the affected
+   row count. Re-categorize via the matrix UI when needed.
 
 3. **Should the clock log surface be on `/staff` or `/staff-training`?**
-   Recommend `/staff` (it's a staff-page concern, not a training
-   concern). Staff training matrix gets a *summary* indicator; the
-   detailed log lives elsewhere.
+   **RESOLVED — on `/staff`.** Staff training matrix gets a presence
+   indicator summary only; the detailed log lives at `/staff`.
 
-4. **Is the physician attestation a per-personnel record (every staff
-   member) or a per-licensee record (the licensee themselves)?** Per
-   rule, **every personnel member** — but the licensee is themselves a
-   personnel member (PR #8 enum value). So both. The training-record
+4. **Is the physician attestation a per-personnel record or a per-licensee
+   record?** **RESOLVED — per-personnel including the licensee
+   themselves.** The licensee is modeled as a `caregivers` row with
+   `regulatory_role = 'licensee'` (PR #8 substrate); the training-record
    shape handles this cleanly.
 
 5. **Staff-training module gate (post-PR-14): keep on `is_license_exempt`
-   or move to `license_type`?** The PR #14 scope flagged this as an
-   optional consistency move. Recommend moving in PR #18 as part of the
-   tidy-up, but it's not blocking. Flag for owner.
+   or move to `license_type`?** **RESOLVED — migrate to `license_type IN
+   ('family_home', 'group_home')` in this PR.** See § D.
 
 ---
 
@@ -375,9 +498,10 @@ No major new modules. Most of the work is parameterizing what PR #8 built.
 - **PR #8 (staff training tracking) — HARD DEPENDENCY.** The
   `caregivers` / `staff_training_records` substrate is required.
 - **PR #14 (license_type) — REQUIRED.** Module gate alignment.
-- **PR #15 (reminders) — RECOMMENDED.** CPR/First Aid + physician
-  attestation reminders depend on it. Without PR #15, the matrix
-  surfaces the data but does not proactively notify.
+- **PR #15 (reminders) — REQUIRED.** PR #15's catalog includes
+  `cpr_first_aid_expiration` and `physician_attestation_expiration`
+  (contributed by this PR). The matrix surfaces the data; PR #15's
+  dispatcher delivers the proactive notification.
 
 ---
 
