@@ -1,0 +1,375 @@
+# PR #20 — Medication Administration Log (Rule 31): Implementation Scope (2026-05-26)
+
+**Scoping pass only. No code was changed, no branch created, no migration
+run.** This document is the spec for a follow-on implementation pass.
+
+**Source decisions** (from
+`docs/licensed-home-compliance-decisions-2026-05-23.md` § Updated PR
+sequence): PR #20 ships after C/D/E so the acknowledgments table
+(PR #16) and the `caregivers` / role data (PR #8) are in place. Drops to
+M from L once those dependencies exist.
+
+**Rule citation:** **R 400.1931 (Rule 31) — Medication administration.**
+Requires:
+- Written parent permission per medication (one-time per
+  medication / dose plan).
+- Original container check before administering.
+- Per-dose log: date, time, dose, medication name, child name,
+  administering staff.
+- Records retained 2 years.
+- Topical-OTC exemption: sunscreen, insect repellent, diaper rash cream
+  do not require per-dose log entries (parent permission still expected
+  but at a less granular level).
+- Only the **licensee** or a **child care staff member** (per R 400.1920)
+  may administer prescription medication. **Assistants** (R 400.1921,
+  age 14–15) and **volunteers** may NOT administer.
+
+---
+
+## 0. Headline findings (drive the whole plan)
+
+1. **Greenfield: nothing exists.** Confirmed in the audit. No medication
+   tables, no per-dose log, no administering-staff gating. `children`
+   has `allergies` and `medical_notes` (free text only).
+
+2. **Two-table model: authorizations (one per child × medication) and
+   administration events (one per dose).** Distinct lifecycles: an
+   authorization can be on file for months while many dose events
+   reference it. A dose event without a current active authorization is
+   a compliance violation.
+
+3. **Reuse PR #16's `acknowledgments` table for parent permission.**
+   Parent permission is conceptually an acknowledgment: who consented,
+   when, what version of the medication plan they consented to (snapshot
+   the plan into the ack's `snapshot_hash`). One ack per authorization;
+   when the authorization changes (dose change, new prescription),
+   re-acknowledgment is required. PR #16's
+   `type = 'medication_permission'` and `subject_type =
+   'medication_authorization'` slot in cleanly.
+
+4. **Role-gated administered_by enforcement.** PR #8's `caregivers` +
+   `caregiver_regulatory_roles` substrate provides the legal roles
+   (`licensee`, `child_care_staff_member`, `child_care_assistant`,
+   `unsupervised_volunteer`, `supervised_volunteer`, `driver`). The
+   administered_by dropdown on the dose-log surface filters to roles
+   that legally may administer (`licensee` + `child_care_staff_member`).
+
+5. **TodayWidget is the natural daily-workflow surface.** Per the audit:
+   "The administering surface is a natural TodayWidget extension ('log a
+   dose')." PR #20 adds a per-child medication list to TodayWidget when
+   the child has active authorizations with doses due today.
+
+6. **OTC exemption is a per-authorization flag, not a separate model.**
+   `is_topical_otc boolean` on the authorization; if true, the per-dose
+   log is optional (the UI accommodates "applied as needed" entries but
+   doesn't require them).
+
+---
+
+## Step 2 — Inventory of what exists
+
+**Nothing in code for medication.** Adjacent substrate:
+- `children.allergies` (free text — informational).
+- `children.medical_notes` (free text — informational).
+- `caregivers` + `caregiver_regulatory_roles` (PR #8) for the gating.
+- `public.acknowledgments` (PR #16) for parent permission.
+- PR #15's reminder system for scheduled-dose reminders (optional V1).
+
+---
+
+## Step 3 — Implementation plan
+
+### A. Migration design
+
+**Migration 028** (post-PR-19's 027).
+
+#### A.1 `medication_authorizations`
+
+One row per `(child_id, medication_name)`. Active while
+`archived_at IS NULL` and the authorization hasn't been replaced.
+
+```sql
+create table public.medication_authorizations (
+  id                       uuid primary key default gen_random_uuid(),
+  provider_id              uuid not null references auth.users(id) on delete cascade,
+  child_id                 uuid not null references public.children(id) on delete cascade,
+
+  medication_name          text not null,
+  dose_text                text,                    -- "5 mL by mouth" — provider/parent free text
+  schedule_text            text,                    -- "twice daily, 8a + 8p" — free text
+                                                    -- (a structured schedule is V2; the rule
+                                                    --  requires permission + per-dose log,
+                                                    --  not a structured schedule)
+  is_topical_otc           boolean not null default false,
+                                                    -- sunscreen / repellent / diaper rash.
+                                                    -- When true, per-dose log is optional.
+  prescriber_name          text,                    -- doctor / pediatrician (when applicable)
+  starts_on                date,
+  ends_on                  date,                    -- null = ongoing
+  original_container_confirmed boolean not null default false,
+                                                    -- per rule: provider attests at intake
+  archived_at              timestamptz,
+  created_at               timestamptz not null default now(),
+  updated_at               timestamptz not null default now()
+);
+
+-- One active medication name per child.
+create unique index idx_med_auth_active_per_child_med
+  on public.medication_authorizations (child_id, lower(medication_name))
+  where archived_at is null;
+
+create index idx_med_auth_provider_child
+  on public.medication_authorizations (provider_id, child_id)
+  where archived_at is null;
+```
+
+#### A.2 `medication_administration_events`
+
+One row per dose. The 2-year retention runs from `administered_at`.
+
+```sql
+create table public.medication_administration_events (
+  id                       uuid primary key default gen_random_uuid(),
+  provider_id              uuid not null references auth.users(id) on delete cascade,
+  authorization_id         uuid not null references public.medication_authorizations(id)
+                             on delete restrict,
+                             -- restrict (not cascade): a dose log is audit data; deleting
+                             -- the authorization MUST keep the log. Provider archives the
+                             -- authorization instead.
+  child_id                 uuid not null references public.children(id) on delete cascade,
+                             -- denormalized for query convenience; matches the
+                             -- authorization at insert time (enforced via app code).
+
+  administered_at          timestamptz not null,    -- date + time per Rule 31
+  dose_administered_text   text,                    -- "5 mL" — captured even if matches
+                                                    -- the authorization, in case dose was
+                                                    -- partial.
+  administered_by_caregiver_id uuid not null references public.caregivers(id) on delete restrict,
+                                                    -- role-gated at insert (CHECK below).
+  notes                    text,
+  archived_at              timestamptz,
+  created_at               timestamptz not null default now(),
+  updated_at               timestamptz not null default now()
+);
+
+create index idx_med_events_child_recent
+  on public.medication_administration_events (child_id, administered_at desc)
+  where archived_at is null;
+```
+
+**Role gating at the DB level:** Postgres CHECK constraints can't easily
+reference another table without a trigger. Recommend:
+1. App-code gates the dropdown (UI prevents picking an ineligible role).
+2. **A trigger function** validates the caregiver has a role in
+   (`licensee`, `child_care_staff_member`) at insert; rejects otherwise.
+
+```sql
+create or replace function public.medication_event_caregiver_role_check()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if not exists (
+    select 1 from public.caregiver_regulatory_roles
+    where caregiver_id = new.administered_by_caregiver_id
+      and regulatory_role in ('licensee', 'child_care_staff_member')
+  ) then
+    raise exception 'Only licensee or child care staff member may administer medication (R 400.1931)';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger trg_medication_event_caregiver_role_check
+  before insert on public.medication_administration_events
+  for each row execute function public.medication_event_caregiver_role_check();
+```
+
+This puts the rule in the DB so a future API endpoint or admin tool
+can't bypass it.
+
+#### A.3 No new types in `acknowledgments`
+
+Just new `type` values used at app layer:
+- `medication_permission` (subject_type=`medication_authorization`,
+  subject_id = `medication_authorizations.id`).
+
+### B. App-code structure
+
+#### B.1 Pure helpers (`src/lib/medication.js`, new)
+
+- `getActiveAuthorizations(child, authorizations)` — selector.
+- `getDoseLogState(authorization, events, today)` → returns
+  `{ lastAdministeredAt, dosesToday, needsReacknowledgment }` (the last
+  flag is true when authorization details changed after the latest ack).
+- `mayAdminister(caregiver, roles)` → returns boolean. Used for
+  dropdown filtering.
+- `isTopicalOtcExempt(authorization)` → just reads
+  `authorization.is_topical_otc`.
+
+#### B.2 Medication tab on Family modal
+
+A new tab on the family modal alongside Children / Funding / Guardians /
+Emergency / Attendance (`FamiliesPage.jsx`). Per-child list of active
+authorizations + a button to add a new authorization. Each authorization
+shows the dose log (recent N), with a "Log a dose" button.
+
+The authorization form captures all the authorization fields and
+**fires the parent permission acknowledgment** via PR #16's table on
+save. Parents can self-acknowledge via portal; in-person paper +
+provider-override channels also supported (PR #16's three-channel CHECK).
+
+#### B.3 Dose log entry
+
+A small modal: select caregiver (role-filtered), datetime
+(default now), dose-administered text (default from authorization),
+notes. Save inserts a `medication_administration_events` row.
+
+#### B.4 TodayWidget extension
+
+Add a "Medications today" section showing active authorizations across
+all enrolled children where a dose is plausibly due today (heuristic:
+no event in the last 12 hours for that authorization, ignored for
+`is_topical_otc`). Inline "Log a dose" button per row jumps to the
+dose-log entry modal.
+
+#### B.5 Reminder integration (PR #15) — OPTIONAL V1
+
+`medication_authorization_renewal` category, fires when an
+authorization's `ends_on` is within N days. Default lead 7 days.
+Optional V1; primary path is the TodayWidget surface.
+
+#### B.6 Auditor-friendly print view
+
+A per-child medication summary printable: each active authorization +
+the full dose log for a date range. Mirrors PR #19's printable plan
+pattern.
+
+### C. UI surfaces
+
+- **Family modal → Medications tab.** Per-child authorizations + dose
+  logs.
+- **TodayWidget → Medications section.** Daily dose-log entry surface.
+- **Sidebar → Compliance → Medications (optional).** A top-level
+  cross-family view; secondary in V1 (most workflow is per-family).
+- **Print view.** Per-child auditor report.
+
+### D. Module gating
+
+`MODULE_KEYS.LICENSED_COMPLIANCE`. LEPs see nothing.
+
+### E. Tests
+
+- **Pure unit (`medication.test.js`):** `getDoseLogState` (recent dose,
+  stale, never-administered); `mayAdminister` for each role; topical-OTC
+  branch.
+- **Migration test:** trigger rejects an `administered_by_caregiver_id`
+  whose roles don't include the eligible set.
+- **Smoke (manual):** create authorization, parent acks, record doses,
+  archive authorization, observe the dose log stays (audit retention).
+- RTL render tests deferred.
+
+### F. Documentation
+
+- `docs/runbook.md` — migration 028 entry template.
+- `docs/tech_debt.md` — note the trigger-based role gate (and the parallel
+  app-code gate) as belt-and-suspenders.
+- `CLAUDE.md` — append: "Medication administration is role-gated at the
+  DB level (trigger on medication_administration_events). Only licensee
+  or child care staff member may administer per R 400.1931."
+
+### G. Rollout
+
+1. Apply migration 028. Verify tables + trigger.
+2. Deploy app; the Medications tab is live for licensed providers.
+3. **Communicate to Venessa:** "If you administer medication, set up
+   authorizations on each child's Medications tab. Parent permission is
+   captured the same way attendance acknowledgments are. Log each dose
+   as you give it."
+
+---
+
+## Step 4 — Open questions
+
+1. **Free-text schedule vs structured schedule?** Recommend **free text
+   for V1**. The rule does not require a structured schedule; providers
+   work from prescription labels. A structured schedule with auto-due-dose
+   reminders is a strong V2 move once the daily workflow lands.
+
+2. **Where does the rule force re-acknowledgment?** When the
+   authorization's dose or schedule changes. PR #20's
+   `getDoseLogState.needsReacknowledgment` flag derives from
+   `snapshot_hash` comparison: if the current
+   authorization's hash differs from the active acknowledgment's
+   snapshot_hash, re-ack is required.
+
+3. **Topical OTC blanket permission vs per-medication permission?** Rule
+   accepts both. Recommend a **single "blanket OTC permission"
+   acknowledgment** per child (covers sunscreen, repellent, diaper rash
+   collectively) + per-prescription acknowledgment for non-OTC. The
+   acknowledgments table's polymorphism handles this cleanly. Flag for
+   owner.
+
+4. **Children with allergies — should the medication form display them
+   prominently?** Yes (UI affordance; pull from
+   `children.allergies`). Adds zero schema, important for safety.
+
+5. **Should controlled-substance administration require an additional
+   witness?** The rule does not require this. Out of scope.
+
+---
+
+## Step 5 — Effort estimate
+
+**L (→ M after C/D/E ship).** The L comes from:
+- Two new tables + a trigger
+- A new family-modal tab with two distinct flows (authorization,
+  per-dose log)
+- TodayWidget extension
+- Print view
+- Reminder integration
+
+The dependency reduction (M) is real: PR #16's acknowledgments table
+removes the parent-permission design work; PR #8's caregivers/roles
+removes the administered_by design work.
+
+---
+
+## Step 6 — Out of scope (future PRs)
+
+- **Structured schedule + auto-due-dose reminders.**
+- **Pharmacy / e-prescription integration.**
+- **Multi-witness for controlled substances.**
+- **Photo of medication container at intake.**
+- **Allergic-reaction incident form.**
+
+---
+
+## Step 7 — Dependencies on prior PRs
+
+- **PR #16 (acknowledgments) — HARD DEPENDENCY.** Parent permission
+  storage.
+- **PR #8 (caregivers / regulatory roles) — HARD DEPENDENCY.** Role-gate
+  on administered_by.
+- **PR #14 (license_type) — REQUIRED.** Module gating.
+- **PR #13 (archived_at convention) — pattern reference.**
+- **PR #15 (reminders) — OPTIONAL.** Renewal reminders.
+
+---
+
+## Files read for this scope
+
+`docs/strategy.md`, `docs/backlog.md`,
+`docs/licensed-home-compliance-decisions-2026-05-23.md`,
+`docs/regulatory-rule-mapping.md`, `CLAUDE.md`, `docs/tech_debt.md`,
+`docs/licensed-home-compliance-audit-2026-05-23.md`,
+`docs/pr-14-license-type-foundation-scope.md` (format template),
+`docs/pr-16-child-files-scope.md` (acknowledgments table this PR
+consumes);
+`supabase/migrations/012_staff_training.sql` (caregivers + roles);
+`src/components/dashboard/TodayWidget.jsx` (extension target),
+`src/pages/FamiliesPage.jsx` (modal-tab structure).
+
+*No source files modified. No migrations run. No branch other than
+`docs/pr-15-21-scoping`.*
