@@ -476,3 +476,8 @@ days, not weeks.
 ## Related strategy
 
 See [strategy.md](./strategy.md) for the long-term positioning context this spec operates within, including the state-modernization hedge that prioritizes compliance intelligence over workflow mimicry.
+funding_source_spec.md cross-reference
+(Append a forward-reference paragraph near the bottom of funding_source_spec.md, after existing content.)
+Future: redetermination-aware authorization tracking
+A post-July product wedge — see docs/redetermination-ownership-spec.md — will attach a cdc_authorizations table to CDC-type funding sources. Each authorization tracks its DHS-198 source document, start/end dates, and a redetermination state machine. When that work lands, funding_sources rows of type CDC will have a one-to-many relationship with cdc_authorizations, each authorization representing one 12-month cycle.
+The authorization tracking is the canonical mechanism for the redetermination ownership feature. It supersedes any ad-hoc "when does CDC end?" tracking that may have been built before.
