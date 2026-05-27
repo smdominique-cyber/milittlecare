@@ -1,7 +1,8 @@
 # PR #19 — Drills + Emergency Response Plan (Rule 39): Implementation Scope (2026-05-26)
 
 **Scoping pass only. No code was changed, no branch created, no migration
-run.** This document is the spec for a follow-on implementation pass.
+run.** Open questions resolved 2026-05-26 review; doc reads as
+authoritative.
 
 **Source decisions** (from
 `docs/licensed-home-compliance-decisions-2026-05-23.md` § OQ2 + Updated
@@ -194,11 +195,51 @@ log; the in-product editor / log handles the rest.
 - `REQUIRED_CELLS` — a frozen matrix of `(emergencyType, planElement)`
   pairs that are required, with an `appliesIfWater` flag for water-only
   cells.
+
+  Per OQ1 resolution: ship V1 with **Claude Code's best-guess matrix**
+  interpreting Rule 39 / R 400.1939 + Michigan training materials.
+  Include an explicit comment in `src/lib/emergencyPlan.js` above the
+  constant:
+
+  ```js
+  // REQUIRED_CELLS — best-guess interpretation of R 400.1939 +
+  // Michigan training materials. Verify with a licensing consultant
+  // or current Michigan training materials. Adjusting this matrix
+  // affects the displayed completeness percentage but NOT regulatory
+  // adequacy — the underlying plan_jsonb stores whatever the provider
+  // wrote regardless.
+  export const REQUIRED_CELLS = Object.freeze([ /* ... */ ])
+  ```
 - `EMERGENCY_TYPE_LABELS` and `PLAN_ELEMENT_LABELS` — display strings.
 - `getEmergencyPlanCompleteness(plan, providerContext)` →
   `{ percent, missingCells: [], requiredTotal, presentTotal }`.
 - `validateEmergencyPlanCell(value)` → returns missing-content errors
   per cell (e.g. just whitespace doesn't count as filled).
+
+#### B.1a Audit-state helper (`getEmergencyPlanAuditState(licenseeId)`, new — cross-cutting requirement)
+
+```js
+export async function getEmergencyPlanAuditState(licenseeId) {
+  return {
+    domain: 'emergency_plan',
+    type: 'type_2',                          // MILittleCare-owned.
+    plan_completeness_percent: 0,            // 0–100; from REQUIRED_CELLS coverage
+    plan_published_version: 0,               // current emergency_plans.version
+    plan_last_updated_at: null,
+    drill_fire_last_performed_on: null,
+    drill_fire_next_due_on: null,
+    drill_fire_overdue: false,
+    drill_tornado_in_season_completed: 0,    // 0..2 during March–November
+    drill_tornado_in_season_required: 0,     // 0 or 2 depending on date
+    drill_lockdown_last_performed_on: null,
+    drill_shelter_in_place_last_performed_on: null,
+    drill_reunification_last_performed_on: null,
+    drill_other_count_last_year: 0,
+  }
+}
+```
+
+Read-only, single round-trip. Consumed by PR #22.
 
 #### B.2 Pure helpers (`src/lib/drillSchedule.js`, new)
 
@@ -240,15 +281,18 @@ log; the in-product editor / log handles the rest.
 
 #### B.5 Reminder integration (PR #15)
 
-Three new categories in `REMINDER_CATEGORIES`:
+PR #19 contributes three categories to PR #15's `REMINDER_CATEGORIES`
+catalog (names match the PR #15 entries exactly):
 - `drill_fire` — `subject_type=null` (provider-level). Scheduler uses
   `nextFireDrillDue`.
 - `drill_tornado` — provider-level. Scheduler uses
   `nextTornadoDrillDue`.
-- `drill_other` — provider-level, one reminder per
-  `{lockdown, shelter_in_place, reunification, other}` subtype using the
-  annual cadence; encoded in subject_type or via subcategories. Flag for
-  owner whether to keep these consolidated or split.
+- `drill_other` — provider-level, **single catch-all** (per OQ3
+  resolution) covering lockdown, shelter-in-place, reunification, and
+  free-text "other". The scheduler issues a reminder when the most-recent
+  drill of *any* of those subtypes is over a year old. The drill log
+  surface offers the four named subtypes plus an `'other'` free-text
+  description.
 
 #### B.6 Dashboard widget
 
@@ -307,33 +351,36 @@ group). LEPs see nothing.
 
 ---
 
-## Step 4 — Open questions
+## Step 4 — Open questions (RESOLVED 2026-05-26 review)
 
 1. **The `REQUIRED_CELLS` matrix — who curates it and from what source?**
-   Recommend curating from the rule text + Michigan training materials,
-   committed as a frozen constant. **Flag for owner** to confirm the
-   required-vs-optional matrix once drafted; the build is otherwise
-   ready.
+   **RESOLVED — ship V1 with Claude Code's best-guess matrix
+   interpreting Rule 39 / R 400.1939 + Michigan training materials.**
+   The constant is committed with an explicit code comment (see § B.1)
+   flagging it as best-guess and noting that adjusting the matrix
+   affects the displayed completeness percentage but not regulatory
+   adequacy. Verification with a licensing consultant is a post-ship
+   refinement.
 
-2. **JSONB vs 90 columns vs normalized child table?** Recommend **JSONB**
-   for V1: a single row, single round-trip read, future evolution easy,
-   matches `onboarding_state` precedent. A normalized
-   `emergency_plan_cells` table is over-engineered. A column-per-cell is
-   unwieldy. Flag for owner only if a column-per-cell audit trail
-   becomes a requirement.
+2. **JSONB vs 90 columns vs normalized child table?** **RESOLVED —
+   JSONB.** Single row, single round-trip read, future evolution easy,
+   matches the `onboarding_state` precedent. A column-per-cell schema
+   is a future move only if a per-cell audit trail becomes required.
 
-3. **"Other" drill type — keep as a single bucket or split?** The rule
-   recognizes lockdown, shelter-in-place, reunification, and "others"
-   (e.g. evacuation to alternate site). Recommend keeping the four
-   common ones explicit and `'other'` as the catch-all with a free-text
-   description.
+3. **"Other" drill type — keep as a single bucket or split?**
+   **RESOLVED — single catch-all with a free-text description.** Drill
+   log UI offers `lockdown`, `shelter_in_place`, `reunification`, `fire`,
+   `tornado`, plus an `'other'` value where the provider types the
+   description. The `drill_other` reminder category covers all annual
+   subtypes (see § B.5).
 
 4. **Should the structured plan support multi-language output for the
-   print view?** Out of scope for V1. Michigan English-only.
+   print view?** **RESOLVED — out of scope V1, English only.**
 
-5. **Drill log: per-child participation or head-count?** Per audit, the
-   rule requires evidence the drill happened; per-child evidence is
-   not mandated. Head-count is the lighter design. Flag for owner.
+5. **Drill log: per-child participation or head-count?** **RESOLVED —
+   head-count integer columns** (`participating_children`,
+   `participating_staff`). Per-child participation links are a future
+   move only if rule enforcement tightens.
 
 ---
 
