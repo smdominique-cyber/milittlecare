@@ -1,7 +1,10 @@
 # PR #21 — Property Records (Rules 13, 15, 17, 18, 45, 48): Implementation Scope (2026-05-26)
 
 **Scoping pass only. No code was changed, no branch created, no migration
-run.** This document is the spec for a follow-on implementation pass.
+run.** Open questions resolved 2026-05-26 review; doc reads as
+authoritative. **Document-vault decision locked to Option B:** new
+sibling `compliance_documents` table (NOT a generalization of
+`funding_documents`); see § A.2.
 
 **Source decisions** (from
 `docs/licensed-home-compliance-decisions-2026-05-23.md` § Updated PR
@@ -240,27 +243,39 @@ A dedicated section under the property page (or its own route, sidebar
 reports, investigation letters, corrective actions, approval letters
 from MDHHS/MiLEAP. Each is a `compliance_documents` row with
 `document_kind` set to one of the four `licensing_notebook_*` values.
-Filter by year + kind. "Available to parents" toggle (the rule requires
-parents have access; this generates a per-licensee shareable link or a
-parent-portal section — V1 surfaces in the parent portal directly).
+Filter by year + kind.
+
+**"Available to parents" toggle (per OQ3 resolution: parent-portal
+entry V1, no public shareable link).** Toggling a document on flips a
+`parent_accessible boolean` column on the `compliance_documents` row.
+Parent portal renders a "Licensing notebook" section listing only the
+documents the licensee has marked parent-accessible. The rule's
+"accessible to parents during operation" requirement is satisfied by
+the auth'd portal view — no public URL is generated.
 
 #### B.5 Pet disclosure (PR #16 consumer)
 
-When the provider toggles "pets on premises" true on the property page,
-a new acknowledgment requirement appears at each family's intake:
+Per OQ4 resolution: **per-family** (the disclosure is about the
+premises, not the child). When the provider toggles "pets on premises"
+true on the property page, a new acknowledgment requirement appears for
+each family:
 `type = 'pet_disclosure'`, `subject_type = 'family'`,
 `subject_id = families.id`. Existing families flip to "needs pet
-disclosure ack" until captured.
+disclosure ack" until captured. Same three channels as other PR #16
+acknowledgments.
 
 #### B.6 Reminder integration (PR #15)
 
-New categories:
-- `radon_test_due` — 30 days before `next_due_on`.
-- `heating_inspection_due` — 30 days before `next_due_on`.
-- `detector_check_overdue` — annual nudge to verify smoke + CO detectors
-  (the rule does not specify cadence for ongoing checks; this is a
-  product-added best practice with a default lead time the provider can
-  configure).
+PR #21 contributes three categories to PR #15's `REMINDER_CATEGORIES`
+catalog (names match PR #15 exactly):
+- `radon_test_due` — 30 days before `next_due_on`. subject_type =
+  `property_record`, subject_id = the radon record.
+- `heating_inspection_due` — 30 days before `next_due_on`. Same shape.
+- `detector_check_overdue` — annual default per OQ2 resolution; the
+  rule (R 400.1948) requires presence + working but doesn't specify
+  ongoing-check cadence. The reminder is a product-added best practice;
+  default lead time is **annual**, configurable per provider via PR #15's
+  preferences UI.
 
 #### B.7 BusinessInfoPage facility section
 
@@ -271,6 +286,35 @@ New small section on `BusinessInfoPage` capturing facility attributes:
 - Smoking prohibition posted (boolean — the attestation)
 
 These attributes feed `getDetectorCoverage` and the disclosure flow.
+
+#### B.8 Audit-state helper (`getPropertyRecordsAuditState(licenseeId)`, new — cross-cutting requirement)
+
+```js
+export async function getPropertyRecordsAuditState(licenseeId) {
+  return {
+    domain: 'property_records',
+    type: 'type_2',                          // MILittleCare-owned.
+    radon_test_last_performed_on: null,
+    radon_test_next_due_on: null,
+    radon_test_overdue: false,
+    heating_inspection_last_performed_on: null,
+    heating_inspection_next_due_on: null,
+    heating_inspection_overdue: false,
+    smoke_detectors_count: 0,
+    co_detectors_count: 0,
+    fire_extinguishers_count: 0,
+    detector_coverage_status: 'unknown',     // 'ok' | 'insufficient' | 'unknown'
+                                              // — vs floors_used + sleeping_areas
+    smoking_prohibition_posted: false,
+    pets_on_premises: false,
+    families_with_pet_disclosure_missing_count: 0, // when pets_on_premises = true
+    licensing_notebook_documents_count: 0,
+    licensing_notebook_parent_accessible_count: 0,
+  }
+}
+```
+
+Read-only, single round-trip. Consumed by PR #22.
 
 ### C. UI surfaces
 
@@ -321,35 +365,40 @@ These attributes feed `getDetectorCoverage` and the disclosure flow.
 
 ---
 
-## Step 4 — Open questions
+## Step 4 — Open questions (RESOLVED 2026-05-26 review)
 
 1. **Generalize `funding_documents` (option A) vs new
-   `compliance_documents` table (option B)?** Recommend **B** for V1
-   (cleaner separation; no risk of breaking funding-document RLS).
-   Flag for owner.
+   `compliance_documents` table (option B)?** **RESOLVED — Option B,
+   sibling `compliance_documents` table.** Cleaner separation; zero
+   risk to PR #2's funding-document RLS. New private storage bucket
+   `compliance-documents` with the same RLS template.
 
-2. **Detector/extinguisher checks — required cadence in code?** The
-   rule requires presence + working. It doesn't specify ongoing-check
-   cadence. Recommend an annual reminder default, configurable per
-   provider via PR #15. Flag for owner.
+2. **Detector/extinguisher checks — required cadence in code?**
+   **RESOLVED — annual default, configurable per provider via PR #15.**
+   The rule (R 400.1948) requires presence + working but doesn't specify
+   ongoing-check cadence; the annual default is a product-added best
+   practice. Provider can adjust lead time on the reminders settings
+   page.
 
-3. **"Parent-accessible" toggle on licensing notebook — does this need a
-   public URL or just a parent-portal entry?** Recommend **parent-portal
-   entry** (already auth'd; matches the rule's "during operation"
-   reading). Open whether to allow a public-shareable link for a parent
-   who lost portal access.
+3. **"Parent-accessible" toggle on licensing notebook — public URL or
+   parent-portal entry?** **RESOLVED — parent-portal entry V1, no public
+   shareable link.** Per-document `parent_accessible boolean` toggle on
+   `compliance_documents`; parents see the marked documents in the
+   portal's Licensing Notebook section.
 
-4. **Pet disclosure: per-family or per-child?** Recommend **per-family**
-   (the disclosure is about the premises). Existing families gain an
-   ack requirement when `pets_on_premises` flips true.
+4. **Pet disclosure: per-family or per-child?** **RESOLVED — per-family.**
+   The disclosure is about the premises, not the child.
+   `type='pet_disclosure'`, `subject_type='family'`,
+   `subject_id=families.id`.
 
 5. **Radon levels — capture the actual reading or just pass/fail?**
-   Recommend **both** — `result` is free text; a numeric measurement
-   field would be a V2 add. Flag for owner.
+   **RESOLVED — free-text `result` V1.** Structured numeric measurement
+   is a V2 add when usage demands it.
 
 6. **Will providers want to attach a photo of each detector for
-   evidence?** Out of scope V1; the structured row is enough. The
-   document slot could hold a photo if a provider wants.
+   evidence?** **RESOLVED — out of scope V1.** The structured property
+   record is the audit signal. A photo attachment via
+   `compliance_documents` could be added later.
 
 ---
 
