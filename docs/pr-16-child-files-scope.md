@@ -1,7 +1,9 @@
 # PR #16 — Child Files (Rule 7) + General Acknowledgments: Implementation Scope (2026-05-26)
 
 **Scoping pass only. No code was changed, no branch created, no migration
-run.** This document is the spec for a follow-on implementation pass.
+run.** Open questions resolved 2026-05-26 review; doc reads as
+authoritative. **Parent-portal intake self-sign is now in V1 scope**
+(was deferred); effort estimate bumps **M → M+** as a result.
 
 **Source decisions** (from
 `docs/licensed-home-compliance-decisions-2026-05-23.md` § OQ5 + Updated
@@ -280,11 +282,38 @@ create index acknowledgments_subject_active
 Generalizes `src/lib/parentAcknowledgment.js`'s pattern:
 - `computeAckHash({ type, payload })` — type-dispatched hash function
   (FNV-1a 32-bit synchronous, same family as PR #12's helper).
+- `computeEnvelopeHash(subRowHashes[])` — composite hash for the
+  envelope row of a multi-disclosure bundle (see § A.2 envelope
+  decision). Stable across re-orders by sorting sub-row hashes.
 - `findActiveAck(acks, { type, subjectType, subjectId })` — selector.
 - `getChildFileCompleteness(child, acks)` → returns
   `{ acknowledgmentsPresent: [], acknowledgmentsMissing: [],
   immunizationStatus, recordsReviewDue }` — used by the
   intake-incomplete badge and Children-tab UI.
+
+#### B.1a Audit-state helper (`getChildFilesAuditState(licenseeId)`, new — cross-cutting requirement)
+
+Per the audit-state mandate, PR #16 exposes a pure helper in
+`src/lib/childFiles.js`:
+
+```js
+export async function getChildFilesAuditState(licenseeId) {
+  return {
+    domain: 'child_files',
+    type: 'type_2',                       // MILittleCare-owned.
+    active_children_count: 0,
+    intake_complete_count: 0,             // intake_completed_at IS NOT NULL
+    intake_incomplete_count: 0,
+    annual_review_overdue_count: 0,       // records_last_reviewed_on + 1y < today
+    pending_lead_disclosures_count: 0,    // licensee has home_built_before_1978=true
+                                          // AND child intake lacks lead_disclosure ack
+    pending_firearms_disclosures_count: 0,
+  }
+}
+```
+
+Consumed by future PR #22 (Compliance Health Score). Read-only,
+single round-trip.
 
 #### B.2 Intake form expansion (`src/pages/FamiliesPage.jsx#ChildForm` → split)
 
@@ -307,13 +336,29 @@ component below it that captures:
   - `infant_safe_sleep` (only if child age < 18 months — per R 400.1930)
 
 The bundle is conditional; the guided form only shows the items that
-apply. A "Save intake" button persists everything together. If the parent
-has a portal account, the provider can defer the acknowledgment to
-parent self-sign (parent_portal via the same table). For paper
-intakes, `in_person_paper` channel with a typed parent label.
+apply. A "Save intake" button persists everything together. **Two
+capture channels are supported in V1** (post-review decision — see § B.6
+parent-portal extension):
 
-`intake_completed_at` on `children` is set when **all required**
-acknowledgments exist active.
+- **Provider-collected** (paper or in-person): `acknowledged_via =
+  'in_person_paper'` with a typed parent label, OR `provider_override`
+  with a reason.
+- **Parent self-sign** (new in V1): provider triggers a portal
+  notification; parent acknowledges in the portal at their own time.
+  Writes `acknowledged_via = 'parent_portal'` and ties to the parent's
+  `auth.users.id`.
+
+**Envelope + 7 sub-rows.** Per OQ4: the bundle is mechanically stored as
+**1 envelope row** (`type = 'child_in_care_statement'`,
+`snapshot_hash = computeEnvelopeHash(sub-row hashes)`) **plus N
+sub-rows** (one per conditional disclosure that applies). The envelope's
+existence + match to current envelope-hash is the single completeness
+predicate.
+
+`intake_completed_at` on `children` is set when the envelope row exists
+active AND its `snapshot_hash` matches the current
+`computeEnvelopeHash(...currentSubRowHashes)` value (i.e. nothing has
+drifted since acknowledgment).
 
 #### B.3 Completeness badge + indicators
 
@@ -347,6 +392,40 @@ If a provider toggles `home_built_before_1978` from false → true after
 existing intakes were captured without lead disclosure, the affected
 children flip to "intake incomplete." Same for firearms.
 
+#### B.6 Parent-portal intake extension (NEW IN V1, post-review)
+
+Per OQ1 resolution: **parent self-sign ships in PR #16**, not as a
+follow-up. Concretely:
+- Extend the existing parent acknowledgment portal page (from PR #12,
+  `/parent/acknowledge` or its current path) with an **Intake** tab.
+- The tab lists every pending acknowledgment row in
+  `public.acknowledgments` where `subject_type = 'child'`,
+  `subject_id IN (parent's children)`, and the row is the envelope OR a
+  sub-row that the provider has flagged for parent self-sign (the
+  provider's UI gets a per-row toggle "collect via portal vs. paper").
+- Parent reviews the disclosure copy (the version they're acknowledging)
+  and confirms. Writes a new active `acknowledgments` row with
+  `acknowledged_via = 'parent_portal'` and the parent's `auth.uid()`.
+- The envelope row's `snapshot_hash` is recomputed on the server side
+  after all sub-rows land — or, more practically, the parent's "Confirm
+  envelope" final step writes the envelope row composing the current
+  sub-row hashes.
+- **Email notification** is sent via PR #15's reminder dispatcher with
+  a new ad-hoc category (`intake_acknowledgment_pending`) — fires when
+  the provider triggers portal collection; cleared when the parent
+  completes. Optional V2: weekly digest reminder.
+
+The provider's intake form gets a small affordance per acknowledgment
+row: a toggle between "I'll collect this on paper" (default) and "Ask
+parent via portal" (the new path). When portal is chosen, the row is
+stamped "awaiting parent" until acknowledged.
+
+Existing parent-acknowledgment substrate to reuse:
+- `parent_family_links` (RLS join path).
+- Resend email template scaffolding from PR #12's digest cron.
+- `acknowledged_via = 'parent_portal'` (already enumerated in the PR #16
+  channel-shape CHECK).
+
 ### C. UI surfaces (in plain words)
 
 - **Families → Children tab → Add/Edit child.** Two-section form for
@@ -357,12 +436,12 @@ children flip to "intake incomplete." Same for firearms.
   disclosures driving intake conditional flows.
 - **Dashboard (via PR #15 reminders).** Banner when a child's annual
   review is due.
-- **Parent portal (extension).** A new page where parents can
-  acknowledge intake items the provider hasn't paper-signed for them —
-  reuses PR #12's parent acknowledgment UX shape, but rendering rows from
-  the new `acknowledgments` table for `type IN ('child_in_care_statement',
-  'lead_disclosure', 'firearms_disclosure', …)` with subject_id = their
-  child.
+- **Parent portal — Intake tab (V1, new).** Extension of the existing
+  PR #12 parent-acknowledgment page. Lists every pending intake
+  acknowledgment for the parent's children with disclosure copy in plain
+  language. Parent confirms each, then confirms the envelope. Email
+  notification on the provider triggering portal collection (PR #15
+  dispatcher).
 
 ### D. Module gating
 
@@ -413,64 +492,66 @@ gate.
 
 ---
 
-## Step 4 — Open questions
+## Step 4 — Open questions (RESOLVED 2026-05-26 review)
 
 1. **Should the parent-portal extension ship in PR #16 or be deferred?**
-   The provider-side capture is the V1 priority (paper / in-person
-   intake). Parent self-sign is a follow-up. Recommend deferring to
-   **PR #16.5** so PR #16 stays focused on the licensed provider's
-   workflow. Flag for owner.
+   **RESOLVED — INCLUDED in PR #16, not deferred.** Effort bumps from M
+   to **M+**. See § B.6 for the implementation plan: extends the
+   existing parent portal page from PR #12 with an intake-acknowledgment
+   surface; email notification via PR #15 when intake acks are pending;
+   parent self-sign channel writes directly to `acknowledgments` with
+   `acknowledged_via = 'parent_portal'`.
 
-2. **Annual review enforcement — soft or hard?** Recommend **soft** (a
-   reminder + a badge); a "hard" enforcement (e.g. block billing for an
-   overdue review) is out of scope and ambiguously required by the rule
-   text. Flag for owner.
+2. **Annual review enforcement — soft or hard?** **RESOLVED — soft.**
+   Reminder + badge only. No billing block. Annual-review hard
+   enforcement is explicitly out of scope.
 
-3. **Existing children — backfill strategy?** Three options: (a) all
-   existing children flip to "intake incomplete" until the provider
-   sweeps (recommended, matches rule reality); (b) infer some
-   acknowledgments from existing data (we have none of the disclosure
-   fields, so this is essentially (a)); (c) one-shot bulk-record button
-   that creates all acknowledgments with `provider_override` and a stock
-   reason (NOT recommended — defeats the purpose of getting parent
-   signature). Recommend (a).
+3. **Existing children — backfill strategy?** **RESOLVED — option (a).**
+   Existing children flip to "intake incomplete" until the provider
+   sweeps. No inference from existing data, no bulk-override button.
 
-4. **Snapshot-hash semantics for the bundle.** A child-in-care statement
-   is conceptually one envelope but mechanically eight rows. Recommend
-   each row stores its own hash; the "intake bundle" identity is
-   reconstructed by `getChildFileCompleteness` checking all expected
-   types exist. Open whether to also store an envelope-level row with a
-   composite hash (cleaner audit story; recommend YES — type =
-   `child_in_care_statement` is the envelope; the per-disclosure rows are
-   sub-types).
+4. **Snapshot-hash semantics for the bundle.** **RESOLVED — envelope row
+   + sub-disclosure rows with composite hash on the envelope.** One
+   envelope row (`type = 'child_in_care_statement'`) carries
+   `snapshot_hash = computeEnvelopeHash(sub-row hashes)`; each sub-row
+   (lead_disclosure, firearms_disclosure, food_provider_agreement,
+   licensing_notebook_offered, infant_safe_sleep, discipline_policy_receipt,
+   plus a "health condition" disclosure row — see Rule 7 sub-bullets) has
+   its own per-row `snapshot_hash`. Up to 7 sub-rows + the envelope per
+   intake. Drift detection compares envelope hash to recomputed
+   envelope hash at read time.
 
-5. **`provider_id` denormalization on `acknowledgments`.** Storing
-   `provider_id` directly (rather than joining through `children` →
-   `families` → `users`) speeds up the RLS path and the dashboard
-   queries, at the cost of a denormalization to keep in sync. Recommend
-   YES (matches the PR #12 pattern, RLS is simpler).
+5. **`provider_id` denormalization on `acknowledgments`.** **RESOLVED —
+   YES, denormalize.** `provider_id` is stored directly on every row
+   matching PR #12's pattern; RLS path is simpler and the dashboard
+   audit-state helper benefits from the direct index.
 
 ---
 
 ## Step 5 — Effort estimate
 
-**M.** The migration is moderate (two adds to children, two adds to
-profiles, one new table); the intake-form expansion is the biggest UI
-diff but conceptually straightforward (additive section + per-license_type
-gating + bundle-write transaction); the pure helpers are templates of
-PR #12's helpers; tests are modest.
+**M+.** Bumped from M after the 2026-05-26 review made the parent-portal
+extension V1 scope (OQ1). The new V1 work:
+- Extension of the existing PR #12 parent-acknowledgment page with an
+  Intake tab.
+- Email notification dispatch via PR #15 (`intake_acknowledgment_pending`
+  category) when the provider triggers portal collection.
+- Per-row "collect via portal vs. paper" toggle on the provider intake
+  form.
+- Envelope-hash recomputation on parent confirm.
 
-The acknowledgments table is V1-correct from day one if the
-`subject_type` / `subject_id` polymorphism lands as specified. Future
-consumers (PR #17 discipline, PR #20 medication parent permission,
-post-July CDC redetermination) are zero-migration additions.
+The base PR #16 work (migration, intake form, acknowledgments table,
+pure helpers) stays at M. The acknowledgments table is V1-correct from
+day one if the `subject_type` / `subject_id` polymorphism lands as
+specified. Future consumers (PR #17 discipline, PR #20 medication
+parent permission, post-July CDC redetermination) are zero-migration
+additions.
 
 ---
 
 ## Step 6 — Out of scope (future PRs)
 
-- **Parent portal intake self-sign** (OQ #1) — PR #16.5 or a follow-up.
-- **Hard enforcement of annual review** (OQ #2) — defer.
+- **Hard enforcement of annual review** (OQ2 resolved to soft).
 - **Acknowledgment dispute/flag mechanism** for the new table —
   no current demand.
 - **Discipline policy storage** — PR #17's scope (PR #16 only seeds the
@@ -481,6 +562,8 @@ post-July CDC redetermination) are zero-migration additions.
 - **Snapshot-copy versioning for disclosures** — V1 stores a freeform
   `snapshot_version`; full version history is a future move if disclosure
   copy review cadence demands it.
+- **Weekly digest of pending parent-portal intake acks** — PR #15's
+  digest substrate could carry it; not in V1.
 
 ---
 
@@ -490,11 +573,14 @@ post-July CDC redetermination) are zero-migration additions.
   post-attendance-end uses this.
 - **PR #14 (license_type) — REQUIRED.** The intake-extension and
   completeness badges gate on it.
-- **PR #15 (reminders) — OPTIONAL.** Annual-review reminders use it; if
-  PR #15 is not yet shipped, the badge alone suffices for V1 (less
-  reachable but functional).
-- **PR #12 (parent acknowledgment) — pattern reference**, no code
-  dependency.
+- **PR #15 (reminders) — REQUIRED for the V1 parent-portal email
+  notification path** (OQ1 resolution). Without PR #15, the portal still
+  works but parents don't get the notification email — degrades the V1
+  experience meaningfully. PR #15 also powers `child_annual_review`
+  reminders.
+- **PR #12 (parent acknowledgment) — REQUIRED for the portal extension**
+  surface (V1 extends its existing page). The migration scaffolding +
+  Resend template are reused.
 
 ---
 
