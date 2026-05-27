@@ -1,7 +1,8 @@
 # PR #20 — Medication Administration Log (Rule 31): Implementation Scope (2026-05-26)
 
 **Scoping pass only. No code was changed, no branch created, no migration
-run.** This document is the spec for a follow-on implementation pass.
+run.** Open questions resolved 2026-05-26 review; doc reads as
+authoritative.
 
 **Source decisions** (from
 `docs/licensed-home-compliance-decisions-2026-05-23.md` § Updated PR
@@ -191,9 +192,22 @@ can't bypass it.
 
 #### A.3 No new types in `acknowledgments`
 
-Just new `type` values used at app layer:
+Just new `type` values used at app layer (per OQ3 resolution: blanket
+OTC permission per child + per-prescription acknowledgment for non-OTC):
+- `medication_permission_otc_blanket` (subject_type=`child`,
+  subject_id=`children.id`) — one row per child; covers sunscreen,
+  insect repellent, diaper rash cream collectively. Captured once per
+  child.
 - `medication_permission` (subject_type=`medication_authorization`,
-  subject_id = `medication_authorizations.id`).
+  subject_id=`medication_authorizations.id`) — one row per non-OTC
+  prescription; captures `snapshot_hash` of the authorization's dose +
+  schedule at consent time.
+
+Re-acknowledgment is **derived** via `snapshot_hash` comparison from
+PR #16's helper (OQ2 resolution): when the authorization's dose or
+schedule changes, the stored ack's `snapshot_hash` no longer matches the
+current `computeAckHash` of the authorization, and
+`getDoseLogState.needsReacknowledgment` flips true.
 
 ### B. App-code structure
 
@@ -201,12 +215,35 @@ Just new `type` values used at app layer:
 
 - `getActiveAuthorizations(child, authorizations)` — selector.
 - `getDoseLogState(authorization, events, today)` → returns
-  `{ lastAdministeredAt, dosesToday, needsReacknowledgment }` (the last
-  flag is true when authorization details changed after the latest ack).
+  `{ lastAdministeredAt, dosesToday, needsReacknowledgment }`. The
+  re-ack flag is derived via PR #16's `computeAckHash` comparison
+  (per OQ2): if the current authorization's hash differs from the
+  active acknowledgment's `snapshot_hash`, re-ack is required.
 - `mayAdminister(caregiver, roles)` → returns boolean. Used for
   dropdown filtering.
 - `isTopicalOtcExempt(authorization)` → just reads
   `authorization.is_topical_otc`.
+
+#### B.1a Audit-state helper (`getMedicationLogAuditState(licenseeId)`, new — cross-cutting requirement)
+
+```js
+export async function getMedicationLogAuditState(licenseeId) {
+  return {
+    domain: 'medication_log',
+    type: 'type_2',                          // MILittleCare-owned.
+    active_authorizations_count: 0,
+    authorizations_needing_reacknowledgment_count: 0, // snapshot_hash drift
+    authorizations_missing_parent_permission_count: 0, // active auth, no active ack
+    children_with_otc_blanket_count: 0,
+    children_missing_otc_blanket_count: 0,   // children with active enrollment
+                                              // and no otc_blanket ack
+    dose_events_last_30d_count: 0,
+    archived_authorizations_with_recent_events_count: 0, // audit anomaly
+  }
+}
+```
+
+Read-only, single round-trip. Consumed by PR #22.
 
 #### B.2 Medication tab on Family modal
 
@@ -226,6 +263,13 @@ A small modal: select caregiver (role-filtered), datetime
 (default now), dose-administered text (default from authorization),
 notes. Save inserts a `medication_administration_events` row.
 
+**Allergies display (per OQ4 resolution).** Both the authorization form
+and the dose-log modal **prominently display** the child's
+`children.allergies` text near the top — pulled from the existing
+column, no schema change. Treated as a safety affordance; rendered in a
+warn-styled callout with an `⚠` icon. If `children.allergies` is empty,
+the callout is suppressed.
+
 #### B.4 TodayWidget extension
 
 Add a "Medications today" section showing active authorizations across
@@ -234,11 +278,18 @@ no event in the last 12 hours for that authorization, ignored for
 `is_topical_otc`). Inline "Log a dose" button per row jumps to the
 dose-log entry modal.
 
-#### B.5 Reminder integration (PR #15) — OPTIONAL V1
+#### B.5 Reminder integration (PR #15)
 
-`medication_authorization_renewal` category, fires when an
-authorization's `ends_on` is within N days. Default lead 7 days.
-Optional V1; primary path is the TodayWidget surface.
+PR #20 contributes one category to PR #15's `REMINDER_CATEGORIES`
+catalog:
+- `medication_authorization_renewal` — fires when an authorization's
+  `ends_on` is within `lead_time_days` (default 7) AND when
+  `getDoseLogState.needsReacknowledgment` becomes true. Subject_type =
+  `medication_authorization`.
+
+The TodayWidget surface remains the primary daily workflow; the
+reminder system adds the proactive nudge for renewals and re-acks
+without the provider having to open TodayWidget.
 
 #### B.6 Auditor-friendly print view
 
@@ -290,33 +341,33 @@ pattern.
 
 ---
 
-## Step 4 — Open questions
+## Step 4 — Open questions (RESOLVED 2026-05-26 review)
 
-1. **Free-text schedule vs structured schedule?** Recommend **free text
-   for V1**. The rule does not require a structured schedule; providers
-   work from prescription labels. A structured schedule with auto-due-dose
-   reminders is a strong V2 move once the daily workflow lands.
+1. **Free-text schedule vs structured schedule?** **RESOLVED — free
+   text V1.** Structured schedule with auto-due-dose reminders is a V2
+   move (out of scope, § 6). Providers work from prescription labels for
+   V1.
 
-2. **Where does the rule force re-acknowledgment?** When the
-   authorization's dose or schedule changes. PR #20's
-   `getDoseLogState.needsReacknowledgment` flag derives from
-   `snapshot_hash` comparison: if the current
-   authorization's hash differs from the active acknowledgment's
-   snapshot_hash, re-ack is required.
+2. **Re-acknowledgment trigger?** **RESOLVED — derived via
+   `snapshot_hash` comparison from PR #16.**
+   `getDoseLogState.needsReacknowledgment` flips true when the current
+   authorization's `computeAckHash` differs from the active
+   acknowledgment's stored `snapshot_hash`. Re-ack reuses PR #16's three
+   channels (parent_portal, in_person_paper, provider_override).
 
-3. **Topical OTC blanket permission vs per-medication permission?** Rule
-   accepts both. Recommend a **single "blanket OTC permission"
-   acknowledgment** per child (covers sunscreen, repellent, diaper rash
-   collectively) + per-prescription acknowledgment for non-OTC. The
-   acknowledgments table's polymorphism handles this cleanly. Flag for
-   owner.
+3. **Topical OTC blanket permission vs per-medication permission?**
+   **RESOLVED — blanket OTC permission per child + per-prescription
+   acknowledgment for non-OTC.** Two distinct ack types
+   (`medication_permission_otc_blanket`, `medication_permission`); see
+   § A.3.
 
 4. **Children with allergies — should the medication form display them
-   prominently?** Yes (UI affordance; pull from
-   `children.allergies`). Adds zero schema, important for safety.
+   prominently?** **RESOLVED — yes, prominently on the authorization
+   form and the dose-log entry modal.** Pulled from `children.allergies`
+   (existing column). UI affordance only — no schema change. See § B.3.
 
 5. **Should controlled-substance administration require an additional
-   witness?** The rule does not require this. Out of scope.
+   witness?** **RESOLVED — out of scope.** Not required by Rule 31.
 
 ---
 
