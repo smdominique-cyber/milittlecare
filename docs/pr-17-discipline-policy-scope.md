@@ -1,16 +1,20 @@
 # PR #17 — Discipline Policy (Rule 42): Implementation Scope (2026-05-26)
 
 **Scoping pass only. No code was changed, no branch created, no migration
-run.** This document is the spec for a follow-on implementation pass.
+run.** Open questions resolved 2026-05-26 review; doc reads as
+authoritative. **Production introspection of `business_policies` is
+complete** (per OQ7 / decisions doc): the table has ~22 columns
+including `late_fee_*`, `late_pickup_fee_*`, `payment_methods jsonb`,
+`emergency_procedures text`, `policies_set boolean`; **no existing
+`discipline_policy_*` column**. **Path A** is committed (add columns to
+`business_policies`); Path B is no longer under consideration.
 
 **Source decisions** (from
 `docs/licensed-home-compliance-decisions-2026-05-23.md` § OQ7 + Updated
 PR sequence): PR #17 stores the licensee's written discipline policy and
 captures **two** acknowledgments — parents at child intake (extends
 PR #16's intake bundle) and staff at hire (a new caregiver-side
-acknowledgment). Per OQ7, **production introspection of `business_policies`
-is a hard pre-condition** for this PR: if the policy fits that existing
-table, use it; if not, add a separate table and document the gap.
+acknowledgment).
 
 **Rule citations:**
 - **R 400.1942 (Rule 42) — Discipline.** Requires a written discipline
@@ -85,7 +89,7 @@ table, use it; if not, add a separate table and document the gap.
   rendered for "Payment & Fees", "Emergency Info" — names not enumerated
   in the codebase, only their read sites)
 
-**Pre-implementation introspection (must run before authoring):**
+**Production introspection (completed 2026-05-26 review):**
 
 ```sql
 select column_name, data_type, is_nullable, column_default
@@ -94,8 +98,10 @@ where table_schema='public' and table_name='business_policies'
 order by ordinal_position;
 ```
 
-If a `discipline_policy_text` (or similar) column already exists, this PR
-reuses it. If not, this PR adds it.
+Result: ~22 columns including `late_fee_*`, `late_pickup_fee_*`,
+`payment_methods jsonb`, `emergency_procedures text`,
+`policies_set boolean`. **No `discipline_policy_*` column exists.** PR
+#17 adds three columns to this table — see § A.1.
 
 ### Acknowledgments substrate (from PR #16)
 
@@ -130,9 +136,10 @@ general table.
 
 **Migration 025** (post-PR-16's 024).
 
-#### A.1 Discipline policy storage (two paths, gate on introspection)
+#### A.1 Discipline policy storage (Path A — column on `business_policies`)
 
-**Path A — column on `business_policies` (preferred if it fits):**
+Per the 2026-05-26 introspection result: no naming conflict, the
+provider-level fit is clean. Three columns added:
 
 ```sql
 alter table public.business_policies
@@ -141,24 +148,11 @@ alter table public.business_policies
   add column if not exists discipline_policy_updated_at timestamptz;
 ```
 
-**Path B — separate `discipline_policies` table (if `business_policies`
-shape is wrong):**
-
-```sql
-create table public.discipline_policies (
-  id              uuid primary key default gen_random_uuid(),
-  provider_id     uuid not null references auth.users(id) on delete cascade,
-  text            text not null,
-  version         integer not null default 1,
-  updated_at      timestamptz not null default now(),
-  archived_at     timestamptz,
-  unique (provider_id) where archived_at is null
-);
-```
-
-The PR commit will commit to one path after introspection. Path B is the
-fallback; Path A is preferred (matches the existing pattern where
-provider-level configuration lives on `business_policies`).
+Path B (a separate `discipline_policies` table) was considered and
+dismissed — the existing `business_policies` row is the right home for
+provider-level configuration, and a parallel table would fragment
+queries. This decision is final; rollout (§ G) and migration (§ A)
+assume Path A throughout.
 
 #### A.2 `acknowledgments` consumption
 
@@ -184,26 +178,32 @@ version).
 
 ### B. App-code structure
 
-#### B.1 Discipline policy editor (`src/pages/BusinessInfoPage.jsx` —
-new section, or new page)
+#### B.1 Discipline policy editor (`src/pages/DisciplinePolicyPage.jsx`, new dedicated route)
 
-A new BusinessInfoPage section (or a sibling page,
-`src/pages/DisciplinePolicyPage.jsx`, sidebar nav under "Compliance" or
-"Settings"). Includes:
+Per OQ3 resolution: a **dedicated `/discipline-policy` route** under the
+Compliance section of the sidebar (gated on `LICENSED_COMPLIANCE`).
+Distinct surface — the version-bump UX is too prominent for a
+BusinessInfoPage sub-section. Includes:
+
 - A starter template populated from a `src/lib/disciplinePolicyTemplate.js`
   static string (the MiLEAP-language clauses).
-- A textarea editor.
+- A textarea editor with **autosave** for typo-level edits (writes to
+  `discipline_policy_text` and `discipline_policy_updated_at`; does NOT
+  bump `discipline_policy_version`).
 - A **"verify required clauses" linter** — pure function in
   `src/lib/disciplinePolicy.js` that scans the text for required
-  phrases (prohibited methods, time-out rule, positive guidance
-  statement) and reports missing clauses. Save is allowed regardless;
-  the linter just warns. See § E for what's required.
-- A **"save as new version"** action that:
-  - Increments `discipline_policy_version` (or stamps version to
-    `current_version + 1`).
-  - Updates `discipline_policy_text` and `discipline_policy_updated_at`.
-  - Returns to the policy view, which renders a "Stale acknowledgments:
-    N families, M staff need to re-acknowledge" banner.
+  phrases and reports missing clauses. Per OQ4: **warn-only, never
+  blocks save.** See § E.
+- A separate **"Save as new version"** button distinct from autosave
+  (per OQ2 resolution):
+  - **Confirmation modal** before the bump, explicitly listing the
+    cascade ("Saving as a new version will mark N family
+    acknowledgments and M staff acknowledgments stale. Parents and
+    caregivers will need to re-acknowledge the new policy.")
+  - On confirm: increments `discipline_policy_version`, updates text +
+    `discipline_policy_updated_at`, returns to the policy view
+    rendering a "Stale acknowledgments: N families, M staff" banner
+    with a CTA to launch re-collection.
 
 #### B.2 Parent-intake consumer
 
@@ -227,6 +227,42 @@ A pure helper `getStaleAcknowledgments(currentVersion, acks)` that
 returns the subset where `snapshot_version !== currentVersion`. The
 discipline-policy editor and the dashboard surface this count and a CTA
 (in licensed-home compliance mode).
+
+#### B.4a Stale-ack remediation channels
+
+Per OQ5 resolution: **same channels as the initial acknowledgment.**
+- Parent stale acks: provider can re-collect via paper / in-person
+  (`acknowledged_via = 'in_person_paper'` or `provider_override`) OR
+  re-trigger parent-portal collection via PR #16's portal extension
+  (`acknowledged_via = 'parent_portal'`).
+- Staff stale acks: licensee captures on behalf
+  (`acknowledged_via = 'provider_override'` with a noted reason) OR the
+  caregiver acknowledges via their own app-user session if applicable.
+The product surfaces the staleness; the provider chooses the channel.
+
+#### B.4b Audit-state helper (`getDisciplinePolicyAuditState(licenseeId)`, new — cross-cutting requirement)
+
+Per the audit-state mandate, PR #17 exposes a pure helper in
+`src/lib/disciplinePolicy.js`:
+
+```js
+export async function getDisciplinePolicyAuditState(licenseeId) {
+  return {
+    domain: 'discipline_policy',
+    type: 'type_2',                          // MILittleCare-owned.
+    has_policy_text: false,                  // discipline_policy_text IS NOT NULL/empty
+    current_version: 0,                      // discipline_policy_version
+    parent_acks_current_count: 0,            // count where snapshot_version === current_version
+    parent_acks_stale_count: 0,
+    staff_acks_current_count: 0,
+    staff_acks_stale_count: 0,
+    new_hires_without_ack_count: 0,          // caregivers with date_of_hire
+                                              // AND no active staff_discipline_policy_receipt
+  }
+}
+```
+
+Consumed by future PR #22 (Compliance Health Score). Read-only.
 
 #### B.5 Required-clause linter (`src/lib/disciplinePolicy.js`)
 
@@ -308,67 +344,63 @@ the staff matrix column gate on `MODULE_KEYS.LICENSED_COMPLIANCE`
 
 ### G. Rollout
 
-1. **Pre-implementation:** run the `business_policies` introspection
-   query in the Supabase dashboard. Save the column list. Decide Path A
-   vs Path B. Update this scope doc.
-2. Apply migration 025; verify column / table shape per dashboard
-   screenshot.
-3. Deploy app; the editor is live, the existing policy text is empty
-   (provider must compose). Existing children show "discipline ack
-   missing" until the parent acks the policy v1.
-4. **Communicate to Venessa:** "Compose your discipline policy in
-   Business Info → Discipline Policy; we'll prompt for parent
-   acknowledgments when you save."
+1. Apply migration 025 (three column adds on `business_policies` per
+   Path A); verify column shape per dashboard screenshot. Introspection
+   already done at scoping time — no re-introspection required.
+2. Deploy app; the dedicated `/discipline-policy` editor is live; the
+   existing policy text is empty (provider must compose). Existing
+   children show "discipline ack missing" until the parent acks
+   policy v1.
+3. **Communicate to Venessa:** "Compose your discipline policy in
+   Compliance → Discipline Policy; we'll prompt for parent and staff
+   acknowledgments when you save the first version."
 
 ---
 
-## Step 4 — Open questions
+## Step 4 — Open questions (RESOLVED 2026-05-26 review)
 
 1. **Path A vs Path B (column on `business_policies` vs new table)?**
-   **Decision blocked on introspection.** Recommend Path A if a
-   `discipline_policy_*` column does not already exist and the table is
-   under ~20 columns. Path B if introspection reveals significant
-   `business_policies` bloat or naming conflicts.
+   **RESOLVED — Path A.** Production introspection confirmed
+   `business_policies` has ~22 columns and no `discipline_policy_*`
+   column; the table is the right home. Three columns added per § A.1.
 
-2. **Version bumping — manual or automatic on every save?** Recommend
-   **manual** (a "Save as new version" button distinct from autosave) so
-   typo fixes don't invalidate all acknowledgments. The provider should
-   intend the version bump when meaningful content changed. Flag for owner.
+2. **Version bumping — manual or automatic on every save?** **RESOLVED
+   — manual** via a "Save as new version" button distinct from
+   autosave. **Confirmation modal** before the bump, spelling out the
+   stale-ack cascade. Autosave handles typo-level edits without bumping.
 
-3. **Where does the discipline policy editor live in the IA — sidebar,
-   sub-section of BusinessInfoPage, or a new page?** Recommend **new
-   `/discipline-policy` route under Compliance** (sidebar entry,
-   visible only when LICENSED_COMPLIANCE is active). Distinct surface
-   reflects its compliance nature; the version banner UX is too prominent
-   for a sub-section. Flag for owner.
+3. **Where does the discipline policy editor live in the IA?**
+   **RESOLVED — dedicated `/discipline-policy` route** under the
+   Compliance sidebar nav (gated on `LICENSED_COMPLIANCE`). Not a
+   sub-section of BusinessInfoPage. See § B.1.
 
-4. **Required-clause linter — block save or warn-only?** Recommend
-   **warn-only.** Rule language varies; the provider may use synonyms.
-   The linter is guidance, not a gate. Flag for owner.
+4. **Required-clause linter — block save or warn-only?** **RESOLVED —
+   warn-only, never blocks save.** Rule language varies; the provider
+   may phrase clauses differently. Linter is guidance.
 
-5. **Stale-ack remediation — re-collect via portal, re-collect on next
-   visit, or paper-only?** Recommend **same channels as initial
-   acknowledgment** (the parent portal or in-person paper / provider
-   override). The product surfaces the staleness; the provider chooses
-   the channel.
+5. **Stale-ack remediation channels?** **RESOLVED — same channels as
+   the initial acknowledgment.** Parent stale acks → paper / in-person
+   / provider-override OR parent portal (via PR #16). Staff stale acks
+   → provider-override OR caregiver self-ack. See § B.4a.
 
 ---
 
 ## Step 5 — Effort estimate
 
-**M.** Modest schema change (one column or one small table), a new
-editor surface with a versioning workflow, two acknowledgment-table
-extensions of an existing pattern (PR #16's table), and a starter
-template + linter. The riskiest piece is the pre-implementation
-introspection — easily handled but procedurally important per OQ7.
+**M.** Modest schema change (three columns on `business_policies` per
+Path A — already confirmed by 2026-05-26 production introspection), a
+new dedicated editor surface with a versioning workflow and confirmation
+modal, two acknowledgment-table extensions of an existing pattern
+(PR #16's table), starter template + warn-only linter, plus the
+audit-state helper. No remaining unknowns from the introspection gate.
 
 ---
 
 ## Step 6 — Out of scope (future PRs)
 
-- **Multi-version history table** — V1 keeps only the current text
-  (Path A) or one active row (Path B). A full audit trail of every
-  prior version is a future move if compliance audits demand it.
+- **Multi-version history table** — V1 keeps only the current text on
+  `business_policies` (Path A). A full audit trail of every prior
+  version is a future move if compliance audits demand it.
 - **Linter that proves rule compliance** (vs the warn-only heuristic) —
   a heavier NLP / structured-policy editor. Future move.
 - **Block-billing on missing acknowledgments** — analogous to PR #9's
@@ -384,9 +416,10 @@ introspection — easily handled but procedurally important per OQ7.
   table of its own for the acknowledgments; it only adds new `type`
   values and a stale-detection helper.
 - **PR #14 (license_type) — REQUIRED.** All UI surfaces gate on it.
-- **PR #15 (reminders) — OPTIONAL.** The
-  `staff_discipline_policy_ack_pending` reminder uses it; if PR #15 is
-  not shipped, the matrix indicator alone serves.
+- **PR #15 (reminders) — REQUIRED.** PR #15's catalog includes
+  `staff_discipline_policy_ack_pending`; this PR contributes that
+  category and consumes it for the matrix indicator + email
+  notification when a hire has no policy ack on file.
 - **PR #8 (staff training tracking) — REQUIRED.** Provides the
   `caregivers` table that the staff-side acknowledgment binds to.
 
