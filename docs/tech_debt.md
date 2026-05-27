@@ -795,3 +795,11 @@ Re-enable when one of:
 - The acknowledgment cron is rewritten to run via a different trigger (manual "send reminders" button, Supabase `pg_cron`, or an external scheduler hitting the endpoint).
 
 Note for whoever re-enables: the handler is hourly (`0 * * * *`) by design — it checks each provider's `acknowledgment_email_send_day`/`_send_hour` against the current local time in their TZ and only sends in the matching window. A coarser schedule would miss providers whose chosen hour doesn't line up with the cron tick.
+
+## families.archived_at retention gap
+
+`families` table has no `archived_at`. When the last child in a family is archived, the family record currently has no clean way to be retained-but-hidden. Identified during PR #13 review and explicitly scoped out of that PR.
+
+Implication: hard-deleting a family cascades to all related records (children, guardians, emergency_contacts, etc.). When PR #16 (Child files / Category D) ships and child retention becomes real, families with all-archived-children become a visual and data hygiene problem.
+
+Fix: same pattern as PR #13 — add `archived_at` to families + soft-delete audit. Probably a small standalone PR after PR #16.

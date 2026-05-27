@@ -115,3 +115,45 @@ Show/hide compliance surfaces based on license type
 Default to LEP for existing customers; Venessa's account switches to Group Home
 
 This is the foundation that everything else builds on. Should probably ship before any of Tier A or B.
+Backlog entry to ADD
+This file contains the entry to add to docs/backlog.md, not a replacement for the whole file. Append this content to the existing backlog.md as a new top-priority section.
+
+Post-July priority: CDC redetermination ownership
+Status: Highest-priority post-July product wedge. Spec drafted, validation in hand, awaiting compliance PRs (#13-#21) to complete.
+Customer validation: See docs/customer-research-2026-05-23.md. Three Facebook threads in May 2026. Direct quotes including:
+
+"We don't get notified that their case is cut off until we bill and DONT get paid" (Crystal Wartley)
+"Must continuously check CDC billing to see if child is active (letters are late - months late)" (Anonymous 516)
+"You have to remember to bill if you wanna get paid" (Amy T — universal even for experienced providers)
+
+Strategic context: See docs/strategy.md § Redetermination ownership. This is the strongest current product wedge — validated by customers, grounded in state docs, not addressed by competitors, survives state modernization, natural extension of existing acknowledgment infrastructure.
+Spec: See docs/redetermination-ownership-spec.md for the full product spec including state machine, reminder series copy, data model, and phasing options.
+Why this is the right next focus post-July
+
+Customer-validated pain (most-mentioned issue across three Facebook threads, ~10 unique respondents)
+Grounded in state documentation (CDC Handbook, BAM 210, BEM 703, DHS-198, MDHHS-5419)
+Predictable, rule-based workflow that's currently unowned by any software
+Affects real money for both providers and parents
+Not addressed by Brightwheel or other generalist software
+Natural extension of the parent-acknowledgment infrastructure from PR #12 and the general acknowledgments table introduced in PR #16
+Survives state modernization — intelligence layer, not workflow layer
+
+Phasing recommendation
+Five phases, each its own PR (probably PR #25+ in sequence):
+PhaseTitleScopeDependency1Authorization trackingDHS-198 capture, computed redetermination window, dashboard viewPR #14, PR #162Responsibility disclosureParent acknowledgment at intake, auto-generated PDFPR #16 (acknowledgments table)3Reminder system + state machineEscalating reminders, state transitions, parent response capturePR #15 (reminder infra), Vercel Pro4Parent education contentPlain-language "how not to fall off" contentPhase 35Back-billing assistance90-day revision window helper, attendance reconstructionPhase 1
+Each phase is independently valuable. Phase 1 alone would have prevented some falloffs the Facebook providers described.
+Estimated effort
+Rough scope estimates (will firm up during scoping per phase):
+
+Phase 1: M (1 PR)
+Phase 2: S-M (uses existing acknowledgments infra)
+Phase 3: L (the big build — scheduler, state machine, reminder copy, cron infra)
+Phase 4: S (mostly content)
+Phase 5: M
+
+Total roughly 3-5 PRs over 6-12 weeks of post-July work.
+Marketing positioning when this ships
+Headline: "MILittleCare ends CDC surprise falloffs."
+This is a strong enough wedge to anchor a landing-page section and an outreach push.
+Open questions captured in spec
+7 open questions are documented in docs/redetermination-ownership-spec.md § Open questions. They don't need answers before Phase 1 ships, but Phase 3 cannot begin until they're resolved.
