@@ -13,6 +13,7 @@ import StaffClockWidget from '@/components/dashboard/StaffClockWidget'
 import InstallBanner from '@/components/ui/InstallBanner'
 import AnnualTrainingBanner from '@/components/dashboard/AnnualTrainingBanner'
 import LicenseTypeReviewBanner from '@/components/dashboard/LicenseTypeReviewBanner'
+import ReminderBanners from '@/components/dashboard/ReminderBanners'
 import OnboardingCompletionCard from '@/components/onboarding/OnboardingCompletionCard'
 import OnboardingNextStepPrompt from '@/components/onboarding/OnboardingNextStepPrompt'
 import { useOnboardingStatus } from '@/hooks/useOnboardingStatus'
@@ -225,6 +226,7 @@ export default function DashboardPage() {
         {onboardingBanner}
         {licenseTypeReviewBanner}
         {annualTrainingBanner}
+        <ReminderBanners />
         {staffMembership && (
           <StaffClockWidget userId={user.id} membership={staffMembership} />
         )}
@@ -299,6 +301,7 @@ export default function DashboardPage() {
       {onboardingBanner}
       {licenseTypeReviewBanner}
       {annualTrainingBanner}
+      <ReminderBanners />
       {staffMembership && (
         <StaffClockWidget userId={user.id} membership={staffMembership} />
       )}
