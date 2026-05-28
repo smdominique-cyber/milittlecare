@@ -17,6 +17,7 @@ export const MODULE_KEYS = Object.freeze({
   LICENSED_COMPLIANCE: 'licensed_compliance',
   LICENSE_EXEMPT_COMPLIANCE: 'license_exempt_compliance',
   CACFP: 'cacfp',
+  REMINDERS: 'reminders',
 })
 
 // Funding source type -> auto-activated module key.
@@ -129,6 +130,18 @@ export function getActiveModules({ profile, fundingSources, isTrackedStaffCaregi
     modules.add(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)
   }
   if (settings.cacfp === true) modules.add(MODULE_KEYS.CACFP)
+
+  // PR #15: the opt-in reminder system's settings page is available to
+  // any provider with a confirmed license_type — including LEPs, who
+  // get their own catalog entries (miregistry_annual_training,
+  // fingerprint_reprint). Per-category gating (which categories show
+  // up in the settings UI) is enforced by the catalog's
+  // `license_type_gating` field, not here. We only gate at the
+  // module level: a provider who has not yet picked a license_type
+  // sees no reminders surface (mirrors the LicenseTypeReviewBanner UX).
+  if (safeProfile.license_type != null) {
+    modules.add(MODULE_KEYS.REMINDERS)
+  }
 
   return modules
 }

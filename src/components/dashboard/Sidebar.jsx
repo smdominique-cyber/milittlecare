@@ -29,6 +29,7 @@ import {
   FileSpreadsheet,
   UserCheck,
   BookOpen,
+  Bell,
 } from 'lucide-react'
 
 function getInitials(name) {
@@ -115,6 +116,7 @@ export default function Sidebar({ isOpen = false }) {
       items: [
         { label: 'Business Info', icon: Building2, path: '/business-info', roles: ['licensee'] },
         { label: 'Team', icon: UserCog, path: '/staff', roles: ['licensee'] },
+        { label: 'Reminders', icon: Bell, path: '/reminders', roles: ['licensee'], module: MODULE_KEYS.REMINDERS },
         { label: 'Subscription', icon: CreditCard, path: '/subscription', roles: ['licensee'] },
         { label: 'How Money Works', icon: Shield, path: '/how-money-works' },
         { label: 'Contact / Support', icon: MessageSquare, path: '/contact' },

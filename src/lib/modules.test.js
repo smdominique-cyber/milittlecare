@@ -273,6 +273,47 @@ describe('getActiveModules', () => {
       expect(modules.has(MODULE_KEYS.LICENSE_EXEMPT_COMPLIANCE)).toBe(false)
     })
 
+    // PR #15 Half 2: REMINDERS module key.
+    it('REMINDERS activates whenever license_type is set (family_home)', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, license_type: 'family_home' },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.REMINDERS)).toBe(true)
+    })
+
+    it('REMINDERS activates for group_home providers', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, license_type: 'group_home' },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.REMINDERS)).toBe(true)
+    })
+
+    it('REMINDERS activates for license_exempt providers (LEPs configure CDC reminders)', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, license_type: 'license_exempt' },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.REMINDERS)).toBe(true)
+    })
+
+    it('REMINDERS does NOT activate when license_type is null (provider has not confirmed type yet)', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {}, license_type: null },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.REMINDERS)).toBe(false)
+    })
+
+    it('REMINDERS does NOT activate when license_type is absent from the profile', () => {
+      const modules = getActiveModules({
+        profile: { program_settings: {} },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.REMINDERS)).toBe(false)
+    })
+
     it('michigan_license_number alone (no license_type) does NOT activate LICENSED_COMPLIANCE — PR #14 dropped that trigger', () => {
       const modules = getActiveModules({
         profile: { program_settings: {}, michigan_license_number: 'DC-1234' },
