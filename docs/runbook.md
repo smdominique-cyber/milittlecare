@@ -14,6 +14,19 @@ All schema migrations are currently applied manually. Until automated migration 
 
 Rollback follows the same pattern in reverse: open the migration's commented `DOWN MIGRATION` section, uncomment, paste, run. Always rollback the latest applied migration first and walk backwards in number order.
 
+### Vercel cron count (PR #15 Half 2)
+
+PR #15 Half 2 brought the active cron count to 4. The Vercel Pro upgrade prerequisite was satisfied 2026-05-27 (per the OQ4 resolution in `docs/pr-15-opt-in-reminder-system-scope.md`); Hobby's 2-cron limit no longer applies.
+
+Crons in `vercel.json` after Half 2:
+
+1. `/api/cron-generate-autopay-invoices` - Mondays 03:00 (pre-existing).
+2. `/api/cron-charge-autopay` - Mondays 14:00 (pre-existing).
+3. `/api/cron-send-acknowledgment-digest` - hourly (re-enabled in Half 2; was disabled per `docs/tech_debt.md` 2026-05-22 due to the Hobby cap).
+4. `/api/cron-dispatch-reminders` - hourly (added in Half 2).
+
+Each new cron handler verifies a `CRON_SECRET` env var matching the `Authorization: Bearer ...` header before processing. Required env vars on Vercel: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET`. Optional: `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `PUBLIC_APP_URL` (the dispatcher composes deep links from PUBLIC_APP_URL + the instance's cta_path).
+
 ### Operational note â€” the web SQL Editor mangles long statements
 
 âš ï¸ **The Supabase web SQL Editor cannot reliably execute long single
@@ -562,9 +575,9 @@ Rollback â€” uncomment the `DOWN MIGRATION` block at the foot of
 override and re-grants `EXECUTE` to `anon`, restoring the pre-015
 state (`handle_new_user` goes back to `set search_path = public` to
 match migration 001's original). The dashboard leaked-password toggle
-is rolled back separately by un-checking the same setting.### Documentation gap — Migrations 016-020 (applied 2026-05-21 to 2026-05-22)
+is rolled back separately by un-checking the same setting.### Documentation gap ï¿½ Migrations 016-020 (applied 2026-05-21 to 2026-05-22)
 
-> ?? **Doc debt — runbook entries not written at the time of application.**
+> ?? **Doc debt ï¿½ runbook entries not written at the time of application.**
 > The following five migrations exist in `supabase/migrations/` and were
 > applied to production (later migrations depending on them succeed, so
 > the schema is live), but individual runbook entries were never written
@@ -576,21 +589,21 @@ is rolled back separately by un-checking the same setting.### Documentation gap 
 > the user in the Supabase web SQL Editor per CLAUDE.md convention, but
 > the screenshots and query outputs were not saved.
 
-- `016_capture_existing_schema_for_pr_8_5.sql` — schema capture migration
+- `016_capture_existing_schema_for_pr_8_5.sql` ï¿½ schema capture migration
   for PR #8.5, ~2026-05-21.
-- `017_promote_cdc_fields_and_expand_lifecycle.sql` — CDC field promotion
+- `017_promote_cdc_fields_and_expand_lifecycle.sql` ï¿½ CDC field promotion
   and lifecycle expansion, ~2026-05-21.
-- `018_provider_cdc_billing_settings.sql` — provider CDC billing settings
+- `018_provider_cdc_billing_settings.sql` ï¿½ provider CDC billing settings
   table, ~2026-05-21.
-- `019_pr_9_i_billing_schema.sql` — PR #9 I-Billing schema, ~2026-05-21.
-- `020_parent_acknowledgment.sql` — parent acknowledgment table (PR #12),
+- `019_pr_9_i_billing_schema.sql` ï¿½ PR #9 I-Billing schema, ~2026-05-21.
+- `020_parent_acknowledgment.sql` ï¿½ parent acknowledgment table (PR #12),
   ~2026-05-22.
 
 Going forward, runbook entries are written in the same session as the
 migration is applied. The 2026-05-28 backfill session that produced this
 note (and the entries below for 021, 022, 023) is the corrective action.
 
-### ~2026-05-25 — Migration 021: children.archived_at + soft-delete audit (PR #13) — BACKFILLED ENTRY
+### ~2026-05-25 ï¿½ Migration 021: children.archived_at + soft-delete audit (PR #13) ï¿½ BACKFILLED ENTRY
 
 > ?? **Backfilled 2026-05-28.** Applied to production in late May 2026
 > (file `LastWriteTime` is 2026-05-25; exact application date not
@@ -600,33 +613,33 @@ note (and the entries below for 021, 022, 023) is the corrective action.
 > migration file itself and the PR #13 scope doc; the schema shape is
 > recoverable from `supabase/migrations/021_children_archived_at.sql`.
 
-What the migration does — `021_children_archived_at.sql` adds soft-delete
+What the migration does ï¿½ `021_children_archived_at.sql` adds soft-delete
 to the `public.children` table:
 
-- `archived_at timestamptz` — nullable; non-null indicates soft-deleted.
-- `archived_by uuid` — references `auth.users(id) on delete set null`;
+- `archived_at timestamptz` ï¿½ nullable; non-null indicates soft-deleted.
+- `archived_by uuid` ï¿½ references `auth.users(id) on delete set null`;
   records who soft-deleted the child.
 - Partial index on `(licensee_id, archived_at)` filtered to
   `archived_at IS NOT NULL` for archive-list queries.
 - RLS update policy expanded to allow setting `archived_at` from null to
   non-null.
 
-Dependencies — sequential after migration 020. Independent of any
+Dependencies ï¿½ sequential after migration 020. Independent of any
 prior migration's data.
 
-Editor note — short DDL, no long seed INSERT; the web SQL Editor
+Editor note ï¿½ short DDL, no long seed INSERT; the web SQL Editor
 long-statement bug (operational note above) does not apply.
 
-Verification — performed by the user in the Supabase web SQL Editor at
+Verification ï¿½ performed by the user in the Supabase web SQL Editor at
 application time. Specific query output not preserved. The verification
 checked column existence, partial index existence, and the updated RLS
 policy shape. ? at application time; not re-verifiable from saved
 artifacts.
 
-Rollback — uncomment the `DOWN MIGRATION` block in
+Rollback ï¿½ uncomment the `DOWN MIGRATION` block in
 `021_children_archived_at.sql` (drop the index, then the columns).
 
-### 2026-05-26 — Migration 022: license_type foundation (PR #14) — BACKFILLED ENTRY
+### 2026-05-26 ï¿½ Migration 022: license_type foundation (PR #14) ï¿½ BACKFILLED ENTRY
 
 > ?? **Backfilled 2026-05-28.** Applied to production on 2026-05-26
 > (per session notes and file `LastWriteTime`). User-run verification
@@ -638,28 +651,28 @@ Rollback — uncomment the `DOWN MIGRATION` block in
 > license_type: `group_home: 1, license_exempt: 1, needs_review: 1`)
 > but not screenshot-archived.
 
-What the migration does — `022_license_type.sql` introduces the
+What the migration does ï¿½ `022_license_type.sql` introduces the
 `license_type` foundation column on `public.profiles` (PR #14):
 
 - `license_type text` with CHECK over
   `'family_home' | 'group_home' | 'license_exempt'` (text + CHECK over
-  ENUM per house pattern — same rationale as `provider_type`).
-- `license_type_review_needed boolean` — drives the re-prompt banner
+  ENUM per house pattern ï¿½ same rationale as `provider_type`).
+- `license_type_review_needed boolean` ï¿½ drives the re-prompt banner
   when set.
 - Transactional backfill from existing `provider_type` and
   `is_license_exempt` columns, plus a row-count SELECT.
 - Header cites R 400.1925 / R 400.1927 / R 400.1928 (Michigan
   Administrative Code).
 
-Dependencies — sequential after migration 021. Depends on existing
+Dependencies ï¿½ sequential after migration 021. Depends on existing
 `provider_type` and `is_license_exempt` columns on `profiles` for the
 backfill (both present in production pre-022).
 
-Editor note — DDL plus a transactional backfill plus a row-count
+Editor note ï¿½ DDL plus a transactional backfill plus a row-count
 SELECT, all short statements; the web SQL Editor long-statement bug
 does not apply.
 
-Verification — performed by the user in the Supabase web SQL Editor at
+Verification ï¿½ performed by the user in the Supabase web SQL Editor at
 application time. Partial result preserved in session notes: count by
 license_type post-backfill was `group_home: 1, license_exempt: 1,
 needs_review: 1`. Screenshots not saved.
@@ -668,16 +681,16 @@ Additionally smoke-tested end-to-end in production: user logged in, saw
 the LicenseTypeReviewBanner, selected Group Home, saw the "Thanks!"
 confirmation. The 3-row post-state matched expectation (Venessa ?
 group_home, one license-exempt test account, one row pending user
-selection — the licensee_review_needed flag was correctly true on the
+selection ï¿½ the licensee_review_needed flag was correctly true on the
 third row at the time, though that flag has since been cleared and the
 underlying row resolved per separate followup).
 
-Rollback — uncomment the `DOWN MIGRATION` block in
+Rollback ï¿½ uncomment the `DOWN MIGRATION` block in
 `022_license_type.sql`. The transactional backfill is destructive on
 rollback (you lose the backfilled values); a re-run of the migration
 re-derives them from `provider_type` and `is_license_exempt`.
 
-### 2026-05-28 — Migration 023: opt-in reminder system schema (PR #15 Half 1)
+### 2026-05-28 ï¿½ Migration 023: opt-in reminder system schema (PR #15 Half 1)
 
 Applied to production on **2026-05-28** by Seth, via the **Supabase web
 SQL Editor** (PR #15 Half 1, branch `feature/pr-15-reminder-system`).
@@ -685,17 +698,17 @@ This is the schema half of PR #15; Half 2 (the dispatcher cron, hooks,
 settings UI, banner host, and `vercel.json` wiring) is a separate pass
 not yet built.
 
-What the migration creates — `023_reminder_system.sql`:
+What the migration creates ï¿½ `023_reminder_system.sql`:
 
-- **`public.reminder_preferences`** — one row per `(provider_id,
+- **`public.reminder_preferences`** ï¿½ one row per `(provider_id,
   category)`. Tracks the provider's opt-in choice per reminder
   category. Fields: `channel` (text + CHECK over
   `'in_app' | 'email' | 'both'`), `lead_time_days` (int 0-365, default
   7), `enabled` (boolean, default true). The category column is
-  free-text (text, no CHECK enum) per OQ3 — the authoritative catalog
+  free-text (text, no CHECK enum) per OQ3 ï¿½ the authoritative catalog
   lives in `src/lib/reminderCategories.js`, not the database.
-- **`public.reminder_instances`** — one row per scheduled reminder
-  fire. Polymorphic anchor via `(subject_type text, subject_id uuid)` —
+- **`public.reminder_instances`** ï¿½ one row per scheduled reminder
+  fire. Polymorphic anchor via `(subject_type text, subject_id uuid)` ï¿½
   both nullable so provider-level reminders work too. Captures
   `trigger_at`, `due_at`, `title`, `body`, `cta_path`, `fired_at`,
   `fired_via`, `dismissed_at`, `resolved_at`, `archived_at`.
@@ -705,16 +718,16 @@ What the migration creates — `023_reminder_system.sql`:
   NULL`) and `idx_reminder_instances_unique_no_subject` (where
   `subject_id IS NULL`). Together they prevent duplicate instances for
   both subject-bound and provider-level reminders.
-- **Two hot-path indexes** —
+- **Two hot-path indexes** ï¿½
   `idx_reminder_instances_pending` (dispatcher cron filter) and
   `idx_reminder_instances_active` (banner host filter).
-- **RLS** — provider-scoped SELECT/INSERT/UPDATE on
+- **RLS** ï¿½ provider-scoped SELECT/INSERT/UPDATE on
   `reminder_preferences` (3 policies); provider-scoped SELECT only on
   `reminder_instances` (1 policy). Server-side schedulers and the
   dispatcher run under the service role (bypasses RLS). Provider
   mutations on `reminder_instances` go through two SECURITY DEFINER
   RPCs.
-- **Two SECURITY DEFINER RPCs** —
+- **Two SECURITY DEFINER RPCs** ï¿½
   `reminder_instance_dismiss(p_instance_id uuid)` and
   `reminder_instance_resolve(p_instance_id uuid)`. Both lock
   `search_path = public`, enforce ownership via
@@ -724,18 +737,18 @@ What the migration creates — `023_reminder_system.sql`:
 - Two `set_updated_at` triggers (one per table) using the existing
   `public.set_updated_at()` function from migration 001.
 
-Dependencies — sequential after migration 022 (PR #14 license_type).
+Dependencies ï¿½ sequential after migration 022 (PR #14 license_type).
 Hard dependency on `public.set_updated_at()` (verified to exist
 pre-application via `pg_proc` query). No data dependency on any prior
-migration — no backfill, no seed rows.
+migration ï¿½ no backfill, no seed rows.
 
-Editor note — all DDL plus two CREATE OR REPLACE FUNCTION statements;
+Editor note ï¿½ all DDL plus two CREATE OR REPLACE FUNCTION statements;
 no long seed INSERTs. The web SQL Editor long-statement bug
 (operational note above) does not apply. Migration was pasted as a
 single file and executed in one run.
 
-Verification — four queries run by Seth in the Supabase web SQL Editor
+Verification ï¿½ four queries run by Seth in the Supabase web SQL Editor
 on **2026-05-28**, all passed:
 
-1. **Tables exist** —
+1. **Tables exist** ï¿½
 ```sql

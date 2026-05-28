@@ -1,5 +1,20 @@
 # Tech Debt
 
+## Legacy dashboard banners coexist with the new ReminderBanners host (PR #15 Half 2)
+
+PR #15 Half 2 introduced `src/components/dashboard/ReminderBanners.jsx` as a generic banner host that reads `useActiveReminders()` and renders one stacked banner per active reminder instance. The three legacy bespoke banners - `AnnualTrainingBanner.jsx`, `LicenseTypeReviewBanner.jsx`, `MiRegistryWarningBanner.jsx` - remain mounted alongside the new host per PR #15 OQ4 resolution.
+
+Why both at once:
+- The legacy banners do more than just render: each one self-loads its own data (training entries, profile, miregistry entries) and embeds bespoke behavior (LicenseTypeReviewBanner auto-opens the LicenseStatusPromptModal; AnnualTrainingBanner gates on `is_license_exempt`). Migrating that behavior into the host requires a per-banner scheduler that writes parallel `reminder_instances` rows, plus a careful UX review so the consolidation does not regress the user-visible severity/copy.
+- Half 2 ships the new host with one example scheduler (`miregistryAnnualTrainingScheduler.js`) that writes parallel instances. On the dashboard the provider may see both the legacy AnnualTrainingBanner and a new ReminderBanners entry for the same deadline until consolidation lands - acceptable for V1.
+
+Consolidation plan (follow-up PR):
+1. Add per-banner schedulers for fingerprint reprint and license-type-review (the LicenseTypeReviewBanner's modal-auto-open behavior moves into the host as a per-category render override).
+2. Once each legacy banner has a scheduler equivalent, remove the bespoke component file and its DashboardPage import.
+3. Verify by smoke-testing each of the four LEP / licensed states to confirm severity + copy parity.
+
+Tracked here so a future cleanup PR knows the scope. Not blocking PR #15 sign-off.
+
 ## `is_license_exempt` is now a derived mirror of `license_type` (PR #14)
 
 Migration 022 added `profiles.license_type` as the compliance source of
