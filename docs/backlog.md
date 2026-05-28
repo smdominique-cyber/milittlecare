@@ -23,8 +23,8 @@ grant; the advisor catches it.
   `015_security_hardening.sql` (branch `chore/supabase-security-hardening`,
   2026-05-19) plus the dashboard step for the leaked-password setting. See
   `docs/runbook.md` § 015 for the per-function changes and verification.
-PR #13 — Auditor Read-Only Portal
-Trigger: Providers facing a real CDC audit need a way to give MDHHS auditors structured access to compliance records without granting full app access.
+Future PR — Auditor Read-Only Portal (number TBD post-PR-#21)
+Trigger: Providers facing a real CDC audit need a way to give MDHHS auditors structured access to compliance records without granting full app access. (The historical "PR #13" label here predated the current numbering scheme — actual PR #13 shipped on 2026-05-23 as `children.archived_at` + soft-delete audit. This auditor portal is now an unscheduled post-#21 item.)
 User scenarios:
 
 Provider creates time-limited auditor access link from the dashboard
@@ -48,73 +48,38 @@ Probably new tables: audit_sessions for tracking auditor visits, audit_access_gr
 
 Priority: Becomes critical the first time a provider faces an audit. Until then, queued.
 
-Refreshed backlog summary
-Here's what I'm proposing to add. Each is a real PR scope with reasonable effort estimate.
-Compliance deadline: ~late July 2026 (90 days from April 27 adoption)
-Tier A — Daily-use workflows (your top priority)
-PR #14 — Drill Log & Emergency Response Plan
+## Licensed Home compliance PR sequence (status as of 2026-05-27)
 
-Written emergency response plan covering 10 categories (Rule 39): fire, tornado, accident, water, flood, power, weather, disaster, bomb/man-made, intruder/active shooter
-Drill log: fire every 3 months, tornado 2x March-Nov, others annual
-Plans posted/accessible based on type (some visible to parents, others to staff only)
-Drill log entries auto-prompt the licensee when one is overdue (opt-in reminder)
+This section supersedes the earlier "Refreshed backlog summary" that
+proposed an alternative tier-based PR numbering. The authoritative
+sequence — the one used by `CLAUDE.md`,
+`docs/licensed-home-compliance-audit-2026-05-23.md`,
+`docs/licensed-home-compliance-decisions-2026-05-23.md`, and every
+scope doc under `docs/pr-*-scope.md` — is below.
 
-PR #15 — Medication Administration Log
+Compliance deadline: ~late July 2026 (90 days from April 27 adoption).
 
-Per Rule 31: parent permission, medication name, dose, time, administering staff, original container check
-Topical exception (sunscreen, repellent, diaper rash) skips the full log
-Records retained 2 years minimum
-Daily workflow for staff during care
+| # | Title | Status |
+|---|---|---|
+| PR #13 | `children.archived_at` + soft-delete audit | **SHIPPED 2026-05-23** |
+| PR #14 | License-type foundation | **SHIPPED 2026-05-26** |
+| PR #15 | Opt-in reminder system | Scope authoritative on main (`docs/pr-15-opt-in-reminder-system-scope.md`) |
+| PR #16 | Child files (Rule 7) + general acknowledgments table | Scope authoritative on main (`docs/pr-16-child-files-scope.md`) |
+| PR #17 | Discipline policy (Rule 42) | Scope authoritative on main (`docs/pr-17-discipline-policy-scope.md`) |
+| PR #18 | Staff file gaps (Rules 3, 6, 19, 20, 22, 33) | Scope authoritative on main (`docs/pr-18-staff-file-gaps-scope.md`) |
+| PR #19 | Drills + emergency plan (Rule 39) | Scope authoritative on main (`docs/pr-19-drills-emergency-plan-scope.md`) |
+| PR #20 | Medication administration log (Rule 31) | Scope authoritative on main (`docs/pr-20-medication-log-scope.md`) |
+| PR #21 | Property records (Rules 13, 15, 17, 18, 45, 48) | Scope authoritative on main (`docs/pr-21-property-records-scope.md`) |
 
-PR #19 — Discipline Policy & Parent Acknowledgement at Intake
+The full implementation details for each PR live in its scope doc. The
+audit and the decisions doc remain the upstream sources of truth.
 
-Written discipline policy stored in provider profile
-At child intake, parent signs receipt + acknowledges policy + condition of child's health
-This becomes part of the existing parent acknowledgement workflow (extension of PR #12)
-
-Tier B — Auditor records (second priority)
-PR #16 — Child File Completeness
-
-Child information card (Rule 7)
-Child in care statement signed by parent (discipline policy receipt, health, food agreement, firearms disclosure, lead disclosure for pre-1978 homes, licensing notebook availability notice)
-Immunization records or waiver
-Annual review reminder
-Records retained 2 years after child leaves
-
-PR #17 — Staff File Completeness (extends existing)
-
-Hire date
-Daily arrival/departure log (already partially exists for attendance — extend)
-Physician attestation (annual)
-Discipline policy acknowledgement at hire
-CPR & First Aid cert expiration dates with opt-in reminders
-Background check status panel (CCBC connection status, not full background data)
-Sex offender registry clearance for volunteers/assistants (Rule 3.r)
-
-PR #18 — Property Records
-
-Radon test (every 4 years, with reminder)
-Heating equipment inspection (every 4 years, with reminder)
-Licensing notebook digitized (3 years of inspections, investigations, corrective actions)
-Carbon monoxide detector / smoke detector tracking
-Fire extinguisher (location, last inspection if applicable)
-
-Tier C — Opt-in reminder system (cross-cutting infrastructure)
-PR #20 — Compliance Reminder Settings
-
-Per-licensee toggle for each reminder category
-Configurable lead time (30 days before, 7 days before, day-of)
-Reminder delivery: in-app banner, email, or both
-All defaults OFF — licensee opts in to specific reminders they want
-
-Tier D — Foundation for the above
-PR #21 — License-type awareness on provider profile
-
-License type field on provider profile: Family Home / Group Home / LEP
-Show/hide compliance surfaces based on license type
-Default to LEP for existing customers; Venessa's account switches to Group Home
-
-This is the foundation that everything else builds on. Should probably ship before any of Tier A or B.
+Sequencing rationale (carried over from the decisions doc): PRs #13–#15
+are foundation work that clears the deck for the six compliance category
+PRs #16–#21. PR #15 (reminders) is general-purpose infrastructure and
+serves not only the compliance categories but also future non-compliance
+use cases (CDC redetermination reminders, "remember to bill" reminders,
+MiRegistry deadline reminders).
 Backlog entry to ADD
 This file contains the entry to add to docs/backlog.md, not a replacement for the whole file. Append this content to the existing backlog.md as a new top-priority section.
 
@@ -157,3 +122,95 @@ Headline: "MILittleCare ends CDC surprise falloffs."
 This is a strong enough wedge to anchor a landing-page section and an outreach push.
 Open questions captured in spec
 7 open questions are documented in docs/redetermination-ownership-spec.md § Open questions. They don't need answers before Phase 1 ships, but Phase 3 cannot begin until they're resolved.
+
+## PR #22 — Compliance Health Score (post-July)
+
+Every domain PR #15–#21 ships a `getXxxAuditState(licensee_id)` pure
+helper (the audit-state mandate — see `CLAUDE.md` § Critical Domain
+Knowledge). **PR #22 aggregates these into a unified provider-level
+compliance health score** that surfaces on the dashboard as a single
+"audit-risk" number with a per-domain drilldown.
+
+### Opt-in framing
+
+- The score widget is **OFF by default**. The provider enables it in
+  settings.
+- Within the score, **Type 1 (MiRegistry mirror) data is excluded by
+  default** with a per-category sub-toggle to include. Type 2
+  (MILittleCare-owned) data counts by default.
+- Today the only Type 1 source is PR #18 (annual ongoing training
+  completion, professional-development hours, MiRegistry account
+  status). Every other domain is pure Type 2.
+
+### Helper contract
+
+Each helper returns `{ domain, type, ...domain-specific signal fields }`:
+
+- Type 2 helpers carry `type: 'type_2'`.
+- PR #18's helper carries `type: 'mixed'` with `type_1_fields` and
+  `type_2_fields` sub-objects, each tagged with
+  `_tag: 'type_1_miregistry_mirror'` or
+  `'type_2_milittlecare_owned'` so PR #22's scorer can apply the
+  exclusion rules cleanly.
+
+### Effort, dependencies, timing
+
+- **Effort:** M. No new schema; PR #22 is a read-only aggregator + UI
+  widget + a small preferences row (shape parallels PR #15's preferences
+  pattern).
+- **Dependencies:** all of PRs #15–#21 must have shipped (PR #22
+  consumes their audit-state helpers). Independent of the
+  redetermination ownership work.
+- **Timing:** likely sequenced as PR #22 in the post-July compliance
+  work, alongside the redetermination ownership feature. The two are
+  distinct (audit risk vs. financial-falloff risk) but share the
+  preferences-table pattern from PR #15.
+
+## V2 product surface — GSQ (Great Start to Quality) readiness
+
+Distinct from PR #22 (compliance health score), GSQ readiness is a
+**quality-rating tracker** tied to direct CDC reimbursement uplift per
+the *CDC Scholarship Handbook for Licensed Providers*. A higher GSQ star
+rating means a higher per-hour CDC pay rate for the provider — every
+star earned recovers margin against urban-cost markets where CDC trails
+private pay. This is a Michigan-specific financial incentive that
+Brightwheel and other generalist software cannot serve.
+
+### Overlap with audit state
+
+- The GSQ rubric overlaps with audit-liability data roughly **50%**:
+  staff qualifications, family partnerships, written policies, drill
+  logs (Categories 1–3 of the rubric).
+- Categories 4–5 (curriculum quality, classroom environment,
+  teacher–child interactions) require **observation-based evidence**
+  that MILittleCare does NOT capture today.
+
+### Two paths
+
+- **Path B (V2):** extend the audit-state helpers from PR #22 to tag
+  GSQ-relevant signals; build a separate "GSQ readiness" widget that
+  consumes the tagged subset. Same data, different audience frame.
+  Effort: **M**.
+- **Path C (V3+):** add curriculum and observation evidence capture for
+  the 50% gap. Effort: **L**. Requires validated customer pull before
+  investing.
+
+### Validation gate before Path C
+
+Run a Facebook research thread — mirroring the May 2026 redetermination
+research — asking providers about GSQ as a real pull. Current customer
+evidence is thin on this dimension; don't invest in Path C without
+validation.
+
+### Opt-in framing
+
+Like the compliance health score, the GSQ readiness widget is **OFF by
+default**. Provider enables it in settings. Both trackers are opt-in
+across the board (see `CLAUDE.md` § Critical Domain Knowledge).
+
+### Strategic angle
+
+GSQ-rated providers earn higher CDC reimbursement; every star earned
+recovers margin. Direct financial incentive — sellable angle — and the
+Michigan-specific rubric is a moat against national competitors. See
+`docs/docs/strategy.md` for the strategy-level framing.
