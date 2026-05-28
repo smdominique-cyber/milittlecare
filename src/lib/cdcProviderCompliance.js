@@ -16,6 +16,8 @@
 // `today` is a parameter so tests are deterministic, matching the
 // pattern in src/lib/staffTraining.js / src/lib/miregistry.js.
 
+import { todayYMD, daysBetweenYMD, yearOfYMD } from './dates'
+
 // -----------------------------------------------------------------------------
 // Constants
 // -----------------------------------------------------------------------------
@@ -43,34 +45,18 @@ const TRAINING_LADDER = Object.freeze([
 // applies. Spec § PR #8.5c: "only for LEP-Unrelated providers".
 const FINGERPRINT_PROVIDER_TYPES = new Set(['lep_unrelated'])
 
-// -----------------------------------------------------------------------------
-// Internal date helpers
-//
-// Duplicated from miregistry.js / cdcPayPeriods.js / staffTraining.js /
+// Date helpers (`todayYMD`, `daysBetweenYMD`, `yearOfYMD`) live in
+// `src/lib/dates.js` as of PR #15 Half 1. Previously inline here and
+// duplicated across miregistry.js / cdcPayPeriods.js / staffTraining.js /
 // cdcAuthorization.js — see docs/tech_debt.md § "Deferred work
-// introduced by PR #6" for the standing note to lift these into
-// src/lib/dates.js.
-// -----------------------------------------------------------------------------
+// introduced by PR #6". The other duplicates remain (out of scope for
+// this PR per its prompt) and will migrate on each module's next
+// PR-of-opportunity.
 
-/** Today's local date as 'YYYY-MM-DD'. */
-export function todayYMD() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-/** Whole days from aYmd to bYmd (b - a); signed. Date.UTC dodges DST. */
-function daysBetweenYMD(aYmd, bYmd) {
-  const [ay, am, ad] = String(aYmd).split('-').map(Number)
-  const [by, bm, bd] = String(bYmd).split('-').map(Number)
-  return Math.round(
-    (Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000
-  )
-}
-
-/** Format YYYY from a YMD string without `new Date()` timezone surprises. */
-function yearOfYMD(ymd) {
-  return Number(String(ymd).slice(0, 4))
-}
+// `todayYMD` is re-exported so any caller previously importing it from
+// here keeps working without changing its import path. New code should
+// import directly from `./dates`.
+export { todayYMD }
 
 // -----------------------------------------------------------------------------
 // Annual Ongoing Training (CDC Scholarship Handbook for LEP, p.12)
