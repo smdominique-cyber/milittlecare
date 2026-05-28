@@ -28,6 +28,19 @@ Every provider gets an aggregate compliance score computed from feature signals:
 - Authorization currency (future)
 
 This is the home-dashboard widget that becomes the daily reason providers open MILittleCare. Don't build until at least 5-7 component signals exist; before that the score is too sparse to be meaningful.
+## GSQ readiness as a financial incentive (post-PR #21 product wedge)
+
+Higher Great Start to Quality (GSQ) star ratings translate to higher CDC reimbursement rates per the *CDC Scholarship Handbook for Licensed Providers*. This is a direct financial incentive for providers — every star earned recovers margin against urban-cost markets where CDC rates trail private pay. Brightwheel and other generalist software cannot serve this; it requires Michigan-specific knowledge of the GSQ rubric.
+
+The post-July product roadmap should treat GSQ readiness as a **distinct surface from audit liability** (see `docs/backlog.md` § V2 product surface — GSQ readiness). They share roughly half their underlying signals — staff qualifications, family partnerships, written policies, drills — but GSQ also rates curriculum and observation-based evidence MILittleCare doesn't currently capture.
+
+Two paths:
+
+- **Path B (V2):** lightweight GSQ tag on the audit-state helpers introduced by PRs #15–#21 + a separate "GSQ readiness" widget consuming the tagged subset. Effort M.
+- **Path C (V3+):** add curriculum / observation evidence capture for the 50% of the rubric MILittleCare currently misses. Effort L. **Gated on a Facebook validation thread** mirroring the May 2026 redetermination research — current customer evidence is thin on whether GSQ is a real pull.
+
+Both the compliance health score (V3) and the GSQ readiness widget (V2/V3+) are opt-in surfaces, default OFF — see `CLAUDE.md` § Critical Domain Knowledge.
+
 ## Blocking conditions on funding documents
 
 funding_documents currently tracks retention_until and archived_at. Missing a "blocks_billing" boolean field that future billing validation logic will need: e.g. an expired DHS-198 should block CDC billing on that child's funding source.
