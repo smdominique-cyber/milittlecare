@@ -5,6 +5,7 @@ import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, 
 import AutopayEnrollment from '@/components/parent/AutopayEnrollment'
 import BusinessInfoSection from '@/components/parent/BusinessInfoSection'
 import AcknowledgmentBanner from '@/components/parent/AcknowledgmentBanner'
+import IntakePendingBanner from '@/components/parent/IntakePendingBanner'
 import InstallBanner from '@/components/ui/InstallBanner'
 import '@/styles/parent.css'
 
@@ -433,6 +434,20 @@ export default function ParentDashboardPage() {
           <div className={`parent-message ${message.type}`}>
             <span>{message.text}</span>
           </div>
+        )}
+
+        {/* PR #16 follow-up — intake-acknowledgment discovery banner.
+            Renders above the attendance digest banner because a pending
+            legal-disclosure confirmation is a higher-urgency compliance
+            signal than the weekly attendance review nudge.
+            Non-dismissable; clears only when the intake is actually
+            confirmed (when reminder_instance_list_for_parent returns
+            no pending rows for this parent). */}
+        {session?.user?.id && (
+          <IntakePendingBanner
+            parentId={session.user.id}
+            children={children}
+          />
         )}
 
         {/* Acknowledgment digest banner (PR #12) */}
