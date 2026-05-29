@@ -62,6 +62,7 @@
 // portal signatures), remove 'in_person_paper' from the set.
 
 import { supabase } from './supabase'
+import { requiredSubTypesForChild } from './acknowledgments'
 
 // ─── Bucket constants (exported for reuse / inspection) ────────────────
 
@@ -97,15 +98,59 @@ export const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
 ])
 
 /**
+ * @typedef {Object} ChildFilesPendingParentSignatures
+ * @property {number} firearms_disclosure         Parent-signed under R 400.1907(1)(b)(v). Pending unless an
+ *                                                 active ack with acknowledged_via IN ('parent_portal',
+ *                                                 'in_person_paper') exists for the child. Only counted when
+ *                                                 the licensee has answered profiles.firearms_on_premises
+ *                                                 (true or false; null = disclosure not yet required).
+ * @property {number} food_provider_agreement     Parent-signed under R 400.1907(1)(b)(ii). Always required.
+ * @property {number} licensing_notebook_offered  Parent-signed under R 400.1907(1)(b)(iii). Always required.
+ * @property {number} health_condition            Parent-signed under R 400.1907(1)(b)(i). Always required.
+ * @property {number} discipline_policy_receipt   Parent-signed under R 400.1907(1)(b)(iv). Always required.
+ */
+
+/**
  * @typedef {Object} ChildFilesAuditState
- * @property {'child_files'}   domain
- * @property {'type_2'}        type                                 MILittleCare-owned (counted by PR #22 default)
- * @property {number}          active_children_count                children.archived_at IS NULL
- * @property {number}          intake_complete_count                children.intake_completed_at IS NOT NULL
- * @property {number}          intake_incomplete_count
- * @property {number}          annual_review_overdue_count          records_last_reviewed_on + 1y < today, or null
- * @property {number}          pending_lead_disclosures_count       profile.home_built_before_1978=true AND child lacks lead_disclosure ack
- * @property {number}          pending_firearms_disclosures_count   profile.firearms_on_premises set AND child lacks firearms_disclosure ack
+ * @property {'child_files'}                  domain
+ * @property {'type_2'}                       type                                 MILittleCare-owned (counted by PR #22 default)
+ * @property {number}                         active_children_count                children.archived_at IS NULL
+ * @property {number}                         intake_complete_count                children.intake_completed_at IS NOT NULL
+ * @property {number}                         intake_incomplete_count
+ * @property {number}                         annual_review_overdue_count          records_last_reviewed_on + 1y < today, or null
+ * @property {number}                         pending_lead_disclosures_count       INFORM-ONLY (R 400.1907(1)(b)(vi)). Pending when
+ *                                                                                  home_built_before_1978=true AND no active ack
+ *                                                                                  of any channel exists for the child.
+ * @property {number}                         pending_parent_signatures_count      Total pending PARENT-SIGNED signature SLOTS across
+ *                                                                                  all five R 400.1907(1)(b)(i-v) types and all
+ *                                                                                  children. Counts slots, NOT children. PR #22's
+ *                                                                                  headline number for the compliance score.
+ * @property {ChildFilesPendingParentSignatures} pending_parent_signatures        Per-type breakdown of the parent-signed pending
+ *                                                                                  slots. Each value counts children missing an
+ *                                                                                  active parent_portal / in_person_paper ack of
+ *                                                                                  that type. provider_override alone does NOT
+ *                                                                                  satisfy any parent-signed type.
+ * @property {number}                         children_with_pending_parent_signatures_count
+ *                                                                                  Distinct children missing at least one
+ *                                                                                  parent-signed ack of any type. Captures
+ *                                                                                  "children affected" — orthogonal to the
+ *                                                                                  signature-slots rollup above (a child missing
+ *                                                                                  3 signatures contributes 3 to
+ *                                                                                  pending_parent_signatures_count but 1 to this
+ *                                                                                  field).
+ *
+ * Shape rationale (2026-05-29): the previous shape exported only
+ * `pending_firearms_disclosures_count` for the parent-signed bucket,
+ * which silently overstated compliance for the other four parent-signed
+ * types (food provider, licensing notebook, health, discipline) — the
+ * helper had no opinion on whether they were satisfied. This shape
+ * extends parent-signed tracking to all five types via
+ * `pending_parent_signatures` + the rollup + the children-affected
+ * count. `pending_firearms_disclosures_count` was REMOVED — firearms is
+ * one of five parent-signed types and reads through the breakdown as
+ * `pending_parent_signatures.firearms_disclosure`. Lead (inform-only)
+ * stays a separate top-level field because it's a distinct regulatory
+ * category, not a parent signature.
  */
 
 /**
@@ -121,7 +166,9 @@ export async function getChildFilesAuditState(licenseeId) {
     intake_incomplete_count: 0,
     annual_review_overdue_count: 0,
     pending_lead_disclosures_count: 0,
-    pending_firearms_disclosures_count: 0,
+    pending_parent_signatures_count: 0,
+    pending_parent_signatures: emptyParentSignaturesBreakdown(),
+    children_with_pending_parent_signatures_count: 0,
   }
 
   if (!licenseeId) return empty
@@ -221,26 +268,39 @@ export async function getChildFilesAuditState(licenseeId) {
   const intake_incomplete_count = active_children_count - intake_complete_count
   const annual_review_overdue_count = countOverdueReviews(children)
 
+  // Lead (INFORM-ONLY). Any active ack satisfies — see top-of-file
+  // regulatory note.
   let pending_lead_disclosures_count = 0
-  let pending_firearms_disclosures_count = 0
   if (profile && profile.home_built_before_1978 === true) {
-    // Inform-only: lead is satisfied by ANY active ack regardless of
-    // channel (provider_override is the licensee informing the parent,
-    // which is what the rule requires).
     for (const c of children) {
       const s = anyChannelByChild.get(c.id)
       if (!s || !s.has('lead_disclosure')) pending_lead_disclosures_count += 1
     }
   }
-  if (profile && (profile.firearms_on_premises === true || profile.firearms_on_premises === false)) {
-    // Parent-signed: firearms is satisfied ONLY by parent_portal or
-    // in_person_paper. A provider_override row alone (the
-    // post-Send-to-Portal pre-confirm state) keeps the count pending
-    // until the parent confirms via portal.
-    for (const c of children) {
-      const s = parentSignedByChild.get(c.id)
-      if (!s || !s.has('firearms_disclosure')) pending_firearms_disclosures_count += 1
+
+  // Parent-signed bucket — every PARENT_SIGNED_TYPES entry tracked with
+  // the same channel-aware rule. Requirement gating is done per child
+  // via `requiredSubTypesForChild` so the audit-state respects the same
+  // truth-table the intake modal uses (firearms only counts when the
+  // licensee has answered firearms_on_premises; the other four are
+  // always required for every active child of a licensed home).
+  const PARENT_SIGNED_SET = new Set(PARENT_SIGNED_TYPES)
+  const pending_parent_signatures = emptyParentSignaturesBreakdown()
+  let pending_parent_signatures_count = 0
+  let children_with_pending_parent_signatures_count = 0
+
+  for (const c of children) {
+    const requiredForChild = requiredSubTypesForChild({ child: c, profile })
+    const haveParentSigned = parentSignedByChild.get(c.id)
+    let childHasAnyPending = false
+    for (const t of requiredForChild) {
+      if (!PARENT_SIGNED_SET.has(t)) continue
+      if (haveParentSigned && haveParentSigned.has(t)) continue
+      pending_parent_signatures[t] += 1
+      pending_parent_signatures_count += 1
+      childHasAnyPending = true
     }
+    if (childHasAnyPending) children_with_pending_parent_signatures_count += 1
   }
 
   return {
@@ -251,13 +311,27 @@ export async function getChildFilesAuditState(licenseeId) {
     intake_incomplete_count,
     annual_review_overdue_count,
     pending_lead_disclosures_count,
-    pending_firearms_disclosures_count,
+    pending_parent_signatures_count,
+    pending_parent_signatures,
+    children_with_pending_parent_signatures_count,
   }
 }
 
 // -----------------------------------------------------------------------------
 // Internal helpers
 // -----------------------------------------------------------------------------
+
+/**
+ * Build the `pending_parent_signatures` breakdown object with every
+ * PARENT_SIGNED_TYPES key initialized to 0. Used by both the empty-state
+ * return and the count loop. Keeps the shape stable across all return
+ * paths so consumers can assume every key is always present.
+ */
+function emptyParentSignaturesBreakdown() {
+  const out = {}
+  for (const t of PARENT_SIGNED_TYPES) out[t] = 0
+  return out
+}
 
 function countOverdueReviews(children) {
   let n = 0
