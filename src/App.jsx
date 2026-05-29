@@ -42,6 +42,7 @@ import ParentMessagesPage from '@/pages/ParentMessagesPage'
 import ParentMessageThreadPage from '@/pages/ParentMessageThreadPage'
 import ParentAcknowledgePage from '@/pages/ParentAcknowledgePage'
 import ParentIntakeAcknowledgePage from '@/pages/ParentIntakeAcknowledgePage'
+import ParentAcknowledgmentsPage from '@/pages/ParentAcknowledgmentsPage'
 import MessagesPage from '@/pages/MessagesPage'
 import MessageThreadPage from '@/pages/MessageThreadPage'
 import {
@@ -74,8 +75,26 @@ export default function App() {
                 <Route path="/parent/family" element={<ParentMyFamilyPage />} />
                 <Route path="/parent/messages" element={<ParentMessagesPage />} />
                 <Route path="/parent/messages/:childId" element={<ParentMessageThreadPage />} />
-                <Route path="/parent/acknowledge" element={<ParentAcknowledgePage />} />
-                <Route path="/parent/intake-acknowledge" element={<ParentIntakeAcknowledgePage />} />
+                {/*
+                  PR #16 follow-up — Issue #2: both /parent/acknowledge
+                  and /parent/intake-acknowledge render the same tabbed
+                  wrapper. Attendance is the default; the intake route
+                  forces the Intake tab to preserve the email CTA
+                  (`/parent/intake-acknowledge?child=<id>`). Each route
+                  also accepts `?tab=attendance|intake` as an explicit
+                  override. The wrapper mounts the existing page
+                  components unchanged.
+                */}
+                <Route path="/parent/acknowledge" element={<ParentAcknowledgmentsPage />} />
+                <Route path="/parent/intake-acknowledge" element={<ParentAcknowledgmentsPage />} />
+                {/*
+                  Direct mounts retained for compat / future internal
+                  navigation; not surfaced in user-facing routes. The
+                  consolidated `/parent/acknowledge` is the canonical
+                  parent path.
+                */}
+                <Route path="/parent/_attendance-only" element={<ParentAcknowledgePage />} />
+                <Route path="/parent/_intake-only" element={<ParentIntakeAcknowledgePage />} />
 
                 {/* Staff invitation accept */}
                 <Route path="/staff-invite/:token" element={<StaffInviteAcceptPage />} />

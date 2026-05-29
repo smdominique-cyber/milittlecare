@@ -29,6 +29,7 @@
 
 import { scheduleMiregistryAnnualTrainingReminders } from '../src/lib/schedulers/miregistryAnnualTrainingScheduler.js'
 import { scheduleChildAnnualReviewReminders } from '../src/lib/schedulers/childAnnualReviewScheduler.js'
+import { REMINDER_CATEGORIES } from '../src/lib/reminderCategories.js'
 
 export const config = { runtime: 'edge' }
 
@@ -168,14 +169,38 @@ async function sendViaResend({ to, subject, html, text }) {
 
 /**
  * Decide what the dispatcher should do for a given instance given the
- * matching preference row (or undefined if none exists).
+ * matching preference row (or undefined if none exists) and the
+ * catalog entry for the instance's category.
  *
  *   { action: 'skip_no_pref' | 'skip_disabled' | 'fire', channel?: 'in_app' | 'email' | 'both' }
+ *
+ * PR #16 follow-up: when the catalog entry is `transactional: true`,
+ * the dispatcher fires even when no preference row exists — the
+ * provider's explicit trigger action is the consent. The provider can
+ * still set `enabled = false` to opt OUT, which is honored.
+ *
+ * The catalog argument is optional for back-compat with the existing
+ * test cases that pre-date the follow-up; an undefined or missing
+ * catalog entry falls through to the PR #15 default-OFF behavior.
  */
-export function decideAction(instance, preference) {
-  if (!preference) return { action: 'skip_no_pref' }
+export function decideAction(instance, preference, category) {
+  const isTransactional = category && category.transactional === true
+  if (!preference) {
+    if (isTransactional) {
+      // Default channel for transactional categories is email — the
+      // whole point of a transactional category is the parent (or other
+      // recipient) needs to be notified now. In-app banners only do not
+      // serve that recipient.
+      return { action: 'fire', channel: 'email' }
+    }
+    return { action: 'skip_no_pref' }
+  }
   if (preference.enabled === false) return { action: 'skip_disabled' }
-  return { action: 'fire', channel: preference.channel || 'in_app' }
+  // For transactional categories, default channel is 'email' rather
+  // than 'in_app' when the preference row omits a channel — the parent
+  // can't see the provider's in-app banner.
+  const fallbackChannel = isTransactional ? 'email' : 'in_app'
+  return { action: 'fire', channel: preference.channel || fallbackChannel }
 }
 
 /**
@@ -201,6 +226,81 @@ function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, ch => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[ch]))
+}
+
+// -----------------------------------------------------------------------------
+// Recipient resolution — PR #16 follow-up Issue #4.
+//
+// PR #15's V1 hard-coded the email-to as providerProfile.email. That's
+// correct for state-driven, provider-facing categories (CPR, drills,
+// annual review). Categories whose recipient is the PARENT need a
+// different lookup. The catalog entry's `recipient_resolver` field
+// selects which lookup to use.
+//
+// Currently:
+//   - undefined / 'provider' → [{ provider profile }]
+//   - 'parent_via_subject_child' → fan-out to every active linked
+//     parent of the subject child whose `acknowledgment_email_opt_in`
+//     is not explicitly false.
+//
+// Returns an array of recipients: [{ email, recipient_type, recipient_id, family_id? }, ...]
+// Empty array means "no deliverable recipient" — the caller writes a
+// notification_log "no_recipient" row and leaves fired_at NULL so the
+// next tick can retry.
+//
+// Reuses the exact lookup pattern already running in production at
+// api/cron-send-acknowledgment-digest.js:234-256. Same role
+// (SUPABASE_SERVICE_ROLE_KEY), same PostgREST embed shape, same
+// acknowledgment_email_opt_in respect.
+// -----------------------------------------------------------------------------
+export async function resolveRecipients(instance, providerProfile, category) {
+  const resolver = category && category.recipient_resolver
+  if (!resolver || resolver === 'provider') {
+    if (providerProfile && providerProfile.email) {
+      return [{
+        email: providerProfile.email,
+        recipient_type: 'provider',
+        recipient_id: instance.provider_id,
+        family_id: null,
+      }]
+    }
+    return []
+  }
+  if (resolver === 'parent_via_subject_child') {
+    if (instance.subject_type !== 'child' || !instance.subject_id) return []
+    // 1. child → family_id
+    const childRows = await supabaseGet(
+      `children?id=eq.${instance.subject_id}&select=family_id`
+    )
+    if (!Array.isArray(childRows) || childRows.length === 0) return []
+    const familyId = childRows[0].family_id
+    if (!familyId) return []
+    // 2. family_id + status=active → parent_profiles(email, opt-in).
+    // Embed shape matches cron-send-acknowledgment-digest.js — same
+    // PostgREST inference used in production for the digest cron.
+    const links = await supabaseGet(
+      `parent_family_links?family_id=eq.${familyId}&status=eq.active` +
+      '&select=parent_id,family_id,parent_profiles(id,email,full_name,acknowledgment_email_opt_in)'
+    )
+    if (!Array.isArray(links) || links.length === 0) return []
+    const out = []
+    const seen = new Set()
+    for (const link of links) {
+      const p = link.parent_profiles
+      if (!p || !p.email) continue
+      if (p.acknowledgment_email_opt_in === false) continue
+      if (seen.has(p.id)) continue
+      seen.add(p.id)
+      out.push({
+        email: p.email,
+        recipient_type: 'parent',
+        recipient_id: p.id,
+        family_id: familyId,
+      })
+    }
+    return out
+  }
+  return []
 }
 
 // -----------------------------------------------------------------------------
@@ -307,8 +407,9 @@ export default async function handler(req) {
     // 5) Per-instance processing.
     for (const inst of live) {
       stats.instances_processed += 1
+      const category = REMINDER_CATEGORIES[inst.category]
       const pref = prefByKey.get(`${inst.provider_id}|${inst.category}`)
-      const decision = decideAction(inst, pref)
+      const decision = decideAction(inst, pref, category)
       if (decision.action === 'skip_no_pref') {
         stats.skipped_no_pref += 1
         continue
@@ -323,57 +424,90 @@ export default async function handler(req) {
       const providerName =
         providerProfile.daycare_name || providerProfile.full_name || 'MI Little Care'
 
-      // Email leg: send via Resend + write notification_log.
-      let emailOk = false
-      let providerMessageId = null
-      let emailError = null
+      // Email leg: send via Resend + write notification_log per recipient.
+      // For provider-facing categories the recipient list is the provider
+      // alone (PR #15 behavior). For categories with a `parent_via_subject_child`
+      // resolver (PR #16 follow-up — intake_acknowledgment_pending), this
+      // fans out to every active linked parent of the subject child who
+      // has not opted out via parent_profiles.acknowledgment_email_opt_in.
+      let anyEmailOk = false
+      let anyEmailAttempted = false
       if (channel === 'email' || channel === 'both') {
-        const { subject, html, text } = composeEmail(inst, providerName)
-        // For Half 2 V1: email-to is the provider's own login email
-        // (auth.users.email is not directly readable from PostgREST;
-        // future enhancement could fetch it). When we cannot resolve
-        // a destination, fall back to in-app only and log the gap.
-        const to = providerProfile.email || null
-        if (!to) {
-          emailError = 'no_provider_email_on_profile'
-        } else {
-          const send = await sendViaResend({ to, subject, html, text })
-          emailOk = send.ok
-          providerMessageId = send.providerMessageId
-          emailError = send.errorDetail
+        anyEmailAttempted = true
+        const recipients = await resolveRecipients(inst, providerProfile, category)
+        if (recipients.length === 0) {
+          // No deliverable recipient. Log the gap; do NOT mark fired so
+          // the next tick can retry (the parent may opt back in, the
+          // link may be created later, etc. — same retry semantics as
+          // a failed Resend send).
+          await supabasePost('notification_log', {
+            recipient_type: category?.recipient_resolver === 'parent_via_subject_child'
+              ? 'parent' : 'provider',
+            recipient_id: null,
+            recipient_email: null,
+            change_type: `reminder_${inst.category}`,
+            change_description: inst.title,
+            changed_by_user_id: null,
+            changed_by_role: 'system',
+            family_id: null,
+            child_id: inst.subject_type === 'child' ? inst.subject_id : null,
+            email_sent: false,
+            email_sent_at: null,
+            email_id: null,
+            metadata: {
+              category: inst.category,
+              subject_type: inst.subject_type || null,
+              subject_id: inst.subject_id || null,
+              instance_id: inst.id,
+              delivery_status: 'no_recipient',
+              error_detail:
+                category?.recipient_resolver === 'parent_via_subject_child'
+                  ? 'no_linked_opted_in_parent'
+                  : 'no_provider_email_on_profile',
+            },
+          })
         }
-
-        const delivery_status = emailOk
-          ? 'sent'
-          : (process.env.RESEND_API_KEY ? 'failed' : 'queued')
-        await supabasePost('notification_log', {
-          recipient_type: 'provider',
-          recipient_id: inst.provider_id,
-          recipient_email: to || null,
-          change_type: `reminder_${inst.category}`,
-          change_description: inst.title,
-          changed_by_user_id: null,
-          changed_by_role: 'system',
-          family_id: null,
-          child_id: null,
-          email_sent: emailOk,
-          email_sent_at: emailOk ? new Date().toISOString() : null,
-          email_id: providerMessageId || null,
-          metadata: {
-            category: inst.category,
-            subject_type: inst.subject_type || null,
-            subject_id: inst.subject_id || null,
-            instance_id: inst.id,
-            delivery_status,
-            error_detail: emailError || null,
-          },
-        })
+        for (const r of recipients) {
+          const { subject, html, text } = composeEmail(inst, providerName)
+          const send = await sendViaResend({
+            to: r.email, subject, html, text,
+          })
+          const okHere = send.ok
+          if (okHere) anyEmailOk = true
+          const delivery_status = okHere
+            ? 'sent'
+            : (process.env.RESEND_API_KEY ? 'failed' : 'queued')
+          await supabasePost('notification_log', {
+            recipient_type: r.recipient_type,
+            recipient_id: r.recipient_id,
+            recipient_email: r.email,
+            change_type: `reminder_${inst.category}`,
+            change_description: inst.title,
+            changed_by_user_id: null,
+            changed_by_role: 'system',
+            family_id: r.family_id || null,
+            child_id: inst.subject_type === 'child' ? inst.subject_id : null,
+            email_sent: okHere,
+            email_sent_at: okHere ? new Date().toISOString() : null,
+            email_id: send.providerMessageId || null,
+            metadata: {
+              category: inst.category,
+              subject_type: inst.subject_type || null,
+              subject_id: inst.subject_id || null,
+              instance_id: inst.id,
+              delivery_status,
+              error_detail: send.errorDetail || null,
+            },
+          })
+        }
       }
 
-      // Mark fired. If channel was email-only and email failed, leave
-      // fired_at NULL so the next tick retries.
+      // Mark fired. If channel was email-only and EVERY send failed,
+      // leave fired_at NULL so the next tick retries.
       const inAppLeg = channel === 'in_app' || channel === 'both'
-      const emailLegOk = channel === 'in_app' ? true : emailOk
+      const emailLegOk = channel === 'in_app'
+        ? true
+        : (anyEmailAttempted ? anyEmailOk : false)
       if (inAppLeg || emailLegOk) {
         const ok = await supabasePatch(
           `reminder_instances?id=eq.${inst.id}`,
@@ -387,9 +521,7 @@ export default async function handler(req) {
           stats.failures += 1
         }
       } else {
-        // email-only with a failed Resend send -> leave fired_at NULL
-        // (next tick will retry); the notification_log row records the
-        // attempt for audit purposes.
+        // email-only with no successful send -> leave fired_at NULL.
         stats.failures += 1
       }
     }
