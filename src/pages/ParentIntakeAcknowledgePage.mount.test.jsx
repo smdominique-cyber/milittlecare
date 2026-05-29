@@ -170,23 +170,71 @@ describe('ParentIntakeAcknowledgePage mount (Rules-of-Hooks regression guard)', 
   })
 })
 
-// ─── Confirm path (the parent-confirm bug fix, 2026-05-29) ──────────
+// ─── Confirm path (the parent-confirm RPC fix, 2026-05-29) ──────────
 //
-// These cases would have caught the dead button: existing test mocks
-// the helpers but never CLICKED the button. The current cases mount
-// the page, wait for the loaded surface, click "I confirm…", and
-// assert (a) the acknowledgments insert was called with the right
-// shape, (b) reminder_instance_resolve_for_parent was invoked with
-// the pending reminder's id.
+// PRODUCTION BUG (the one that shipped through the previous test suite):
+// confirmChild issued two separate HTTP requests — first an archive
+// UPDATE on acknowledgments, then a parent_portal INSERT. The archive
+// ran under the parent's session, which has NO update policy on
+// acknowledgments (migration 024 only grants UPDATE to providers via
+// `provider_id = auth.uid()`). PostgREST returned HTTP 200 with zero
+// rows affected; no JS error. The INSERT then collided with the still-
+// active provider_override rows on the `acknowledgments_active_unique`
+// partial index. Duplicate-key error.
+//
+// FIX: migration 025 introduces `intake_confirm_for_parent`, a
+// SECURITY DEFINER RPC that does archive + insert + reminder-resolve
+// atomically in one transaction. confirmChild now makes ONE rpc()
+// call and zero direct DB writes.
+//
+// TEST APPROACH — structural, with an honest limitation:
+//
+// The bug class we are guarding against is "JS does separate
+// archive + insert HTTP calls on `acknowledgments`." The structural
+// assertion is therefore:
+//   1. The page makes ONE rpc('intake_confirm_for_parent') call with
+//      the correct payload shape.
+//   2. The page makes ZERO direct `.from('acknowledgments').update()`
+//      or `.insert()` calls during confirm.
+//   3. The legacy separate `reminder_instance_resolve_for_parent` rpc
+//      call is GONE (the RPC handles resolve inline; a separate call
+//      would prove the JS still owns the resolve, defeating the
+//      atomicity guarantee).
+//
+// This makes the bug class impossible to recur from the JS side: if a
+// future refactor brings back the separate archive/insert pattern,
+// these tests fail.
+//
+// What the tests DO NOT prove (flagged honestly): the unique-
+// constraint behavior INSIDE the RPC. The atomic archive-then-insert,
+// the channel-override behavior, the parent_family_links scoping —
+// those are database-level invariants. The chainFor mock here does
+// not model the partial unique index, RLS, or transactional
+// semantics. The migration's verification queries (and the planned
+// manual smoke test) cover those.
+//
+// We considered (b) modeling per-(type, subject) active-row state in
+// the mock so a missed archive would simulate the constraint
+// violation. Rejected: the post-fix code makes ZERO direct DB writes
+// to acknowledgments, so a JS-side missed archive is no longer the
+// failure mode — the structural assertions above eliminate that
+// class without needing constraint modeling. Adding constraint
+// modeling would test a code path that no longer exists.
 
-describe('ParentIntakeAcknowledgePage confirm path', () => {
+describe('ParentIntakeAcknowledgePage confirm path — RPC-driven', () => {
+  // Shared helper: collect the calls to intake_confirm_for_parent.
+  function intakeConfirmCalls() {
+    return rpcCalls.filter(c => c.name === 'intake_confirm_for_parent')
+  }
+
   it(
-    'portal-trigger normal state (no pre-existing acks): clicking confirm ' +
-    'inserts the envelope ack and calls resolve_for_parent',
+    'portal-trigger normal state (no pre-existing acks): ' +
+    'clicking confirm makes ONE intake_confirm_for_parent RPC call ' +
+    'with the envelope row, and NO direct archive/insert on acknowledgments',
     async () => {
       // Default fixture: one pending reminder for kid-1, zero acks,
-      // children carry user_id = TEST_PROVIDER_ID. This is exactly the
-      // production state the bug was hit in.
+      // children carry user_id = TEST_PROVIDER_ID. Pre-122f2ab this was
+      // the production state where the dead-button bug was hit.
       render(
         <MemoryRouter initialEntries={['/parent/intake-acknowledge?child=kid-1']}>
           <Routes>
@@ -196,53 +244,43 @@ describe('ParentIntakeAcknowledgePage confirm path', () => {
         </MemoryRouter>
       )
 
-      // Wait for the child's card to appear. The pending reminder
-      // alone is enough to surface the card under the new code path
-      // (and was before the fix too — the card surfaced; the button
-      // was just dead).
       const button = await screen.findByRole('button', {
         name: /I confirm these acknowledgments/i,
       }, { timeout: 2000 })
 
       fireEvent.click(button)
 
-      // The bug pre-fix would: throw "No provider on file for this
-      // child", set error, and never call insert or rpc. After fix:
-      // insert called once for acknowledgments, rpc called once for
-      // the resolve.
       await waitFor(() => {
-        expect(inserts.length).toBeGreaterThan(0)
+        expect(intakeConfirmCalls().length).toBe(1)
       }, { timeout: 2000 })
 
-      // Exactly one acknowledgments insert (the envelope row).
-      const ackInserts = inserts.filter(i => i.table === 'acknowledgments')
-      expect(ackInserts).toHaveLength(1)
-      const rows = ackInserts[0].rows
-      expect(Array.isArray(rows)).toBe(true)
-      expect(rows).toHaveLength(1)   // envelope only — no sub-rows
-
-      // Envelope row shape — every CHECK in migration 024 satisfied.
-      const envelope = rows[0]
+      // The single RPC call's payload.
+      const [call] = intakeConfirmCalls()
+      expect(call.args.p_child_id).toBe('kid-1')
+      expect(Array.isArray(call.args.p_rows)).toBe(true)
+      // No pre-existing sub-rows → envelope only.
+      expect(call.args.p_rows).toHaveLength(1)
+      const envelope = call.args.p_rows[0]
       expect(envelope.type).toBe('child_in_care_statement')
-      expect(envelope.subject_type).toBe('child')
-      expect(envelope.subject_id).toBe('kid-1')
-      expect(envelope.acknowledged_via).toBe('parent_portal')
-      expect(envelope.acknowledged_by_user_id).toBe(mockUser.id)
-      expect(envelope.provider_override_reason).toBe(null)
-      // The bug fix: provider_id resolves from child.user_id
-      // (canonical) — NOT from existing[0]?.provider_id which is the
-      // empty array's [0] = undefined.
-      expect(envelope.provider_id).toBe(TEST_PROVIDER_ID)
-      // Hash is a deterministic non-empty string.
-      expect(typeof envelope.snapshot_hash).toBe('string')
-      expect(envelope.snapshot_hash.length).toBeGreaterThan(0)
+      // Server-overridden fields are NOT included in the parent's
+      // payload — the RPC sets them from auth.uid() / children.user_id.
+      // The JS contributes only the bundle shape.
+      expect(envelope).toEqual({
+        type: 'child_in_care_statement',
+        snapshot_hash: expect.any(String),
+        snapshot_version: null,
+      })
 
-      // The resolve RPC fires for the pending reminder.
-      const resolveCalls = rpcCalls.filter(
-        c => c.name === 'reminder_instance_resolve_for_parent'
-      )
-      expect(resolveCalls).toHaveLength(1)
-      expect(resolveCalls[0].args).toEqual({ p_instance_id: 'rem-1' })
+      // STRUCTURAL — the bug-class assertion:
+      // confirmChild makes NO direct writes to acknowledgments.
+      expect(inserts.filter(i => i.table === 'acknowledgments')).toEqual([])
+      expect(updates.filter(u => u.table === 'acknowledgments')).toEqual([])
+
+      // STRUCTURAL — the legacy resolve-as-separate-call pattern is
+      // GONE. The RPC resolves the reminder inline as part of the
+      // same atomic transaction.
+      expect(rpcCalls.filter(c => c.name === 'reminder_instance_resolve_for_parent'))
+        .toEqual([])
 
       // No error banner.
       expect(screen.queryByText(/No provider on file/i)).toBeNull()
@@ -250,12 +288,12 @@ describe('ParentIntakeAcknowledgePage confirm path', () => {
   )
 
   it(
-    'existing-acks state: confirm archives prior acks, writes envelope + ' +
-    'sub-rows, and calls resolve_for_parent',
+    'existing-acks state (in_person_paper bundle): the RPC call carries ' +
+    'envelope + every pre-existing sub-row type, parent contributes only the shape',
     async () => {
-      // Provider previously used in_person_paper or provider_override
-      // channel — there are existing sub-row acks. The parent's confirm
-      // archives them and re-stamps as parent_portal.
+      // Provider previously used in_person_paper. The parent's confirm
+      // re-stamps via the RPC; the JS sends the type+hash+version per
+      // row, the RPC overrides the channel + parent identity server-side.
       tableData.acknowledgments = [
         {
           id: 'ack-1', provider_id: TEST_PROVIDER_ID,
@@ -293,56 +331,47 @@ describe('ParentIntakeAcknowledgePage confirm path', () => {
       fireEvent.click(button)
 
       await waitFor(() => {
-        expect(inserts.filter(i => i.table === 'acknowledgments').length)
-          .toBeGreaterThan(0)
+        expect(intakeConfirmCalls().length).toBe(1)
       }, { timeout: 2000 })
 
-      // Archive UPDATE on the existing rows.
-      const ackArchives = updates.filter(
-        u => u.table === 'acknowledgments' && u.payload.archived_at,
-      )
-      expect(ackArchives).toHaveLength(1)
-
-      // INSERT of envelope + 2 sub-rows = 3 rows.
-      const ackInserts = inserts.filter(i => i.table === 'acknowledgments')
-      expect(ackInserts).toHaveLength(1)
-      const rows = ackInserts[0].rows
-      expect(rows).toHaveLength(3)
+      const [call] = intakeConfirmCalls()
+      expect(call.args.p_child_id).toBe('kid-1')
+      const rows = call.args.p_rows
+      expect(rows).toHaveLength(3)  // envelope + lead + firearms
       const types = rows.map(r => r.type).sort()
       expect(types).toEqual([
         'child_in_care_statement', 'firearms_disclosure', 'lead_disclosure',
       ])
+      // The parent's payload carries only type / snapshot_hash /
+      // snapshot_version. No security-critical fields.
       for (const row of rows) {
-        expect(row.provider_id).toBe(TEST_PROVIDER_ID)
-        expect(row.acknowledged_via).toBe('parent_portal')
-        expect(row.acknowledged_by_user_id).toBe(mockUser.id)
+        expect(Object.keys(row).sort()).toEqual([
+          'snapshot_hash', 'snapshot_version', 'type',
+        ])
       }
 
-      // Resolve RPC fired once.
-      const resolveCalls = rpcCalls.filter(
-        c => c.name === 'reminder_instance_resolve_for_parent'
-      )
-      expect(resolveCalls).toHaveLength(1)
+      // Structural: zero direct acknowledgments writes; zero separate
+      // resolve RPC call.
+      expect(inserts.filter(i => i.table === 'acknowledgments')).toEqual([])
+      expect(updates.filter(u => u.table === 'acknowledgments')).toEqual([])
+      expect(rpcCalls.filter(c => c.name === 'reminder_instance_resolve_for_parent'))
+        .toEqual([])
     },
   )
 
   it(
-    'post-send-to-portal state (lead+firearms required): parent confirm ' +
-    'archives provider_override sub-rows and writes parent_portal rows ' +
-    'of the same types — channel transition preserves the audit story',
+    'post-send-to-portal state (full 7-row provider_override bundle): ' +
+    'RPC call carries every type — the unique-constraint scenario can no ' +
+    'longer recur from the JS side',
     async () => {
-      // Simulate the post-Send-to-Portal state. ChildIntakeModal's
-      // handleSendToPortal now pre-writes the bundle as
-      // 'provider_override' with a portal-pending reason. The parent
-      // arrives with: envelope + lead_disclosure + firearms_disclosure +
-      // food_provider_agreement + licensing_notebook_offered +
-      // health_condition + discipline_policy_receipt, all stamped
-      // provider_override. infant_safe_sleep is excluded because the
-      // child is > 18 months old.
+      // Reproduce the EXACT production state where Aleshia\'s confirm
+      // hit acknowledgments_active_unique: a single provider_override
+      // bundle, 5 active sub-rows + 1 envelope = 6 active rows. (The
+      // production case had 5 because lead+firearms weren\'t required;
+      // here we exercise the full 7-row case so the full sweep is
+      // tested. Both shapes go through the same RPC call.)
       const PROVIDER_REASON =
-        'Provider attested at intake on 2026-05-29; ' +
-        'parent notified to confirm via portal at ' +
-        '/parent/intake-acknowledge?child=kid-1.'
+        'Provider attested at intake on 2026-05-29; parent notified to confirm.'
       tableData.acknowledgments = [
         // envelope
         {
@@ -387,30 +416,13 @@ describe('ParentIntakeAcknowledgePage confirm path', () => {
       fireEvent.click(button)
 
       await waitFor(() => {
-        expect(inserts.filter(i => i.table === 'acknowledgments').length)
-          .toBeGreaterThan(0)
+        expect(intakeConfirmCalls().length).toBe(1)
       }, { timeout: 2000 })
 
-      // 1. The archive UPDATE flips archived_at on every prior active row.
-      const ackArchives = updates.filter(
-        u => u.table === 'acknowledgments' && u.payload.archived_at,
-      )
-      expect(ackArchives).toHaveLength(1)
-
-      // 2. The INSERT writes envelope + 6 sub-rows = 7 rows, all
-      //    re-stamped as parent_portal.
-      const ackInserts = inserts.filter(i => i.table === 'acknowledgments')
-      expect(ackInserts).toHaveLength(1)
-      const rows = ackInserts[0].rows
+      const [call] = intakeConfirmCalls()
+      const rows = call.args.p_rows
       expect(rows).toHaveLength(7)
-      for (const row of rows) {
-        expect(row.acknowledged_via).toBe('parent_portal')
-        expect(row.acknowledged_by_user_id).toBe(mockUser.id)
-        expect(row.provider_id).toBe(TEST_PROVIDER_ID)
-        expect(row.provider_override_reason).toBe(null)
-      }
-      const typesWritten = rows.map(r => r.type).sort()
-      expect(typesWritten).toEqual([
+      expect(rows.map(r => r.type).sort()).toEqual([
         'child_in_care_statement',
         'discipline_policy_receipt',
         'firearms_disclosure',
@@ -420,70 +432,85 @@ describe('ParentIntakeAcknowledgePage confirm path', () => {
         'licensing_notebook_offered',
       ])
 
-      // 3. The resolve RPC fires once for the pending reminder.
-      const resolveCalls = rpcCalls.filter(
-        c => c.name === 'reminder_instance_resolve_for_parent'
-      )
-      expect(resolveCalls).toHaveLength(1)
+      // STRUCTURAL — the production duplicate-key bug class cannot
+      // recur from the client side: no separate archive UPDATE, no
+      // separate INSERT, no separate resolve RPC. The RPC's
+      // transactional archive+insert+resolve is the only writer.
+      expect(inserts.filter(i => i.table === 'acknowledgments')).toEqual([])
+      expect(updates.filter(u => u.table === 'acknowledgments')).toEqual([])
+      expect(rpcCalls.filter(c => c.name === 'reminder_instance_resolve_for_parent'))
+        .toEqual([])
 
-      // 4. Counts STAY at zero. Compute the post-confirm active acks
-      //    set (archived provider_override rows are excluded; new
-      //    parent_portal rows are active) and feed it to the audit-state
-      //    helper's logic to assert pending = 0. Mirrors the production
-      //    invariant that getChildFilesAuditState consumes.
-      //
-      //    Active set = the INSERT rows (the archives flipped the prior).
-      //    Per-type presence is enough for the pending count derivation;
-      //    we don't need to call the helper directly here.
-      const activeAckTypes = new Set(rows.map(r => r.type))
-      expect(activeAckTypes.has('lead_disclosure')).toBe(true)
-      expect(activeAckTypes.has('firearms_disclosure')).toBe(true)
-      // Therefore: pending_lead_disclosures_count = 0,
-      //            pending_firearms_disclosures_count = 0.
-      // The explicit audit-state pass is in childFiles.test.js so the
-      // PR #22 consumer can rely on the helper directly.
+      // The single intake_confirm_for_parent rpc is the only writer
+      // touching acknowledgments / reminder_instances during confirm.
+      const writerCalls = rpcCalls.filter(c =>
+        c.name === 'intake_confirm_for_parent' ||
+        c.name === 'reminder_instance_resolve_for_parent'
+      )
+      expect(writerCalls).toHaveLength(1)
+      expect(writerCalls[0].name).toBe('intake_confirm_for_parent')
     },
   )
 
   it(
-    'child without user_id AND no existing acks: shows the legacy error ' +
-    '(defensive — we do not invent a provider)',
+    'RPC error surfaces to the user via the error banner ' +
+    '(auth failure is visible, not silently no-op)',
     async () => {
-      // Pathological row: a legacy child missing user_id and no acks.
-      // Should NOT silently write rows with provider_id = null.
-      tableData.children = [{
-        id: 'kid-1',
-        first_name: 'Aiden',
-        last_name: 'Tester',
-        family_id: 'fam-1',
-        date_of_birth: '2024-01-01',
-        // user_id intentionally absent
-      }]
-      tableData.acknowledgments = []
+      // The RPC raises (e.g., parent↔child link missing) — supabase.rpc
+      // returns { error }. The JS surfaces it via setError. Mirrors the
+      // production behavior the RPC\'s "raise on invalid auth" choice
+      // is supposed to give us.
+      //
+      // Override the rpc mock for THIS test only — intake_confirm_for_parent
+      // returns the auth-failure error.
+      const supa = (await import('@/lib/supabase')).supabase
+      const originalRpc = supa.rpc
+      supa.rpc = vi.fn(async (name, args) => {
+        rpcCalls.push({ name, args })
+        if (name === 'reminder_instance_list_for_parent') {
+          return { data: [{ id: 'rem-1', subject_id: 'kid-1' }], error: null }
+        }
+        if (name === 'intake_confirm_for_parent') {
+          return {
+            data: null,
+            error: {
+              message:
+                'intake_confirm_for_parent: caller is not an active parent ' +
+                'for this child, or child not found',
+            },
+          }
+        }
+        return { data: null, error: null }
+      })
+      try {
+        render(
+          <MemoryRouter initialEntries={['/parent/intake-acknowledge?child=kid-1']}>
+            <Routes>
+              <Route path="/parent/intake-acknowledge"
+                element={<ParentIntakeAcknowledgePage />} />
+            </Routes>
+          </MemoryRouter>
+        )
 
-      render(
-        <MemoryRouter initialEntries={['/parent/intake-acknowledge?child=kid-1']}>
-          <Routes>
-            <Route path="/parent/intake-acknowledge"
-              element={<ParentIntakeAcknowledgePage />} />
-          </Routes>
-        </MemoryRouter>
-      )
+        const button = await screen.findByRole('button', {
+          name: /I confirm these acknowledgments/i,
+        }, { timeout: 2000 })
 
-      const button = await screen.findByRole('button', {
-        name: /I confirm these acknowledgments/i,
-      }, { timeout: 2000 })
+        fireEvent.click(button)
 
-      fireEvent.click(button)
+        // The page's existing error banner surfaces it.
+        await waitFor(() => {
+          expect(screen.queryByText(/not an active parent/i)).not.toBeNull()
+        }, { timeout: 2000 })
 
-      await waitFor(() => {
-        expect(screen.queryByText(/No provider on file/i)).not.toBeNull()
-      }, { timeout: 2000 })
-
-      // No insert; no rpc.
-      expect(inserts.filter(i => i.table === 'acknowledgments')).toEqual([])
-      expect(rpcCalls.filter(c => c.name === 'reminder_instance_resolve_for_parent'))
-        .toEqual([])
+        // No optimistic state change — confirmChild's try/catch caught
+        // the error and the RPC's atomicity means no rows were
+        // partially written. Structural: zero direct DB writes either.
+        expect(inserts.filter(i => i.table === 'acknowledgments')).toEqual([])
+        expect(updates.filter(u => u.table === 'acknowledgments')).toEqual([])
+      } finally {
+        supa.rpc = originalRpc
+      }
     },
   )
 })
