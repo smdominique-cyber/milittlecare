@@ -5,7 +5,7 @@ import { notifyStateChange } from '@/lib/notifications'
 import {
   Clock, Calendar, DollarSign, Phone, AlertTriangle,
   Plus, X, Save, Trash2, ChevronDown, ChevronRight, Check,
-  MessageCircle, Info, ScrollText,
+  MessageCircle, Info, ScrollText, Shield,
 } from 'lucide-react'
 import '@/styles/business-info.css'
 
@@ -157,7 +157,7 @@ export default function BusinessInfoPage() {
       // PR #14: license_type is the compliance source of truth (migration 022);
       // is_license_exempt is the mirrored legacy column.
       supabase.from('profiles')
-        .select('license_type, license_type_review_needed, is_license_exempt')
+        .select('license_type, license_type_review_needed, is_license_exempt, home_built_before_1978, firearms_on_premises')
         .eq('id', user.id).maybeSingle(),
     ])
 
@@ -381,6 +381,27 @@ export default function BusinessInfoPage() {
     setSaving(false)
   }
 
+  // PR #16: save the two property disclosures together. When either
+  // toggles from false -> true, any existing child intakes that did not
+  // include the corresponding sub-row drift to "intake incomplete" via
+  // getChildFileCompleteness (no DB-side cascade needed).
+  const savePremises = async ({ home_built_before_1978, firearms_on_premises }) => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ home_built_before_1978, firearms_on_premises })
+        .eq('id', user.id)
+      if (error) throw error
+      setMessage({ type: 'success', text: '✓ Saved.' })
+      await loadAll()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+    setSaving(false)
+  }
+
   if (loading) {
     return (
       <div style={{ padding: 'var(--space-12)', textAlign: 'center' }}>
@@ -406,6 +427,14 @@ export default function BusinessInfoPage() {
          profile?.license_type === 'group_home' ||
          profile?.license_type === 'license_exempt') &&
         profile?.license_type_review_needed !== true,
+    },
+    {
+      // PR #16: Premises disclosures that gate the child-intake bundle
+      // (lead-based-paint for pre-1978 homes, firearms on premises).
+      id: 'premises',
+      label: 'Premises',
+      icon: Shield,
+      done: profile?.home_built_before_1978 != null && profile?.firearms_on_premises != null,
     },
   ]
 
@@ -863,7 +892,104 @@ export default function BusinessInfoPage() {
           saving={saving}
         />
       )}
+
+      {activeSection === 'premises' && (
+        <PremisesSection
+          homeBuiltBefore1978={profile?.home_built_before_1978 ?? null}
+          firearmsOnPremises={profile?.firearms_on_premises ?? null}
+          onSave={savePremises}
+          saving={saving}
+        />
+      )}
     </>
+  )
+}
+
+// PR #16: Premises disclosures section. Two boolean prompts that gate
+// the per-child intake bundle (lead-based-paint for pre-1978 homes;
+// firearms-on-premises is always required at intake, copy varies on
+// yes/no).
+function PremisesSection({ homeBuiltBefore1978, firearmsOnPremises, onSave, saving }) {
+  const [lead, setLead] = useState(homeBuiltBefore1978)
+  const [firearms, setFirearms] = useState(firearmsOnPremises)
+
+  const dirty = lead !== homeBuiltBefore1978 || firearms !== firearmsOnPremises
+  const answered = lead != null && firearms != null
+
+  return (
+    <div className="bi-section">
+      <div className="bi-section-header">
+        <h3>Premises disclosures</h3>
+        <p>
+          These two facts decide which acknowledgments parents must sign
+          at intake under Michigan Rule 7 (R 400.1907). Changing either
+          one later will flag any existing intakes as incomplete until
+          re-acknowledged.
+        </p>
+      </div>
+
+      <fieldset style={{ border: 0, padding: 0, margin: '0 0 16px 0' }}>
+        <legend style={{ fontWeight: 500, marginBottom: 8 }}>
+          Was your home built before 1978?
+        </legend>
+        <label style={{ marginRight: 16 }}>
+          <input
+            type="radio"
+            name="lead"
+            checked={lead === true}
+            onChange={() => setLead(true)}
+            disabled={saving}
+          /> Yes
+        </label>
+        <label style={{ marginRight: 16 }}>
+          <input
+            type="radio"
+            name="lead"
+            checked={lead === false}
+            onChange={() => setLead(false)}
+            disabled={saving}
+          /> No
+        </label>
+        <p style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', margin: '6px 0 0 0' }}>
+          If yes, a lead-based-paint disclosure acknowledgment is required at every child intake.
+        </p>
+      </fieldset>
+
+      <fieldset style={{ border: 0, padding: 0, margin: '0 0 16px 0' }}>
+        <legend style={{ fontWeight: 500, marginBottom: 8 }}>
+          Are firearms kept on the premises?
+        </legend>
+        <label style={{ marginRight: 16 }}>
+          <input
+            type="radio"
+            name="firearms"
+            checked={firearms === true}
+            onChange={() => setFirearms(true)}
+            disabled={saving}
+          /> Yes
+        </label>
+        <label style={{ marginRight: 16 }}>
+          <input
+            type="radio"
+            name="firearms"
+            checked={firearms === false}
+            onChange={() => setFirearms(false)}
+            disabled={saving}
+          /> No
+        </label>
+        <p style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', margin: '6px 0 0 0' }}>
+          A firearms disclosure is required at intake regardless of yes/no. The disclosure copy adjusts to whichever you pick.
+        </p>
+      </fieldset>
+
+      <button
+        className="bi-save-btn"
+        onClick={() => onSave({ home_built_before_1978: lead, firearms_on_premises: firearms })}
+        disabled={!answered || !dirty || saving}
+      >
+        <Save size={14} /> {saving ? 'Saving...' : 'Save premises disclosures'}
+      </button>
+    </div>
   )
 }
 
