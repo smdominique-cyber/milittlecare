@@ -11,10 +11,12 @@
 // `snapshot_hash` is a deterministic composition of the sub-row hashes.
 
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { AlertCircle, X, CheckCircle2, ShieldAlert } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import {
   ACK_TYPES,
+  arePremisesAnsweredForIntake,
   computeAckHash,
   computeEnvelopeHash,
   findActiveAck,
@@ -95,6 +97,26 @@ export default function ChildIntakeModal({
     [child, profile]
   )
 
+  // PR #16 follow-up (premises gate, 2026-05-29).
+  //
+  // Confirmed live: a provider clicked Send-to-Portal with both premises
+  // booleans null (Premises section never filled). `required` quietly
+  // dropped lead_disclosure and firearms_disclosure, the bundle wrote
+  // without them, intake_completed_at got stamped, and the provider was
+  // never warned. The bundle is missing two legally-required
+  // disclosures.
+  //
+  // Every save path (handleSendToPortal, handleSaveBundle for both
+  // in_person_paper and provider_override) now blocks when this gate is
+  // not satisfied. The button is disabled (visible UX), the handler
+  // re-checks at the top (defense in depth), and a banner above the
+  // channel section names exactly which premises questions are
+  // outstanding plus where to answer them.
+  const premisesGate = useMemo(
+    () => arePremisesAnsweredForIntake(profile),
+    [profile]
+  )
+
   // Per-sub-type payload (drives snapshot_hash).
   const payloads = useMemo(() => {
     const p = {}
@@ -135,6 +157,10 @@ export default function ChildIntakeModal({
   }, [child, userId])
 
   const channelValid = (() => {
+    // PR #16 follow-up (premises gate): no channel is valid until the
+    // licensee has answered both Premises booleans. The required-set
+    // derivation would otherwise silently drop missing disclosures.
+    if (!premisesGate.ready) return false
     if (channel === 'in_person_paper') return parentLabel.trim().length > 0
     if (channel === 'provider_override') return providerReason.trim().length > 0
     if (channel === 'parent_portal_trigger') return true
@@ -179,6 +205,14 @@ export default function ChildIntakeModal({
   // caller already pulled under the profiles "Users can view their
   // own profile" policy (migration 001).
   async function handleSendToPortal() {
+    // PR #16 follow-up (premises gate, 2026-05-29). Defense in depth —
+    // the button is also disabled via `channelValid`; this throw catches
+    // any path that bypasses the disabled state (programmatic call,
+    // future refactor, automated test that misses the prop).
+    if (!premisesGate.ready) {
+      setError(new Error(buildPremisesGateMessage(premisesGate.missing)))
+      return
+    }
     setSaving(true)
     setError(null)
     try {
@@ -294,6 +328,16 @@ export default function ChildIntakeModal({
 
   async function handleSaveBundle() {
     if (channel === 'parent_portal_trigger') return handleSendToPortal()
+    // PR #16 follow-up (premises gate, 2026-05-29). Same defense-in-
+    // depth check as handleSendToPortal: the in_person_paper and
+    // provider_override channels share the SAME required-set derivation
+    // and the SAME latent bug — without this gate they would also write
+    // an incomplete bundle when the licensee never filled the Premises
+    // section.
+    if (!premisesGate.ready) {
+      setError(new Error(buildPremisesGateMessage(premisesGate.missing)))
+      return
+    }
     if (!channelValid || saving) return
     setSaving(true)
     setError(null)
@@ -403,6 +447,10 @@ export default function ChildIntakeModal({
             <p>Loading existing acknowledgments...</p>
           ) : (
             <>
+              {!premisesGate.ready && (
+                <PremisesGateBanner missing={premisesGate.missing} onClose={onClose} />
+              )}
+
               <section>
                 <h3 style={{ fontSize: '1rem', margin: '0 0 8px 0' }}>
                   Disclosures that apply to {child.first_name}
@@ -557,6 +605,79 @@ export default function ChildIntakeModal({
         </div>
       </div>
     </div>
+  )
+}
+
+// PR #16 follow-up (premises gate, 2026-05-29).
+// Visible banner that names the missing premises fields and points
+// the provider to BusinessInfoPage's Premises section. Rendered
+// inside the modal above the channel chooser when the gate fails.
+// The button is disabled in parallel via `channelValid`; this banner
+// is the explanation for why.
+function PremisesGateBanner({ missing, onClose }) {
+  const fieldLabel = (m) =>
+    m === 'home_built_before_1978'
+      ? 'Was your home built before 1978?'
+      : m === 'firearms_on_premises'
+        ? 'Are firearms kept on the premises?'
+        : m
+  return (
+    <div
+      role="alert"
+      style={{
+        background: 'var(--clr-amber-pale, #fdf3d8)',
+        border: '1px solid var(--clr-amber, #d29c2b)',
+        color: 'var(--clr-ink)',
+        padding: 12,
+        borderRadius: 'var(--radius-md)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+        <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 2, color: 'var(--clr-amber, #d29c2b)' }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <strong style={{ display: 'block', marginBottom: 4 }}>
+            Answer your Premises questions first.
+          </strong>
+          <p style={{ margin: '0 0 8px 0', fontSize: '0.875rem', lineHeight: 1.5 }}>
+            Michigan rule R 400.1907 requires every child's intake bundle to
+            include disclosures gated on these answers. Without them, this
+            child's bundle would be saved missing the legally-required
+            {missing.includes('home_built_before_1978') ? ' lead-based-paint' : ''}
+            {missing.length === 2 ? ' and' : ''}
+            {missing.includes('firearms_on_premises') ? ' firearms' : ''}
+            {' '}disclosure
+            {missing.length > 1 ? 's' : ''}.
+          </p>
+          <ul style={{ margin: '0 0 8px 0', paddingLeft: 20, fontSize: '0.8125rem' }}>
+            {missing.map(m => <li key={m}>{fieldLabel(m)}</li>)}
+          </ul>
+          <p style={{ margin: 0, fontSize: '0.8125rem' }}>
+            Open <Link to="/business-info" onClick={onClose}>Business Info</Link>,
+            select the <strong>Premises</strong> tab, answer both questions,
+            then return to record this child's intake.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Backstop error string used when a handler is invoked despite the
+// disabled state (shouldn't happen via the UI but covers programmatic
+// calls + future refactors that miss the prop).
+function buildPremisesGateMessage(missing) {
+  const labels = missing.map(m =>
+    m === 'home_built_before_1978'
+      ? '"Was your home built before 1978?"'
+      : m === 'firearms_on_premises'
+        ? '"Are firearms kept on the premises?"'
+        : m
+  )
+  return (
+    'Premises section is incomplete. Answer ' +
+    labels.join(' and ') +
+    ' in Business Info → Premises before recording this child\'s intake. ' +
+    '(R 400.1907 requires the corresponding disclosure rows in the bundle.)'
   )
 }
 

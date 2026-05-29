@@ -12,19 +12,145 @@
 // Read-only. Tolerant of the schema not being applied yet (matches the
 // PR #15 helper's defensive shape: when PostgREST returns an error, the
 // helper returns the zero-shape rather than crashing the dashboard).
+//
+// ─── Rule-7 audit semantic (PR #16 follow-up, 2026-05-29) ─────────────
+//
+// R 400.1907's child-in-care statement items split into two regulatory
+// categories:
+//
+//   - INFORM-ONLY (lead, subitem vi): "The licensee shall inform the
+//     parent…" — the licensee's act of informing satisfies the rule.
+//     Provider attestation (acknowledged_via='provider_override')
+//     IS the record that the informing happened, so any active ack
+//     counts as satisfied regardless of channel.
+//
+//   - PARENT-SIGNED (firearms, food provider, licensing notebook,
+//     health condition, discipline policy receipt): "signed by the
+//     parent" / "received by the parent". The rule wants the parent's
+//     signature. Provider attestation that a paper signature was taken
+//     in person ('in_person_paper') stands in for the parent's
+//     signature — the modal copy makes the provider responsible for
+//     that representation. The portal channel ('parent_portal') IS
+//     the parent's own signature. A provider_override row alone is
+//     NOT the parent's signature — it is the provider's attestation
+//     that the disclosure was made, pending the parent's confirmation.
+//
+// This helper therefore uses CHANNEL-AWARE satisfaction for the
+// parent-signed types: an active ack of one of those types satisfies
+// the pending count ONLY when `acknowledged_via IN ('parent_portal',
+// 'in_person_paper')`.
+//
+// REGULATORY-INTERPRETATION ASSUMPTION (revisitable before PR #22):
+//
+// "provider_override does not satisfy parent-signed items" is my
+// reading of R 400.1907 — the rule's plain text is "signed by the
+// parent" and the provider's claim that the parent acknowledged is
+// not the parent's signature. The user (Seth) is treating this as a
+// regulatory-interpretation call to confirm with a licensing
+// consultant before PR #22 (Compliance Health Score) consumes these
+// counts. If the consultant reads "provider_override with a clear
+// reason is acceptable evidence of the parent acknowledging" — for
+// example, when the parent verbally agreed in person but couldn't sign
+// a portal/paper — flip the rule by adding 'provider_override' to
+// PARENT_SIGNED_SATISFYING_CHANNELS below. The split-by-channel logic
+// stays intact; only the membership of the satisfying set changes.
+//
+// In_person_paper is treated as satisfying because the modal's
+// existing copy frames it as "Parent signed in person / on paper" —
+// the provider is recording a real parent signature on a physical
+// document. If the consultant disagrees (e.g., they want only digital
+// portal signatures), remove 'in_person_paper' from the set.
 
 import { supabase } from './supabase'
+import { requiredSubTypesForChild } from './acknowledgments'
+
+// ─── Bucket constants (exported for reuse / inspection) ────────────────
+
+/**
+ * R 400.1907 subitem (vi) — "The licensee shall inform the parent…"
+ * Inform-only types: any active ack satisfies, regardless of channel.
+ */
+export const INFORM_ONLY_TYPES = Object.freeze([
+  'lead_disclosure',
+])
+
+/**
+ * R 400.1907 subitems (b)(i)-(v): items "signed by the parent" /
+ * "received by the parent". Active ack satisfies ONLY when channel is
+ * in PARENT_SIGNED_SATISFYING_CHANNELS.
+ */
+export const PARENT_SIGNED_TYPES = Object.freeze([
+  'firearms_disclosure',
+  'food_provider_agreement',
+  'licensing_notebook_offered',
+  'health_condition',
+  'discipline_policy_receipt',
+])
+
+/**
+ * Which `acknowledged_via` values count as a parent's signature on a
+ * parent-signed type. See the regulatory-interpretation note at the
+ * top of this file for the reasoning + revisit conditions.
+ */
+export const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
+  'parent_portal',
+  'in_person_paper',
+])
+
+/**
+ * @typedef {Object} ChildFilesPendingParentSignatures
+ * @property {number} firearms_disclosure         Parent-signed under R 400.1907(1)(b)(v). Pending unless an
+ *                                                 active ack with acknowledged_via IN ('parent_portal',
+ *                                                 'in_person_paper') exists for the child. Only counted when
+ *                                                 the licensee has answered profiles.firearms_on_premises
+ *                                                 (true or false; null = disclosure not yet required).
+ * @property {number} food_provider_agreement     Parent-signed under R 400.1907(1)(b)(ii). Always required.
+ * @property {number} licensing_notebook_offered  Parent-signed under R 400.1907(1)(b)(iii). Always required.
+ * @property {number} health_condition            Parent-signed under R 400.1907(1)(b)(i). Always required.
+ * @property {number} discipline_policy_receipt   Parent-signed under R 400.1907(1)(b)(iv). Always required.
+ */
 
 /**
  * @typedef {Object} ChildFilesAuditState
- * @property {'child_files'}   domain
- * @property {'type_2'}        type                                 MILittleCare-owned (counted by PR #22 default)
- * @property {number}          active_children_count                children.archived_at IS NULL
- * @property {number}          intake_complete_count                children.intake_completed_at IS NOT NULL
- * @property {number}          intake_incomplete_count
- * @property {number}          annual_review_overdue_count          records_last_reviewed_on + 1y < today, or null
- * @property {number}          pending_lead_disclosures_count       profile.home_built_before_1978=true AND child lacks lead_disclosure ack
- * @property {number}          pending_firearms_disclosures_count   profile.firearms_on_premises set AND child lacks firearms_disclosure ack
+ * @property {'child_files'}                  domain
+ * @property {'type_2'}                       type                                 MILittleCare-owned (counted by PR #22 default)
+ * @property {number}                         active_children_count                children.archived_at IS NULL
+ * @property {number}                         intake_complete_count                children.intake_completed_at IS NOT NULL
+ * @property {number}                         intake_incomplete_count
+ * @property {number}                         annual_review_overdue_count          records_last_reviewed_on + 1y < today, or null
+ * @property {number}                         pending_lead_disclosures_count       INFORM-ONLY (R 400.1907(1)(b)(vi)). Pending when
+ *                                                                                  home_built_before_1978=true AND no active ack
+ *                                                                                  of any channel exists for the child.
+ * @property {number}                         pending_parent_signatures_count      Total pending PARENT-SIGNED signature SLOTS across
+ *                                                                                  all five R 400.1907(1)(b)(i-v) types and all
+ *                                                                                  children. Counts slots, NOT children. PR #22's
+ *                                                                                  headline number for the compliance score.
+ * @property {ChildFilesPendingParentSignatures} pending_parent_signatures        Per-type breakdown of the parent-signed pending
+ *                                                                                  slots. Each value counts children missing an
+ *                                                                                  active parent_portal / in_person_paper ack of
+ *                                                                                  that type. provider_override alone does NOT
+ *                                                                                  satisfy any parent-signed type.
+ * @property {number}                         children_with_pending_parent_signatures_count
+ *                                                                                  Distinct children missing at least one
+ *                                                                                  parent-signed ack of any type. Captures
+ *                                                                                  "children affected" — orthogonal to the
+ *                                                                                  signature-slots rollup above (a child missing
+ *                                                                                  3 signatures contributes 3 to
+ *                                                                                  pending_parent_signatures_count but 1 to this
+ *                                                                                  field).
+ *
+ * Shape rationale (2026-05-29): the previous shape exported only
+ * `pending_firearms_disclosures_count` for the parent-signed bucket,
+ * which silently overstated compliance for the other four parent-signed
+ * types (food provider, licensing notebook, health, discipline) — the
+ * helper had no opinion on whether they were satisfied. This shape
+ * extends parent-signed tracking to all five types via
+ * `pending_parent_signatures` + the rollup + the children-affected
+ * count. `pending_firearms_disclosures_count` was REMOVED — firearms is
+ * one of five parent-signed types and reads through the breakdown as
+ * `pending_parent_signatures.firearms_disclosure`. Lead (inform-only)
+ * stays a separate top-level field because it's a distinct regulatory
+ * category, not a parent signature.
  */
 
 /**
@@ -40,7 +166,9 @@ export async function getChildFilesAuditState(licenseeId) {
     intake_incomplete_count: 0,
     annual_review_overdue_count: 0,
     pending_lead_disclosures_count: 0,
-    pending_firearms_disclosures_count: 0,
+    pending_parent_signatures_count: 0,
+    pending_parent_signatures: emptyParentSignaturesBreakdown(),
+    children_with_pending_parent_signatures_count: 0,
   }
 
   if (!licenseeId) return empty
@@ -77,13 +205,16 @@ export async function getChildFilesAuditState(licenseeId) {
   if (children.length === 0) return empty
   const childIds = children.map(c => c.id)
 
-  // 3) Pull every active acknowledgment for those children. We only
-  //    need (subject_id, type) to count missing lead / firearms.
+  // 3) Pull every active acknowledgment for those children. We need
+  //    (subject_id, type, acknowledged_via) to apply the channel-aware
+  //    satisfaction rule (see the regulatory note at the top of this
+  //    file: parent-signed types are satisfied only by parent_portal /
+  //    in_person_paper rows; lead is satisfied by any active row).
   let acks = []
   try {
     const { data, error } = await supabase
       .from('acknowledgments')
-      .select('subject_id, type')
+      .select('subject_id, type, acknowledged_via')
       .eq('provider_id', licenseeId)
       .eq('subject_type', 'child')
       .in('subject_id', childIds)
@@ -110,13 +241,25 @@ export async function getChildFilesAuditState(licenseeId) {
     }
   }
 
-  // Index acks by child + type for cheap lookup.
-  const haveAckByChild = new Map()  // childId -> Set<type>
+  // Index acks per child:
+  //   anyChannelByChild  : childId -> Set<type>   any active row, any channel
+  //   parentSignedByChild: childId -> Set<type>   active row with channel
+  //                                                 IN PARENT_SIGNED_SATISFYING_CHANNELS
+  // Parent-signed types check against parentSignedByChild; inform-only
+  // types check against anyChannelByChild.
+  const PARENT_SIGNED_SATISFYING_SET = new Set(PARENT_SIGNED_SATISFYING_CHANNELS)
+  const anyChannelByChild = new Map()
+  const parentSignedByChild = new Map()
   for (const a of acks) {
     if (!a || !a.subject_id) continue
-    let s = haveAckByChild.get(a.subject_id)
-    if (!s) { s = new Set(); haveAckByChild.set(a.subject_id, s) }
-    s.add(a.type)
+    let any = anyChannelByChild.get(a.subject_id)
+    if (!any) { any = new Set(); anyChannelByChild.set(a.subject_id, any) }
+    any.add(a.type)
+    if (PARENT_SIGNED_SATISFYING_SET.has(a.acknowledged_via)) {
+      let ps = parentSignedByChild.get(a.subject_id)
+      if (!ps) { ps = new Set(); parentSignedByChild.set(a.subject_id, ps) }
+      ps.add(a.type)
+    }
   }
 
   // 4) Compute counts.
@@ -125,19 +268,39 @@ export async function getChildFilesAuditState(licenseeId) {
   const intake_incomplete_count = active_children_count - intake_complete_count
   const annual_review_overdue_count = countOverdueReviews(children)
 
+  // Lead (INFORM-ONLY). Any active ack satisfies — see top-of-file
+  // regulatory note.
   let pending_lead_disclosures_count = 0
-  let pending_firearms_disclosures_count = 0
   if (profile && profile.home_built_before_1978 === true) {
     for (const c of children) {
-      const s = haveAckByChild.get(c.id)
+      const s = anyChannelByChild.get(c.id)
       if (!s || !s.has('lead_disclosure')) pending_lead_disclosures_count += 1
     }
   }
-  if (profile && (profile.firearms_on_premises === true || profile.firearms_on_premises === false)) {
-    for (const c of children) {
-      const s = haveAckByChild.get(c.id)
-      if (!s || !s.has('firearms_disclosure')) pending_firearms_disclosures_count += 1
+
+  // Parent-signed bucket — every PARENT_SIGNED_TYPES entry tracked with
+  // the same channel-aware rule. Requirement gating is done per child
+  // via `requiredSubTypesForChild` so the audit-state respects the same
+  // truth-table the intake modal uses (firearms only counts when the
+  // licensee has answered firearms_on_premises; the other four are
+  // always required for every active child of a licensed home).
+  const PARENT_SIGNED_SET = new Set(PARENT_SIGNED_TYPES)
+  const pending_parent_signatures = emptyParentSignaturesBreakdown()
+  let pending_parent_signatures_count = 0
+  let children_with_pending_parent_signatures_count = 0
+
+  for (const c of children) {
+    const requiredForChild = requiredSubTypesForChild({ child: c, profile })
+    const haveParentSigned = parentSignedByChild.get(c.id)
+    let childHasAnyPending = false
+    for (const t of requiredForChild) {
+      if (!PARENT_SIGNED_SET.has(t)) continue
+      if (haveParentSigned && haveParentSigned.has(t)) continue
+      pending_parent_signatures[t] += 1
+      pending_parent_signatures_count += 1
+      childHasAnyPending = true
     }
+    if (childHasAnyPending) children_with_pending_parent_signatures_count += 1
   }
 
   return {
@@ -148,13 +311,27 @@ export async function getChildFilesAuditState(licenseeId) {
     intake_incomplete_count,
     annual_review_overdue_count,
     pending_lead_disclosures_count,
-    pending_firearms_disclosures_count,
+    pending_parent_signatures_count,
+    pending_parent_signatures,
+    children_with_pending_parent_signatures_count,
   }
 }
 
 // -----------------------------------------------------------------------------
 // Internal helpers
 // -----------------------------------------------------------------------------
+
+/**
+ * Build the `pending_parent_signatures` breakdown object with every
+ * PARENT_SIGNED_TYPES key initialized to 0. Used by both the empty-state
+ * return and the count loop. Keeps the shape stable across all return
+ * paths so consumers can assume every key is always present.
+ */
+function emptyParentSignaturesBreakdown() {
+  const out = {}
+  for (const t of PARENT_SIGNED_TYPES) out[t] = 0
+  return out
+}
 
 function countOverdueReviews(children) {
   let n = 0

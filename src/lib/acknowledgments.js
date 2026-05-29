@@ -165,6 +165,44 @@ export function findActiveAck(acks, filter) {
 }
 
 /**
+ * Has the licensee answered both premises disclosure questions?
+ *
+ * The intake bundle's required-set is derived from these answers:
+ *   - lead_disclosure is required only when home_built_before_1978 = true
+ *   - firearms_disclosure is required whenever firearms_on_premises is a
+ *     boolean (R 400.1907(1)(b)(v) — the disclosure is required
+ *     regardless of yes/no, copy varies)
+ *
+ * If either is null ("not yet answered") `requiredSubTypesForChild`
+ * silently OMITS the corresponding disclosure from the required set —
+ * which means a save path that runs without checking this helper writes
+ * an INCOMPLETE bundle, missing legally-required disclosures, with no
+ * warning to the provider. This was confirmed live during PR #16
+ * follow-up testing (2026-05-29).
+ *
+ * Every save path that writes the intake bundle MUST gate on
+ * `ready === true`. See `ChildIntakeModal.handleSendToPortal` and
+ * `ChildIntakeModal.handleSaveBundle`.
+ *
+ * @param {object|null} profile  profiles row carrying premises booleans
+ * @returns {{ ready: boolean, missing: string[] }}
+ *   `missing` lists the un-answered field names so UI copy can be
+ *   specific. Values: 'home_built_before_1978', 'firearms_on_premises'.
+ */
+export function arePremisesAnsweredForIntake(profile) {
+  const missing = []
+  if (profile == null) {
+    return {
+      ready: false,
+      missing: ['home_built_before_1978', 'firearms_on_premises'],
+    }
+  }
+  if (profile.home_built_before_1978 == null) missing.push('home_built_before_1978')
+  if (profile.firearms_on_premises == null) missing.push('firearms_on_premises')
+  return { ready: missing.length === 0, missing }
+}
+
+/**
  * Decide which child-in-care sub-rows actually apply to a particular
  * child given the provider's premises state and the child's age.
  *
