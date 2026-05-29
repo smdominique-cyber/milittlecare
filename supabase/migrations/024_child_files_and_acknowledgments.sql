@@ -107,6 +107,14 @@
 --   order by policyname;
 --   -- expect at least 4 policies (provider select/insert/update +
 --   --                              parent select/insert).
+--
+--   -- e) Two new RPCs for the provider->portal->parent loop:
+--   select proname from pg_proc
+--   where pronamespace = 'public'::regnamespace
+--     and proname in ('reminder_instance_request_intake_ack',
+--                     'reminder_instance_resolve_for_parent')
+--   order by proname;
+--   -- expect: two rows.
 -- ============================================================
 
 -- -------------------------------------------------------
@@ -288,6 +296,116 @@ create policy "Parents can insert portal acknowledgments for their children"
     )
   );
 
+-- -------------------------------------------------------
+-- 5. SECURITY DEFINER RPCs for the provider->parent->portal loop
+--    (PR #15 OQ4 wire-up, added in the PR #16 update pass)
+-- -------------------------------------------------------
+-- Migration 023 created two RPCs (`reminder_instance_dismiss`,
+-- `reminder_instance_resolve`) that mutate reminder_instances
+-- exclusively for the provider (CHECK: provider_id = auth.uid()). The
+-- intake-acknowledgment loop introduces two new actors that need
+-- mutations against the same table:
+--
+--   * A licensee triggering "send to parent's portal" needs to INSERT a
+--     reminder_instances row. RLS on reminder_instances has no
+--     authenticated INSERT policy (the service-role cron is the only
+--     writer in PR #15), so the licensee cannot insert directly.
+--     `reminder_instance_request_intake_ack` is a SECURITY DEFINER
+--     wrapper that validates the caller owns the child, then inserts a
+--     well-formed `intake_acknowledgment_pending` row that the existing
+--     dispatcher cron picks up unmodified.
+--
+--   * A parent confirming an intake needs to set `resolved_at` on the
+--     matching pending reminder so the dispatcher stops re-firing.
+--     The existing `reminder_instance_resolve` RPC's CHECK is
+--     `provider_id = auth.uid()` -- denies the parent. We add a
+--     parent-scoped sibling RPC restricted to category
+--     'intake_acknowledgment_pending' AND a subject_id linked to the
+--     parent via parent_family_links. Tightly scoped on purpose:
+--     parents cannot resolve other categories.
+--
+-- Both RPCs mirror the migration-023 RPC style (security definer,
+-- search_path = public, EXECUTE granted to authenticated, no-op on
+-- mismatch). No DDL changes to existing tables -- only two new
+-- functions.
+
+create or replace function public.reminder_instance_request_intake_ack(
+  p_child_id     uuid,
+  p_title        text,
+  p_body         text,
+  p_cta_path     text,
+  p_trigger_at   timestamptz
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_provider_id uuid;
+  v_id uuid;
+begin
+  -- Caller must be the licensee who owns the child.
+  select c.user_id into v_provider_id
+    from public.children c
+   where c.id = p_child_id
+     and c.archived_at is null;
+  if v_provider_id is null or v_provider_id <> auth.uid() then
+    raise exception 'reminder_instance_request_intake_ack: unauthorized or child not found';
+  end if;
+
+  insert into public.reminder_instances (
+    provider_id, category, subject_type, subject_id,
+    trigger_at, due_at, title, body, cta_path
+  ) values (
+    v_provider_id,
+    'intake_acknowledgment_pending',
+    'child',
+    p_child_id,
+    coalesce(p_trigger_at, now()),
+    null,
+    coalesce(p_title, 'Intake acknowledgment pending'),
+    p_body,
+    p_cta_path
+  )
+  on conflict do nothing
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+revoke all on function public.reminder_instance_request_intake_ack(uuid, text, text, text, timestamptz) from public;
+grant execute on function public.reminder_instance_request_intake_ack(uuid, text, text, text, timestamptz) to authenticated;
+
+create or replace function public.reminder_instance_resolve_for_parent(p_instance_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.reminder_instances ri
+     set resolved_at = now()
+   where ri.id = p_instance_id
+     and ri.resolved_at is null
+     and ri.archived_at is null
+     and ri.category = 'intake_acknowledgment_pending'
+     and ri.subject_type = 'child'
+     and exists (
+       select 1
+         from public.children c
+         join public.parent_family_links pfl on pfl.family_id = c.family_id
+        where c.id = ri.subject_id
+          and pfl.parent_id = auth.uid()
+          and pfl.status = 'active'
+     );
+end;
+$$;
+
+revoke all on function public.reminder_instance_resolve_for_parent(uuid) from public;
+grant execute on function public.reminder_instance_resolve_for_parent(uuid) to authenticated;
+
 -- ============================================================
 -- DOWN MIGRATION (commented; uncomment + run if rollback is needed)
 -- ============================================================
@@ -296,6 +414,8 @@ create policy "Parents can insert portal acknowledgments for their children"
 -- drops are non-destructive (existing data rows lose only the new
 -- columns).
 --
+-- drop function if exists public.reminder_instance_resolve_for_parent(uuid);
+-- drop function if exists public.reminder_instance_request_intake_ack(uuid, text, text, text, timestamptz);
 -- drop policy if exists "Parents can insert portal acknowledgments for their children" on public.acknowledgments;
 -- drop policy if exists "Parents can view acks on their children" on public.acknowledgments;
 -- drop policy if exists "Providers can update their own acknowledgments" on public.acknowledgments;

@@ -137,10 +137,48 @@ export default function ChildIntakeModal({
   const channelValid = (() => {
     if (channel === 'in_person_paper') return parentLabel.trim().length > 0
     if (channel === 'provider_override') return providerReason.trim().length > 0
+    if (channel === 'parent_portal_trigger') return true
     return false
   })()
 
+  // PR #16 UPDATE — "Send to parent's portal" trigger: instead of
+  // writing the acknowledgments bundle, insert a single
+  // reminder_instances row of category 'intake_acknowledgment_pending'
+  // for this child via the SECURITY DEFINER RPC added to migration 024.
+  // The hourly PR #15 dispatcher picks it up, emails the parent, and
+  // the parent's confirm action on /parent/intake-acknowledge resolves
+  // the reminder.
+  async function handleSendToPortal() {
+    setSaving(true)
+    setError(null)
+    try {
+      const body =
+        `Your child care provider has requested your acknowledgment of ` +
+        `Michigan-required intake disclosures for ${child.first_name || 'your child'}. ` +
+        `Open the link to review and confirm.`
+      const ctaPath = `/parent/intake-acknowledge?child=${encodeURIComponent(child.id)}`
+      const { error: rpcErr } = await supabase.rpc(
+        'reminder_instance_request_intake_ack',
+        {
+          p_child_id: child.id,
+          p_title: `Intake acknowledgments needed for ${child.first_name || 'your child'}`,
+          p_body: body,
+          p_cta_path: ctaPath,
+          p_trigger_at: new Date().toISOString(),
+        }
+      )
+      if (rpcErr) throw rpcErr
+      onSaved?.()
+      onClose?.()
+    } catch (err) {
+      setError(err)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   async function handleSaveBundle() {
+    if (channel === 'parent_portal_trigger') return handleSendToPortal()
     if (!channelValid || saving) return
     setSaving(true)
     setError(null)
@@ -330,6 +368,15 @@ export default function ChildIntakeModal({
                       onChange={() => setChannel('provider_override')}
                     /> I am recording on the parent's behalf
                   </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="channel"
+                      value="parent_portal_trigger"
+                      checked={channel === 'parent_portal_trigger'}
+                      onChange={() => setChannel('parent_portal_trigger')}
+                    /> Send to parent's portal (we will email them a link to confirm)
+                  </label>
                 </div>
 
                 {channel === 'in_person_paper' && (
@@ -358,6 +405,14 @@ export default function ChildIntakeModal({
                     />
                   </div>
                 )}
+                {channel === 'parent_portal_trigger' && (
+                  <div style={{ marginTop: 8, fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', lineHeight: 1.5 }}>
+                    We will create a pending reminder for this child. The next
+                    hourly dispatcher run emails the parent (if they have opted
+                    in to email reminders) with a link to <code>/parent/intake-acknowledge</code>.
+                    The reminder clears automatically when the parent confirms.
+                  </div>
+                )}
               </section>
 
               {error && (
@@ -377,7 +432,11 @@ export default function ChildIntakeModal({
             onClick={handleSaveBundle}
             disabled={saving || !channelValid || loading}
           >
-            {saving ? 'Saving...' : 'Save intake bundle'}
+            {saving
+              ? 'Saving...'
+              : channel === 'parent_portal_trigger'
+                ? 'Send to parent'
+                : 'Save intake bundle'}
           </button>
         </div>
       </div>

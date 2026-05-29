@@ -21,8 +21,8 @@
 // Channel-shape CHECK (migration 024): parent_portal requires
 // acknowledged_by_user_id IS NOT NULL and provider_override_reason IS NULL.
 
-import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { CheckCircle2, ArrowLeft, AlertCircle } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import {
@@ -45,9 +45,20 @@ const SUB_TYPE_LABEL = Object.freeze({
 
 export default function ParentIntakeAcknowledgePage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  // PR #16 UPDATE: the dispatcher's CTA link is
+  // /parent/intake-acknowledge?child=<id>; this prefocuses the matching
+  // card. Loading still pulls every pending child so the parent can
+  // confirm siblings in one sitting.
+  const focusChildId = searchParams.get('child')
   const [user, setUser] = useState(null)
   const [children, setChildren] = useState([])
   const [acksByChild, setAcksByChild] = useState({})
+  // PR #16 UPDATE: pending intake_acknowledgment_pending reminder
+  // instances per child, indexed by subject_id. On parent confirm we
+  // call reminder_instance_resolve_for_parent for each so the
+  // dispatcher stops re-firing.
+  const [pendingReminders, setPendingReminders] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [busyChildId, setBusyChildId] = useState(null)
@@ -100,6 +111,34 @@ export default function ParentIntakeAcknowledgePage() {
         if (ackResp.error) throw ackResp.error
         const acks = Array.isArray(ackResp.data) ? ackResp.data : []
 
+        // PR #16 UPDATE: pending intake-ack reminders for these
+        // children (the provider->portal trigger writes one per child
+        // via reminder_instance_request_intake_ack). RLS on
+        // reminder_instances only allows providers to SELECT their
+        // own rows; the parent can't read these directly. We attempt
+        // the SELECT defensively -- if RLS denies, we simply have no
+        // reminder ids to resolve at confirm time, and the dispatcher
+        // continues firing until the provider observes the confirmed
+        // ack rows. Best-effort.
+        let reminderById = {}
+        try {
+          const remResp = await supabase
+            .from('reminder_instances')
+            .select('id, subject_id')
+            .eq('category', 'intake_acknowledgment_pending')
+            .eq('subject_type', 'child')
+            .in('subject_id', kids.map(k => k.id))
+            .is('resolved_at', null)
+            .is('archived_at', null)
+          if (!remResp.error && Array.isArray(remResp.data)) {
+            for (const r of remResp.data) {
+              (reminderById[r.subject_id] = reminderById[r.subject_id] || []).push(r.id)
+            }
+          }
+        } catch {
+          // Non-fatal: best-effort.
+        }
+
         const byChild = {}
         for (const a of acks) {
           (byChild[a.subject_id] = byChild[a.subject_id] || []).push(a)
@@ -108,6 +147,7 @@ export default function ParentIntakeAcknowledgePage() {
         if (!cancelled) {
           setChildren(kids)
           setAcksByChild(byChild)
+          setPendingReminders(reminderById)
           setLoading(false)
         }
       } catch (err) {
@@ -180,8 +220,29 @@ export default function ParentIntakeAcknowledgePage() {
         .insert(newRows)
       if (insertErr) throw insertErr
 
-      // Optimistic: clear this child's acks so the card disappears.
+      // PR #16 UPDATE: resolve every pending intake_acknowledgment_pending
+      // reminder for this child via the SECURITY DEFINER RPC. Failures
+      // here are non-fatal (the acks already landed) but logged so a
+      // dead loop is visible during smoke testing.
+      const reminderIds = pendingReminders[child.id] || []
+      for (const id of reminderIds) {
+        const { error: resolveErr } = await supabase.rpc(
+          'reminder_instance_resolve_for_parent',
+          { p_instance_id: id }
+        )
+        if (resolveErr) {
+          console.warn('reminder_instance_resolve_for_parent failed', { id, err: resolveErr })
+        }
+      }
+
+      // Optimistic: clear this child's acks + pending reminders so the
+      // card disappears.
       setAcksByChild(prev => {
+        const next = { ...prev }
+        delete next[child.id]
+        return next
+      })
+      setPendingReminders(prev => {
         const next = { ...prev }
         delete next[child.id]
         return next
@@ -201,7 +262,20 @@ export default function ParentIntakeAcknowledgePage() {
     )
   }
 
-  const pending = children.filter(c => (acksByChild[c.id] || []).length > 0)
+  // Pending cards: any child the provider has either already started
+  // (existing acks) OR explicitly requested portal review for (pending
+  // reminder).
+  const pending = useMemo(() => {
+    const list = children.filter(c =>
+      (acksByChild[c.id] || []).length > 0 ||
+      (pendingReminders[c.id] || []).length > 0
+    )
+    if (!focusChildId) return list
+    // Pre-focus: sort the focus child first.
+    return list.slice().sort((a, b) =>
+      a.id === focusChildId ? -1 : b.id === focusChildId ? 1 : 0
+    )
+  }, [children, acksByChild, pendingReminders, focusChildId])
 
   return (
     <div className="parent-portal" style={{ padding: 16, maxWidth: 720, margin: '0 auto' }}>
