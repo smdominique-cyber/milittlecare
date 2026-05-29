@@ -327,6 +327,125 @@ describe('ParentIntakeAcknowledgePage confirm path', () => {
   )
 
   it(
+    'post-send-to-portal state (lead+firearms required): parent confirm ' +
+    'archives provider_override sub-rows and writes parent_portal rows ' +
+    'of the same types — channel transition preserves the audit story',
+    async () => {
+      // Simulate the post-Send-to-Portal state. ChildIntakeModal's
+      // handleSendToPortal now pre-writes the bundle as
+      // 'provider_override' with a portal-pending reason. The parent
+      // arrives with: envelope + lead_disclosure + firearms_disclosure +
+      // food_provider_agreement + licensing_notebook_offered +
+      // health_condition + discipline_policy_receipt, all stamped
+      // provider_override. infant_safe_sleep is excluded because the
+      // child is > 18 months old.
+      const PROVIDER_REASON =
+        'Provider attested at intake on 2026-05-29; ' +
+        'parent notified to confirm via portal at ' +
+        '/parent/intake-acknowledge?child=kid-1.'
+      tableData.acknowledgments = [
+        // envelope
+        {
+          id: 'a-env', provider_id: TEST_PROVIDER_ID,
+          type: 'child_in_care_statement', subject_id: 'kid-1',
+          snapshot_hash: 'env-hash-1', snapshot_version: null,
+          acknowledged_via: 'provider_override',
+          provider_override_reason: PROVIDER_REASON,
+          archived_at: null,
+        },
+        // sub-rows
+        ...[
+          'lead_disclosure',
+          'firearms_disclosure',
+          'food_provider_agreement',
+          'licensing_notebook_offered',
+          'health_condition',
+          'discipline_policy_receipt',
+        ].map((t, i) => ({
+          id: `a-sub-${i}`, provider_id: TEST_PROVIDER_ID,
+          type: t, subject_id: 'kid-1',
+          snapshot_hash: `sub-hash-${i}`, snapshot_version: 'v1',
+          acknowledged_via: 'provider_override',
+          provider_override_reason: PROVIDER_REASON,
+          archived_at: null,
+        })),
+      ]
+
+      render(
+        <MemoryRouter initialEntries={['/parent/intake-acknowledge?child=kid-1']}>
+          <Routes>
+            <Route path="/parent/intake-acknowledge"
+              element={<ParentIntakeAcknowledgePage />} />
+          </Routes>
+        </MemoryRouter>
+      )
+
+      const button = await screen.findByRole('button', {
+        name: /I confirm these acknowledgments/i,
+      }, { timeout: 2000 })
+
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        expect(inserts.filter(i => i.table === 'acknowledgments').length)
+          .toBeGreaterThan(0)
+      }, { timeout: 2000 })
+
+      // 1. The archive UPDATE flips archived_at on every prior active row.
+      const ackArchives = updates.filter(
+        u => u.table === 'acknowledgments' && u.payload.archived_at,
+      )
+      expect(ackArchives).toHaveLength(1)
+
+      // 2. The INSERT writes envelope + 6 sub-rows = 7 rows, all
+      //    re-stamped as parent_portal.
+      const ackInserts = inserts.filter(i => i.table === 'acknowledgments')
+      expect(ackInserts).toHaveLength(1)
+      const rows = ackInserts[0].rows
+      expect(rows).toHaveLength(7)
+      for (const row of rows) {
+        expect(row.acknowledged_via).toBe('parent_portal')
+        expect(row.acknowledged_by_user_id).toBe(mockUser.id)
+        expect(row.provider_id).toBe(TEST_PROVIDER_ID)
+        expect(row.provider_override_reason).toBe(null)
+      }
+      const typesWritten = rows.map(r => r.type).sort()
+      expect(typesWritten).toEqual([
+        'child_in_care_statement',
+        'discipline_policy_receipt',
+        'firearms_disclosure',
+        'food_provider_agreement',
+        'health_condition',
+        'lead_disclosure',
+        'licensing_notebook_offered',
+      ])
+
+      // 3. The resolve RPC fires once for the pending reminder.
+      const resolveCalls = rpcCalls.filter(
+        c => c.name === 'reminder_instance_resolve_for_parent'
+      )
+      expect(resolveCalls).toHaveLength(1)
+
+      // 4. Counts STAY at zero. Compute the post-confirm active acks
+      //    set (archived provider_override rows are excluded; new
+      //    parent_portal rows are active) and feed it to the audit-state
+      //    helper's logic to assert pending = 0. Mirrors the production
+      //    invariant that getChildFilesAuditState consumes.
+      //
+      //    Active set = the INSERT rows (the archives flipped the prior).
+      //    Per-type presence is enough for the pending count derivation;
+      //    we don't need to call the helper directly here.
+      const activeAckTypes = new Set(rows.map(r => r.type))
+      expect(activeAckTypes.has('lead_disclosure')).toBe(true)
+      expect(activeAckTypes.has('firearms_disclosure')).toBe(true)
+      // Therefore: pending_lead_disclosures_count = 0,
+      //            pending_firearms_disclosures_count = 0.
+      // The explicit audit-state pass is in childFiles.test.js so the
+      // PR #22 consumer can rely on the helper directly.
+    },
+  )
+
+  it(
     'child without user_id AND no existing acks: shows the legacy error ' +
     '(defensive — we do not invent a provider)',
     async () => {
