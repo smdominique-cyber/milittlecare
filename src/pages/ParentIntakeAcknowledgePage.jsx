@@ -30,6 +30,10 @@ import {
   computeAckHash,
   computeEnvelopeHash,
 } from '@/lib/acknowledgments'
+import {
+  listPendingForParent,
+  resolvePendingForChild,
+} from '@/lib/parentIntakeReminders'
 import '@/styles/parent.css'
 
 const SUB_TYPE_LABEL = Object.freeze({
@@ -111,33 +115,23 @@ export default function ParentIntakeAcknowledgePage() {
         if (ackResp.error) throw ackResp.error
         const acks = Array.isArray(ackResp.data) ? ackResp.data : []
 
-        // PR #16 UPDATE: pending intake-ack reminders for these
-        // children (the provider->portal trigger writes one per child
-        // via reminder_instance_request_intake_ack). RLS on
-        // reminder_instances only allows providers to SELECT their
-        // own rows; the parent can't read these directly. We attempt
-        // the SELECT defensively -- if RLS denies, we simply have no
-        // reminder ids to resolve at confirm time, and the dispatcher
-        // continues firing until the provider observes the confirmed
-        // ack rows. Best-effort.
-        let reminderById = {}
-        try {
-          const remResp = await supabase
-            .from('reminder_instances')
-            .select('id, subject_id')
-            .eq('category', 'intake_acknowledgment_pending')
-            .eq('subject_type', 'child')
-            .in('subject_id', kids.map(k => k.id))
-            .is('resolved_at', null)
-            .is('archived_at', null)
-          if (!remResp.error && Array.isArray(remResp.data)) {
-            for (const r of remResp.data) {
-              (reminderById[r.subject_id] = reminderById[r.subject_id] || []).push(r.id)
-            }
-          }
-        } catch {
-          // Non-fatal: best-effort.
+        // PR #16 third pass: fetch the parent's pending intake-ack
+        // reminders via the SECURITY DEFINER RPC
+        // `reminder_instance_list_for_parent` (wrapped in
+        // src/lib/parentIntakeReminders.js). The direct SELECT path
+        // was dead under RLS — parents have no SELECT policy on
+        // `reminder_instances`, so `pendingByChild` was always empty
+        // and the confirm-time resolve loop never ran. The RPC is
+        // scoped server-side to the same guard as
+        // `reminder_instance_resolve_for_parent`. A failed list is
+        // non-fatal — acks still land; the dispatcher is fire-once
+        // (api/cron-dispatch-reminders.js:252) so the worst case is
+        // stale-row hygiene, not re-fire.
+        const { pendingByChild, error: listErr } = await listPendingForParent(supabase)
+        if (listErr) {
+          console.warn('listPendingForParent failed', listErr)
         }
+        const reminderById = pendingByChild
 
         const byChild = {}
         for (const a of acks) {
@@ -220,19 +214,19 @@ export default function ParentIntakeAcknowledgePage() {
         .insert(newRows)
       if (insertErr) throw insertErr
 
-      // PR #16 UPDATE: resolve every pending intake_acknowledgment_pending
-      // reminder for this child via the SECURITY DEFINER RPC. Failures
-      // here are non-fatal (the acks already landed) but logged so a
-      // dead loop is visible during smoke testing.
-      const reminderIds = pendingReminders[child.id] || []
-      for (const id of reminderIds) {
-        const { error: resolveErr } = await supabase.rpc(
-          'reminder_instance_resolve_for_parent',
-          { p_instance_id: id }
-        )
-        if (resolveErr) {
-          console.warn('reminder_instance_resolve_for_parent failed', { id, err: resolveErr })
-        }
+      // PR #16 third pass: resolve every pending
+      // intake_acknowledgment_pending reminder for this child via the
+      // parent-scoped resolve RPC (wrapped in
+      // src/lib/parentIntakeReminders.js). Pre-pass shipped this loop
+      // but its source list was empty under RLS, so it never ran.
+      // Failures here are non-fatal (the acks already landed) but are
+      // surfaced via the helper's `failures` array so a dead loop
+      // would still produce a console.warn rather than hide silently.
+      const { failures } = await resolvePendingForChild(
+        supabase, pendingReminders, child.id,
+      )
+      for (const f of failures) {
+        console.warn('reminder_instance_resolve_for_parent failed', f)
       }
 
       // Optimistic: clear this child's acks + pending reminders so the

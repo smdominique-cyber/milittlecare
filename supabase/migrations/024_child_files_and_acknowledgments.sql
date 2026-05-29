@@ -108,13 +108,19 @@
 --   -- expect at least 4 policies (provider select/insert/update +
 --   --                              parent select/insert).
 --
---   -- e) Two new RPCs for the provider->portal->parent loop:
+--   -- e) Three new RPCs for the provider->portal->parent loop:
 --   select proname from pg_proc
 --   where pronamespace = 'public'::regnamespace
 --     and proname in ('reminder_instance_request_intake_ack',
---                     'reminder_instance_resolve_for_parent')
+--                     'reminder_instance_resolve_for_parent',
+--                     'reminder_instance_list_for_parent')
 --   order by proname;
---   -- expect: two rows.
+--   -- expect: three rows.
+--
+--   -- e.1) Smoke-test the parent list path (run while signed in as a
+--   --      parent; expect a row for each intake-ack reminder targeting
+--   --      a child the parent is linked to, and zero rows otherwise):
+--   select * from public.reminder_instance_list_for_parent();
 -- ============================================================
 
 -- -------------------------------------------------------
@@ -406,6 +412,53 @@ $$;
 revoke all on function public.reminder_instance_resolve_for_parent(uuid) from public;
 grant execute on function public.reminder_instance_resolve_for_parent(uuid) to authenticated;
 
+-- PR #16 third pass — without this RPC the parent page's resolve loop
+-- is dead. Parents have no SELECT policy on `reminder_instances`, so a
+-- direct SELECT returns zero rows under RLS, the resolve loop iterates
+-- over an empty list, and `reminder_instance_resolve_for_parent` is
+-- never called. Result: the reminder inserts, fires once (the
+-- dispatcher's `fired_at IS NULL` filter at
+-- api/cron-dispatch-reminders.js:252 keeps it from re-firing), then
+-- sits as `fired_at IS NOT NULL, resolved_at IS NULL` until the
+-- 7-day archive cron sweeps it. Audit-state and the parent's pending
+-- list both miscount in the meantime.
+--
+-- This RPC lets the parent fetch the (id, subject_id) tuples for
+-- exactly the reminders they are entitled to resolve, scoped by the
+-- same guard as `reminder_instance_resolve_for_parent`:
+--   category   = 'intake_acknowledgment_pending'
+--   subject_type = 'child'
+--   subject_id   linked to auth.uid() via active parent_family_links
+--   resolved_at  IS NULL
+--   archived_at  IS NULL
+--
+-- Returns a SETOF record so the JS side can iterate. No-arg: the
+-- function reads auth.uid() server-side.
+
+create or replace function public.reminder_instance_list_for_parent()
+returns table(id uuid, subject_id uuid)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  return query
+    select ri.id, ri.subject_id
+      from public.reminder_instances ri
+      join public.children c on c.id = ri.subject_id
+      join public.parent_family_links pfl on pfl.family_id = c.family_id
+     where ri.category = 'intake_acknowledgment_pending'
+       and ri.subject_type = 'child'
+       and ri.resolved_at is null
+       and ri.archived_at is null
+       and pfl.parent_id = auth.uid()
+       and pfl.status = 'active';
+end;
+$$;
+
+revoke all on function public.reminder_instance_list_for_parent() from public;
+grant execute on function public.reminder_instance_list_for_parent() to authenticated;
+
 -- ============================================================
 -- DOWN MIGRATION (commented; uncomment + run if rollback is needed)
 -- ============================================================
@@ -414,6 +467,7 @@ grant execute on function public.reminder_instance_resolve_for_parent(uuid) to a
 -- drops are non-destructive (existing data rows lose only the new
 -- columns).
 --
+-- drop function if exists public.reminder_instance_list_for_parent();
 -- drop function if exists public.reminder_instance_resolve_for_parent(uuid);
 -- drop function if exists public.reminder_instance_request_intake_ack(uuid, text, text, text, timestamptz);
 -- drop policy if exists "Parents can insert portal acknowledgments for their children" on public.acknowledgments;
