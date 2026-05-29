@@ -752,3 +752,123 @@ on **2026-05-28**, all passed:
 
 1. **Tables exist** �
 ```sql
+-- (verification SQL truncated in the source file; canonical
+-- queries live in the header of supabase/migrations/023_*.sql.)
+```
+
+### 2026-05-29 � Migration 024: child files + acknowledgments + parent-loop RPCs (PR #16)
+
+Applied to production on **2026-05-29** by Seth, via the **Supabase web
+SQL Editor** (PR #16, branch `feature/pr-16-child-files-scope`,
+merged into `main` at commit `ff32f09`). This is the schema for the
+child-files compliance domain plus the SECURITY DEFINER plumbing that
+closes the provider->parent->portal acknowledgment loop.
+
+What the migration creates � `024_child_files_and_acknowledgments.sql`:
+
+- **`public.children` � 5 new columns** � `immunization_status`
+  (text + CHECK over `'up_to_date' | 'waiver_on_file' | 'in_progress'`),
+  `immunization_record_url` (text), `food_provider` (text + CHECK over
+  `'provider' | 'parent' | 'both'`), `records_last_reviewed_on` (date),
+  `intake_completed_at` (timestamptz). Rule 7 / R 400.1907 structured
+  fields that the intake bundle writes and `getChildFilesAuditState`
+  reads.
+- **`public.profiles` � 2 new columns** � `home_built_before_1978`
+  (boolean, nullable) and `firearms_on_premises` (boolean, nullable).
+  Per-property disclosure answers set by the in-product Premises
+  prompt on `BusinessInfoPage`. Intake form reads them to gate which
+  child-level acknowledgments are required (lead, firearms).
+- **`public.acknowledgments`** � new polymorphic table. One row per
+  acknowledged item. Discriminated by `(type, subject_type,
+  subject_id)`: provider-level acks (e.g. `licensing_notebook_offered`)
+  carry NULL subject; child-level acks (e.g. `lead_disclosure`,
+  `firearms_disclosure`, `child_in_care_statement`,
+  `food_provider_agreement`, `discipline_policy_receipt`,
+  `infant_safe_sleep`, `health_condition`) carry
+  `subject_type='child'` + the child id. Envelope row
+  (`child_in_care_statement`) carries a `snapshot_hash` composed from
+  the sub-row hashes; drift detection on the snapshot_hash flips
+  intake-complete to false. Channel field tracks how the ack was
+  captured: `in_person_paper` (provider attests parent signed paper) |
+  `provider_override` (provider signs on parent's behalf with
+  documented reason) | `parent_portal` (parent self-signs at
+  `/parent/intake-acknowledge`). CHECK constraints enforce the
+  channel-shape rules (parent_portal requires
+  `acknowledged_by_user_id IS NOT NULL`; `provider_override` requires
+  `provider_override_reason IS NOT NULL`).
+- **Two partial unique indexes** on `acknowledgments` �
+  `acknowledgments_provider_active` (where `archived_at IS NULL`)
+  and `acknowledgments_subject_active` (where `subject_id IS NOT
+  NULL AND archived_at IS NULL`). Together prevent duplicate active
+  acks for the same provider+type+subject tuple.
+- **RLS on `acknowledgments` � 5 policies**: provider SELECT/INSERT/UPDATE
+  on rows where `provider_id = auth.uid()`; parent SELECT/INSERT on
+  rows whose `subject_id` belongs to a child the parent is linked to
+  via `parent_family_links` (status='active'). No DELETE policy �
+  acks are archived via `archived_at`, never hard-deleted (audit
+  retention per CLAUDE.md domain rules).
+- **Three SECURITY DEFINER RPCs** for the
+  intake_acknowledgment_pending reminder loop:
+  - `reminder_instance_request_intake_ack(p_child_id uuid, p_title
+    text, p_body text, p_cta_path text, p_trigger_at timestamptz)
+    returns uuid` � provider-side. Inserts one
+    `reminder_instances` row of category
+    `'intake_acknowledgment_pending'` for the named child, after
+    asserting the caller owns the child via `children.user_id =
+    auth.uid()`. Returns the new row id (or NULL on conflict).
+    Lets `ChildIntakeModal`'s "Send to parent's portal" channel
+    write to `reminder_instances` despite RLS having no
+    authenticated INSERT policy.
+  - `reminder_instance_resolve_for_parent(p_instance_id uuid)
+    returns void` � parent-side. Sets `resolved_at = now()` on the
+    named pending reminder iff `category =
+    'intake_acknowledgment_pending'`, `subject_type='child'`, and
+    the child links to `auth.uid()` via active
+    `parent_family_links`. No-op silently otherwise. Migration 023's
+    `reminder_instance_resolve` was provider-scoped and would deny
+    the parent � this is the parent-scoped sibling.
+  - `reminder_instance_list_for_parent() returns table(id uuid,
+    subject_id uuid)` � parent-side. Returns the `(id, subject_id)`
+    tuples for the calling parent's pending intake-ack reminders,
+    scoped by the same guard as the resolve RPC. Closes the
+    RLS-blind dead-loop bug: a pre-RPC version of the page used a
+    direct `.from('reminder_instances').select(...)` which RLS
+    denied for parents, leaving `pendingByChild` empty and the
+    resolve loop unreachable.
+
+Dependencies � sequential after migration 023 (PR #15 Half 1
+reminder_instances). Hard dependency on `public.parent_family_links`
+with the `status='active'` value (from PR #12). Verified live in the
+dashboard before merge.
+
+Editor note � large migration with multiple CREATE TABLE / CREATE
+POLICY / CREATE OR REPLACE FUNCTION statements but no long seed
+INSERTs. Pasted as a single file; the web SQL Editor long-statement
+bug (operational note above) did not bite. Three passes of
+amendments landed in-place on 024 across the build (no 025 created):
+the initial PR #16 build, the second-pass UPDATE that added the
+provider->portal trigger plus the first two RPCs, and the third-pass
+UPDATE that added `reminder_instance_list_for_parent` to close the
+dead resolve loop.
+
+Verification � the following five queries run by Seth in the
+Supabase web SQL Editor on **2026-05-29**, all passed before merge:
+
+1. **`children` new columns** � 5 rows returned
+   (`food_provider, immunization_record_url, immunization_status,
+   intake_completed_at, records_last_reviewed_on`).
+2. **`profiles` new columns** � 2 rows returned
+   (`firearms_on_premises, home_built_before_1978`).
+3. **`acknowledgments` RLS policies** � 5 policies returned (parent
+   insert/view + provider insert/update/view).
+4. **Three new RPCs present** � `pg_proc` returned the three function
+   names: `reminder_instance_list_for_parent,
+   reminder_instance_request_intake_ack,
+   reminder_instance_resolve_for_parent`.
+5. **`parent_family_links.status='active'` dependency** � confirmed
+   live (required by the two parent-scoped RPCs).
+
+Post-merge � `feature/pr-16-child-files-scope` merged into `main` at
+commit `ff32f09` via `git merge --no-ff`, pushed at 2026-05-29.
+Vercel production deploy triggered by the push to `main`. No
+rollback executed.
