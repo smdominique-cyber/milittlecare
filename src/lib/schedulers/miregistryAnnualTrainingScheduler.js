@@ -22,8 +22,14 @@
 // Callers pass a service-role-capable client (or a PostgREST-style
 // wrapper) explicitly.
 
-import { todayYMD, yearOfYMD, daysBetweenYMD } from '@/lib/dates'
-import { REMINDER_CATEGORIES } from '@/lib/reminderCategories'
+// Relative paths with explicit .js extensions (not Vite '@/' aliases) so
+// this module bundles correctly inside Vercel Edge Functions. The
+// dispatcher cron `api/cron-dispatch-reminders.js` imports this file,
+// which puts it on the Edge Function bundling path; Vercel's bundler
+// does not resolve Vite path aliases. Vite and vitest both resolve
+// relative paths fine, so test + dev behavior is unchanged.
+import { todayYMD, yearOfYMD, daysBetweenYMD } from '../dates.js'
+import { REMINDER_CATEGORIES } from '../reminderCategories.js'
 
 const CATEGORY = 'miregistry_annual_training'
 
