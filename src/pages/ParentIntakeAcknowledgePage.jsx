@@ -248,17 +248,17 @@ export default function ParentIntakeAcknowledgePage() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="parent-portal" style={{ padding: 24, textAlign: 'center' }}>
-        Loading your child files…
-      </div>
-    )
-  }
-
   // Pending cards: any child the provider has either already started
   // (existing acks) OR explicitly requested portal review for (pending
-  // reminder).
+  // reminder). Must run on every render to satisfy Rules of Hooks; the
+  // `if (loading)` early-return below MUST stay below this hook. A
+  // previous pass placed this useMemo below the early-return, which
+  // produced a different hook count between the first render
+  // (loading=true → early-return, useMemo never reached) and the
+  // post-fetch render (loading=false → useMemo ran), tripping React
+  // error #310 "Rendered more hooks than during the previous render"
+  // in production. Any future early-return must remain below all hook
+  // calls in this component.
   const pending = useMemo(() => {
     const list = children.filter(c =>
       (acksByChild[c.id] || []).length > 0 ||
@@ -270,6 +270,14 @@ export default function ParentIntakeAcknowledgePage() {
       a.id === focusChildId ? -1 : b.id === focusChildId ? 1 : 0
     )
   }, [children, acksByChild, pendingReminders, focusChildId])
+
+  if (loading) {
+    return (
+      <div className="parent-portal" style={{ padding: 24, textAlign: 'center' }}>
+        Loading your child files…
+      </div>
+    )
+  }
 
   return (
     <div className="parent-portal" style={{ padding: 16, maxWidth: 720, margin: '0 auto' }}>

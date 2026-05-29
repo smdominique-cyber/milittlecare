@@ -65,7 +65,9 @@ export default function RemindersSettingsPage() {
         <p style={pageStyles.lede}>
           Compliance reminders are opt-in. Turn on the categories you want,
           pick how far in advance you want the heads-up, and choose where
-          to receive it. Everything below is off by default.
+          to receive it. Most are off by default; a few marked &ldquo;On unless
+          you opt out&rdquo; fire automatically when you take an explicit
+          action that triggers them.
         </p>
       </header>
 
@@ -109,7 +111,16 @@ function EmptyState() {
 }
 
 function CategoryRow({ category, preference, busy, onEnable, onDisable, onUpdate }) {
-  const enabled = preference?.enabled === true
+  // PR #16 follow-up — transactional categories ship with the toggle
+  // visibly ON when no preference row exists (because the dispatcher
+  // fires them by default; the row's only purpose is the explicit
+  // off-switch). Stateful (default) categories keep the PR #15
+  // "enabled only when preference exists and enabled=true" semantics.
+  const isTransactional = category.transactional === true
+  const enabled = preference
+    ? preference.enabled === true
+    : isTransactional   // default visible state for transactional = ON
+
   const leadTimeRaw =
     preference?.lead_time_days != null
       ? preference.lead_time_days
@@ -117,12 +128,16 @@ function CategoryRow({ category, preference, busy, onEnable, onDisable, onUpdate
   const leadTime = LEAD_TIME_OPTIONS.includes(leadTimeRaw)
     ? leadTimeRaw
     : LEAD_TIME_OPTIONS[2]   // 7
-  const channel = preference?.channel || 'in_app'
+  // For transactional categories the dispatcher's "no row" default
+  // channel is email — keep the UI consistent.
+  const channel = preference?.channel || (isTransactional ? 'email' : 'in_app')
 
   const handleToggle = () => {
     if (enabled) onDisable()
     else onEnable()
   }
+
+  const toggleTitle = category.settings_label_override || category.label
 
   return (
     <li style={pageStyles.card(enabled)}>
@@ -134,14 +149,19 @@ function CategoryRow({ category, preference, busy, onEnable, onDisable, onUpdate
             onChange={handleToggle}
             disabled={busy}
             style={{ width: 18, height: 18, margin: 0 }}
-            aria-label={`${category.label} reminders`}
+            aria-label={`${toggleTitle} reminders`}
           />
           <span style={pageStyles.toggleIcon} aria-hidden="true">
             {enabled
               ? <Bell size={18} style={{ color: 'var(--clr-sage-dark)' }} />
               : <BellOff size={18} style={{ color: 'var(--clr-ink-soft)' }} />}
           </span>
-          <span style={pageStyles.toggleTitle}>{category.label}</span>
+          <span style={pageStyles.toggleTitle}>{toggleTitle}</span>
+          {isTransactional && (
+            <span style={pageStyles.transactionalBadge}>
+              On unless you opt out
+            </span>
+          )}
         </label>
       </div>
 
@@ -256,6 +276,17 @@ const pageStyles = {
     fontFamily: 'var(--font-display)',
     fontSize: '1rem',
     color: 'var(--clr-ink)',
+    fontWeight: 500,
+  },
+  transactionalBadge: {
+    fontSize: '0.6875rem',
+    color: 'var(--clr-sage-dark)',
+    background: 'var(--clr-sage-pale, #e6efe7)',
+    border: '1px solid var(--clr-sage, #b8d2bc)',
+    padding: '2px 8px',
+    borderRadius: 12,
+    marginLeft: 8,
+    letterSpacing: '0.02em',
     fontWeight: 500,
   },
   description: {

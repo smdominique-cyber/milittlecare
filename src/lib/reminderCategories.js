@@ -28,6 +28,53 @@
 //     severity_thresholds?: object,         // optional override of the
 //                                            //   default ladder (see
 //                                            //   src/lib/reminderSeverity.js)
+//     transactional?: boolean,              // PR #16 follow-up.
+//                                            //   true  → category is fired by
+//                                            //     an explicit provider action
+//                                            //     (the click is the consent).
+//                                            //     Dispatcher bypasses the
+//                                            //     default-OFF gate: with no
+//                                            //     preference row, it still
+//                                            //     fires; with a preference
+//                                            //     row, `enabled = false`
+//                                            //     still suppresses (the
+//                                            //     provider's explicit off
+//                                            //     switch).
+//                                            //   false / undefined → default
+//                                            //     PR #15 behavior: no
+//                                            //     preference row → skip.
+//                                            //   See CLAUDE.md § Critical
+//                                            //   Domain Knowledge.
+//     recipient_resolver?: string,          // PR #16 follow-up.
+//                                            //   'provider' (default) → email
+//                                            //     to providerProfile.email
+//                                            //     (PR #15 behavior).
+//                                            //   'parent_via_subject_child' →
+//                                            //     resolve via children →
+//                                            //     family_id →
+//                                            //     parent_family_links →
+//                                            //     parent_profiles.email,
+//                                            //     respecting
+//                                            //     acknowledgment_email_opt_in.
+//                                            //     Fans out to every linked
+//                                            //     opted-in parent.
+//     settings_label_override?: string,     // Optional alternative label for
+//                                            //   the Reminders settings UI
+//                                            //   toggle. Used when the
+//                                            //   catalog `label` reads from
+//                                            //   the provider's perspective
+//                                            //   but the settings toggle
+//                                            //   should read from theirs
+//                                            //   ("Email parents when I…").
+//     settings_default_visible_state?:      // PR #16 follow-up.
+//       'on' | 'off',                        //   What the toggle should APPEAR
+//                                            //   as in the UI when no
+//                                            //   preference row exists yet.
+//                                            //   Transactional categories use
+//                                            //   'on' because they fire by
+//                                            //   default; everything else
+//                                            //   uses 'off' (the PR #15
+//                                            //   default).
 //   }
 
 export const REMINDER_CATEGORIES = Object.freeze({
@@ -56,6 +103,26 @@ export const REMINDER_CATEGORIES = Object.freeze({
     default_lead_time_days: 0,
     license_type_gating: ['family_home', 'group_home'],
     subject_type: 'child',
+    // PR #16 follow-up — Design A (transactional category bypasses
+    // default-OFF). The provider's "Send to parent's portal" click in
+    // ChildIntakeModal is the consent. Without this flag, the original
+    // PR #15 dispatcher logic skipped on a missing preference row, so
+    // the click was a silent no-op until the provider also opted in
+    // separately. See docs/16patch.md.
+    transactional: true,
+    // PR #16 follow-up — Issue #4. The recipient of this notification
+    // is the parent (linked to the subject child via family), NOT the
+    // provider. Without this resolver, the PR #15 dispatcher routed
+    // the email to providerProfile.email — confirmed in live testing.
+    recipient_resolver: 'parent_via_subject_child',
+    // The provider sees the toggle as "Email parents when I send
+    // acknowledgment requests" — written from THEIR perspective,
+    // because they're the one configuring it. The base `label` above
+    // is the dashboard banner copy, which reads correctly from the
+    // provider's perspective in that context.
+    settings_label_override:
+      'Email parents when I send acknowledgment requests',
+    settings_default_visible_state: 'on',
   }),
 
   // ── PR #17 — Discipline policy (R 400.1942 + R 400.1906) ───────────
