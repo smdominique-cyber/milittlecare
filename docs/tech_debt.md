@@ -818,3 +818,52 @@ Note for whoever re-enables: the handler is hourly (`0 * * * *`) by design — i
 Implication: hard-deleting a family cascades to all related records (children, guardians, emergency_contacts, etc.). When PR #16 (Child files / Category D) ships and child retention becomes real, families with all-archived-children become a visual and data hygiene problem.
 
 Fix: same pattern as PR #13 — add `archived_at` to families + soft-delete audit. Probably a small standalone PR after PR #16.
+
+## `getChildFilesAuditState` overstates compliance for parent-signed disclosure types (2026-05-29)
+
+**Status:** open. PR #16 is NOT closed pending this. **Must be resolved before PR #22 (Compliance Health Score) consumes these counts.**
+
+**Regulatory finding (R 400.1907 — "child-in-care statement" subitems).** The rule lists the bundle items and assigns each a duty. Five items must be **"signed by the parent"**:
+
+- discipline policy receipt
+- condition-of-child health acknowledgment
+- licensing notebook offered to the parent
+- food provider agreement
+- firearms-on-premises acknowledgment
+
+One item, **lead-paint disclosure (R 400.1907(vi))**, is different — it is the **licensee's duty to "inform"** the parent. Provider attestation alone satisfies that duty; a parent signature is not required for the act itself, only for the record of having been informed.
+
+**Current PR #16 behavior (the lenient miss).** `getChildFilesAuditState` in `src/lib/childFiles.js` counts ANY active row of the required type, regardless of `acknowledged_via`. The `ChildIntakeModal`'s "Send to parent's portal" channel pre-writes the full bundle as `acknowledged_via='provider_override'` at SEND time (see merge `d733a7b` and commit `491ccad`). Result:
+
+- `pending_lead_disclosures_count` → 0 at send. **Correct** per the regulation: lead is inform-only.
+- `pending_firearms_disclosures_count`, and equivalent counts for the other four parent-signed items, → 0 at send. **Overstated.** No parent has signed yet; only the provider has attested.
+
+The audit-state count says "compliant" the moment the provider clicks Send — but for five of the seven items the regulation requires a parent signature that has not yet happened. PR #22's Compliance Health Score, scheduled to consume this helper, would therefore reward providers who triggered the portal flow without waiting for parents to confirm.
+
+**Test that codifies the lenient behavior (will need revisiting).** `src/lib/childFiles.test.js` § "phase A — post-send-to-portal: provider_override rows clear pending counts" asserts `pending_firearms_disclosures_count` is 0 when only `provider_override` rows exist. That assertion is correct for the current code but wrong for the regulation. When the fix lands:
+
+- Lead disclosure: phase-A assertion stays (provider_override clears the count).
+- Firearms + the four other parent-signed types: phase-A assertion flips. Counts should remain positive after provider Send and drop to 0 only after the parent's `parent_portal` ack lands.
+- The phase-B and full-loop assertions in the same file stay correct as written — they already use `parent_portal` rows for the satisfied state.
+
+**Recommended fix shape (when picked up).**
+
+1. In `getChildFilesAuditState`, split the required-type set into two buckets:
+   - **inform-only**: `lead_disclosure`. Satisfied by any active ack (any channel).
+   - **parent-signed**: `firearms_disclosure`, `food_provider_agreement`, `licensing_notebook_offered`, `health_condition`, `discipline_policy_receipt`. Satisfied only when an active ack with `acknowledged_via IN ('parent_portal', 'in_person_paper')` exists for that subject + type.
+2. Update the helper to read `acknowledged_via` on the acks projection (currently only `subject_id, type`).
+3. Add a new audit-state field — e.g. `pending_parent_signatures_count` — that aggregates the parent-signed bucket across types and children. PR #22 likely wants this as a single roll-up alongside the per-type counts.
+4. Flip the `phase A` assertion in `childFiles.test.js` for the parent-signed types; add a new test case asserting the channel filter (provider_override does NOT satisfy, parent_portal does, in_person_paper does).
+5. Update `ChildIntakeModal`'s helper copy under the "Send to parent's portal" channel to reflect the audit-state reality: "Your attestation closes the lead-disclosure record; the remaining items show as still pending until the parent confirms in the portal."
+
+This is a code-only fix. No migration; the schema already has `acknowledged_via` on every row.
+
+**Open regulatory-interpretation question worth confirming with a licensing consultant before PR #22:**
+
+The bucket split above is one defensible reading of R 400.1907 — the rule's verbs differ between (vi) "inform" and the other subitems' "signed by parent or guardian." A consultant should confirm:
+
+- Is `in_person_paper` (provider attestation that a paper signature was taken in person) sufficient as the parent-signed evidence, or does the regulation require a fresh portal/digital signature when one is available? The MILittleCare model treats `in_person_paper` as equivalent to a digital signature; the regulation predates portals and may not distinguish.
+- Should the audit roll-up distinguish "provider attested, awaiting parent" (visible to the provider as a partial-credit state) from "no record at all" (full deficit)? PR #22's scoring math might want a three-state model rather than binary.
+- The `discipline_policy_receipt` and `licensing_notebook_offered` items have "received" / "offered" verbs that arguably contemplate just acknowledgment of receipt rather than active signature. Worth a second read with the consultant.
+
+**Cross-references.** Surfaced during PR #16 follow-up at merge `d733a7b` (2026-05-29). Related: `docs/16patch.md` (PR #16 consolidated follow-up), `src/lib/acknowledgments.js#requiredSubTypesForChild` (the type set), `src/lib/childFiles.js#getChildFilesAuditState` (the helper that needs the channel filter).
