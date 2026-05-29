@@ -28,6 +28,7 @@
 // email sends are skipped with delivery_status='queued'.
 
 import { scheduleMiregistryAnnualTrainingReminders } from '../src/lib/schedulers/miregistryAnnualTrainingScheduler.js'
+import { scheduleChildAnnualReviewReminders } from '../src/lib/schedulers/childAnnualReviewScheduler.js'
 
 export const config = { runtime: 'edge' }
 
@@ -236,12 +237,13 @@ export default async function handler(req) {
   }
 
   try {
-    // 1) Run per-category schedulers (V1: only MiRegistry annual training).
-    //    Future PRs (#18-#21) plug additional schedulers in here.
+    // 1) Run per-category schedulers. Future PRs (#17-#21) plug
+    //    additional schedulers in here.
     const shim = makePostgrestShim()
     const schedStats = await scheduleMiregistryAnnualTrainingReminders(shim)
-    stats.scheduler_inserted = schedStats.instancesInserted
-    stats.scheduler_skipped = schedStats.instancesSkipped
+    const reviewStats = await scheduleChildAnnualReviewReminders(shim)
+    stats.scheduler_inserted = schedStats.instancesInserted + reviewStats.instancesInserted
+    stats.scheduler_skipped = schedStats.instancesSkipped + reviewStats.instancesSkipped
 
     // 2) Pull pending instances ready to fire.
     const nowIso = new Date().toISOString()

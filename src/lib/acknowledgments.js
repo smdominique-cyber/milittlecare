@@ -1,0 +1,310 @@
+// PR #16 — pure helpers for the general acknowledgments substrate.
+//
+// Mirrors `src/lib/parentAcknowledgment.js`'s pattern (PR #12) for the
+// type-dispatched hash + envelope composition + active-row selectors,
+// generalized to the polymorphic `public.acknowledgments` table.
+//
+// Hash choice: FNV-1a 32-bit, same as PR #12 (synchronous, deterministic,
+// browser/Node identical, adequate for honest-edit tamper detection at
+// the application layer).
+
+// -----------------------------------------------------------------------------
+// Acknowledgment-type catalog (the DB stores free-text; this is the
+// authoritative validator and documents the shape per type).
+// -----------------------------------------------------------------------------
+
+export const ACK_TYPES = Object.freeze({
+  // Rule 7 / R 400.1907 child-in-care statement bundle (PR #16).
+  CHILD_IN_CARE_STATEMENT:    'child_in_care_statement',     // envelope
+  LEAD_DISCLOSURE:            'lead_disclosure',             // sub-row, if home pre-1978
+  FIREARMS_DISCLOSURE:        'firearms_disclosure',         // sub-row, always (copy varies)
+  FOOD_PROVIDER_AGREEMENT:    'food_provider_agreement',
+  LICENSING_NOTEBOOK_OFFERED: 'licensing_notebook_offered',
+  INFANT_SAFE_SLEEP:          'infant_safe_sleep',           // sub-row, if child age < 18 months
+  HEALTH_CONDITION:           'health_condition',
+  DISCIPLINE_POLICY_RECEIPT:  'discipline_policy_receipt',   // sub-row + PR #17 standalone
+
+  // Future consumers (PR #17 + PR #20). Listed here so the catalog is
+  // discoverable from one place.
+  STAFF_DISCIPLINE_POLICY_RECEIPT:   'staff_discipline_policy_receipt',
+  MEDICATION_PERMISSION_OTC_BLANKET: 'medication_permission_otc_blanket',
+  MEDICATION_PERMISSION:             'medication_permission',
+})
+
+/**
+ * The list of sub-row types that compose the child_in_care_statement
+ * envelope. The envelope's `snapshot_hash` is a deterministic function
+ * of (the subset of) these sub-row hashes that actually applied to the
+ * child at acknowledgment time.
+ */
+export const CHILD_IN_CARE_SUB_TYPES = Object.freeze([
+  ACK_TYPES.LEAD_DISCLOSURE,
+  ACK_TYPES.FIREARMS_DISCLOSURE,
+  ACK_TYPES.FOOD_PROVIDER_AGREEMENT,
+  ACK_TYPES.LICENSING_NOTEBOOK_OFFERED,
+  ACK_TYPES.INFANT_SAFE_SLEEP,
+  ACK_TYPES.HEALTH_CONDITION,
+  ACK_TYPES.DISCIPLINE_POLICY_RECEIPT,
+])
+
+// -----------------------------------------------------------------------------
+// Canonical payload + hash
+// -----------------------------------------------------------------------------
+
+/**
+ * Build the canonical hashable string for one acknowledgment payload.
+ * Sorts keys so order-of-insertion does not change the hash. Numbers /
+ * booleans / nulls are stringified the way `JSON.stringify` would, but
+ * we walk the object ourselves so we can pin the key order.
+ *
+ * Per-type payload conventions (kept here for one-source-of-truth):
+ *   - lead_disclosure: { homeBuiltBefore1978: boolean, copyVersion: string }
+ *   - firearms_disclosure: { firearmsOnPremises: boolean, copyVersion: string }
+ *   - food_provider_agreement: { foodProvider: 'provider'|'parent'|'both' }
+ *   - licensing_notebook_offered: { copyVersion: string }
+ *   - infant_safe_sleep: { copyVersion: string, childAgeMonths: number }
+ *   - health_condition: { healthSummary: string|null }
+ *   - discipline_policy_receipt: { policyVersion: number|string }
+ *   - child_in_care_statement (envelope): { subTypes: string[], subHashes: string[] }
+ *     (handled by computeEnvelopeHash below — pass the sorted sub-row
+ *     hashes; the helper composes the canonical string.)
+ *
+ * @param {object} payload
+ * @returns {string}
+ */
+export function canonicalForHash(payload) {
+  if (payload === null || payload === undefined) return ''
+  if (typeof payload !== 'object') return String(payload)
+  const keys = Object.keys(payload).sort()
+  const parts = []
+  for (const k of keys) {
+    parts.push(k)
+    parts.push('=')
+    const v = payload[k]
+    if (v === null) parts.push('null')
+    else if (typeof v === 'object') parts.push(canonicalForHash(v))
+    else parts.push(String(v))
+    parts.push('|')
+  }
+  return parts.join('')
+}
+
+/**
+ * FNV-1a 32-bit hash of an arbitrary string. 8 lowercase hex characters.
+ *
+ * @param {string} str
+ * @returns {string}
+ */
+export function fnv1a32Hex(str) {
+  let h = 0x811c9dc5
+  const s = String(str || '')
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16).padStart(8, '0')
+}
+
+/**
+ * Compute the FNV-1a snapshot hash for a single acknowledgment row.
+ *
+ * @param {object} args
+ * @param {string} args.type      One of ACK_TYPES values.
+ * @param {object} [args.payload] Per-type payload (see canonicalForHash docs).
+ * @returns {string}              8-char hex.
+ */
+export function computeAckHash({ type, payload } = {}) {
+  const head = String(type || '') + '#'
+  return fnv1a32Hex(head + canonicalForHash(payload || {}))
+}
+
+/**
+ * Compose the envelope hash for a child_in_care_statement row from the
+ * set of sub-row hashes that applied to the child at acknowledgment
+ * time. Sorts the sub-hashes so the composition is order-independent.
+ *
+ * @param {string[]} subRowHashes
+ * @returns {string}
+ */
+export function computeEnvelopeHash(subRowHashes) {
+  const list = Array.isArray(subRowHashes) ? subRowHashes : []
+  const sorted = list
+    .filter(h => typeof h === 'string' && h.length > 0)
+    .slice()
+    .sort()
+  return fnv1a32Hex('child_in_care_statement#' + sorted.join('+'))
+}
+
+// -----------------------------------------------------------------------------
+// Selectors
+// -----------------------------------------------------------------------------
+
+/**
+ * Find the active (non-archived) acknowledgment row matching the
+ * `(type, subjectType, subjectId)` triple, or null. When `subjectId` is
+ * not provided / null, matches a provider-level acknowledgment.
+ *
+ * @param {object[]} acks
+ * @param {object}   filter   { type, subjectType, subjectId }
+ * @returns {object|null}
+ */
+export function findActiveAck(acks, filter) {
+  if (!filter || !filter.type) return null
+  const list = Array.isArray(acks) ? acks : []
+  const wantType = filter.type
+  const wantSubjectType = filter.subjectType ?? null
+  const wantSubjectId = filter.subjectId ?? null
+  for (const a of list) {
+    if (!a || a.archived_at) continue
+    if (a.type !== wantType) continue
+    if ((a.subject_type ?? null) !== wantSubjectType) continue
+    if ((a.subject_id ?? null) !== wantSubjectId) continue
+    return a
+  }
+  return null
+}
+
+/**
+ * Decide which child-in-care sub-rows actually apply to a particular
+ * child given the provider's premises state and the child's age.
+ *
+ * @param {object} args
+ * @param {object} args.child       children row (date_of_birth used for infant-sleep gate)
+ * @param {object} args.profile     profiles row carrying premises booleans
+ * @param {string} [args.today]     YYYY-MM-DD, defaults to today.
+ * @returns {string[]}              Sub-types that must be acknowledged.
+ */
+export function requiredSubTypesForChild({ child, profile, today }) {
+  const req = []
+  if (!child || !profile) return req
+
+  if (profile.home_built_before_1978 === true) req.push(ACK_TYPES.LEAD_DISCLOSURE)
+  // Firearms disclosure is required regardless of yes/no — the parent
+  // must affirmatively know one way or the other. Copy varies by value.
+  if (profile.firearms_on_premises === true || profile.firearms_on_premises === false) {
+    req.push(ACK_TYPES.FIREARMS_DISCLOSURE)
+  }
+  req.push(ACK_TYPES.FOOD_PROVIDER_AGREEMENT)
+  req.push(ACK_TYPES.LICENSING_NOTEBOOK_OFFERED)
+  req.push(ACK_TYPES.HEALTH_CONDITION)
+  req.push(ACK_TYPES.DISCIPLINE_POLICY_RECEIPT)
+
+  // Infant safe sleep: only for children < 18 months at acknowledgment time.
+  if (child.date_of_birth) {
+    const ageMonths = ageInMonths(child.date_of_birth, today)
+    if (ageMonths != null && ageMonths < 18) {
+      req.push(ACK_TYPES.INFANT_SAFE_SLEEP)
+    }
+  }
+
+  return req
+}
+
+function ageInMonths(dobYmd, todayYmd) {
+  if (!dobYmd) return null
+  const today = todayYmd || todayLocalYMD()
+  const [dy, dm, dd] = String(dobYmd).split('-').map(Number)
+  const [ty, tm, td] = String(today).split('-').map(Number)
+  if (!Number.isFinite(dy) || !Number.isFinite(ty)) return null
+  let months = (ty - dy) * 12 + (tm - dm)
+  if (td < dd) months -= 1
+  return Math.max(0, months)
+}
+
+function todayLocalYMD() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+// -----------------------------------------------------------------------------
+// Completeness
+// -----------------------------------------------------------------------------
+
+/**
+ * Per-child completeness summary used by the Children-tab badge and the
+ * intake form.
+ *
+ * Drift detection: the envelope row's stored `snapshot_hash` must equal
+ * `computeEnvelopeHash(currentSubRowHashes)`. If it doesn't (a sub-row
+ * was added because the provider toggled `home_built_before_1978` after
+ * the initial intake, for example), the envelope is stale and the
+ * child reverts to "intake incomplete" until re-acknowledged.
+ *
+ * @param {object}   args
+ * @param {object}   args.child
+ * @param {object}   args.profile
+ * @param {object[]} args.acks                 acks for subject_type='child', subject_id=child.id
+ * @param {object}   [args.subRowPayloads]     map of subType -> payload (for current-hash computation)
+ * @param {string}   [args.today]
+ * @returns {object}
+ */
+export function getChildFileCompleteness({ child, profile, acks, subRowPayloads, today }) {
+  const safe = Array.isArray(acks) ? acks : []
+  const required = requiredSubTypesForChild({ child, profile, today })
+
+  const presentByType = new Map()
+  for (const a of safe) {
+    if (!a || a.archived_at) continue
+    if (a.subject_type !== 'child') continue
+    if (a.subject_id !== (child && child.id)) continue
+    presentByType.set(a.type, a)
+  }
+
+  const acknowledgmentsPresent = []
+  const acknowledgmentsMissing = []
+  for (const t of required) {
+    if (presentByType.has(t)) acknowledgmentsPresent.push(t)
+    else acknowledgmentsMissing.push(t)
+  }
+
+  const envelope = presentByType.get(ACK_TYPES.CHILD_IN_CARE_STATEMENT) || null
+
+  // Drift: re-compose the envelope hash from the *current* required
+  // sub-rows' hashes (if payloads are provided). If the stored envelope
+  // hash differs, the bundle is stale.
+  let envelopeHashCurrent = null
+  let envelopeHashDrift = false
+  if (subRowPayloads) {
+    const currentSubHashes = required
+      .filter(t => subRowPayloads[t] !== undefined)
+      .map(t => computeAckHash({ type: t, payload: subRowPayloads[t] }))
+    envelopeHashCurrent = computeEnvelopeHash(currentSubHashes)
+    if (envelope && envelope.snapshot_hash) {
+      envelopeHashDrift = envelope.snapshot_hash !== envelopeHashCurrent
+    }
+  }
+
+  const intakeComplete =
+    envelope != null
+    && acknowledgmentsMissing.length === 0
+    && !envelopeHashDrift
+
+  // Annual review status — soft; the badge + reminder drive remediation
+  // but nothing in this PR hard-enforces.
+  const recordsLastReviewedOn = child ? child.records_last_reviewed_on || null : null
+  const recordsReviewDue = isAnnualReviewDue(recordsLastReviewedOn, today)
+
+  return {
+    acknowledgmentsPresent,
+    acknowledgmentsMissing,
+    requiredSubTypes: required,
+    envelopePresent: envelope != null,
+    envelopeHashDrift,
+    envelopeHashCurrent,
+    immunizationStatus: child ? (child.immunization_status || null) : null,
+    recordsLastReviewedOn,
+    recordsReviewDue,
+    intakeComplete,
+  }
+}
+
+/**
+ * Annual records review is due (R 400.1907) when the prior review
+ * happened more than ~12 months ago. We use the same calendar-month
+ * math as `ageInMonths`. Never-reviewed children return true.
+ */
+export function isAnnualReviewDue(lastReviewedOn, today) {
+  if (!lastReviewedOn) return true
+  const months = ageInMonths(lastReviewedOn, today)
+  return months == null ? true : months >= 12
+}

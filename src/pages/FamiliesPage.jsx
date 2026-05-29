@@ -11,6 +11,7 @@ import { getNextInvoicePeriod, describeFrequency, computeInvoiceAmount } from '@
 import { partitionChildren } from '@/lib/children'
 import FundingSourceList from '@/components/funding/FundingSourceList'
 import FundingSourceForm from '@/components/funding/FundingSourceForm'
+import ChildIntakeModal from '@/components/families/ChildIntakeModal'
 import MiRegistryWarningBanner from '@/components/miregistry/MiRegistryWarningBanner'
 import '@/styles/families.css'
 
@@ -87,12 +88,17 @@ export default function FamiliesPage() {
   const [statusFilter, setStatusFilter] = useState('active')
   const [selectedFamily, setSelectedFamily] = useState(null)
   const [creating, setCreating] = useState(false)
+  // PR #16: load licensee profile so the Children tab can gate the
+  // intake-form surface on license_type and pass home_built_before_1978 /
+  // firearms_on_premises into the bundle-write helper. Select EVERY column
+  // downstream code reads (PR #15 lesson).
+  const [licenseeProfile, setLicenseeProfile] = useState(null)
 
   useEffect(() => { if (licenseeId) loadAll() }, [licenseeId])
 
   async function loadAll() {
     setLoading(true)
-    const [f, c, g, e] = await Promise.all([
+    const [f, c, g, e, p] = await Promise.all([
       supabase.from('families').select('*').eq('user_id', licenseeId).order('family_name'),
       // Management surface: load ALL children incl. archived (PR #13) so the
       // Children tab's "show archived" view works. Each render filters: the
@@ -101,11 +107,13 @@ export default function FamiliesPage() {
       supabase.from('children').select('*').eq('user_id', licenseeId),
       supabase.from('guardians').select('*').eq('user_id', licenseeId).is('archived_at', null),
       supabase.from('emergency_contacts').select('*').eq('user_id', licenseeId),
+      supabase.from('profiles').select('id, license_type, home_built_before_1978, firearms_on_premises').eq('id', licenseeId).maybeSingle(),
     ])
     setFamilies(f.data || [])
     setChildren(c.data || [])
     setGuardians(g.data || [])
     setEmergency(e.data || [])
+    setLicenseeProfile(p.data || null)
     setLoading(false)
   }
 
@@ -284,6 +292,7 @@ export default function FamiliesPage() {
         <FamilyDetailModal
           userId={user.id}
           family={selectedFamily}
+          licenseeProfile={licenseeProfile}
           children={children.filter(c => c.family_id === selectedFamily?.id)}
           guardians={guardians.filter(g => g.family_id === selectedFamily?.id)}
           emergencyContacts={emergency.filter(e => e.family_id === selectedFamily?.id)}
@@ -296,7 +305,7 @@ export default function FamiliesPage() {
 }
 
 // ════════════════════════════════════════════════════════════
-function FamilyDetailModal({ userId, family, children: initialChildren, guardians: initialGuardians, emergencyContacts: initialEC, onClose, onChange }) {
+function FamilyDetailModal({ userId, family, licenseeProfile, children: initialChildren, guardians: initialGuardians, emergencyContacts: initialEC, onClose, onChange }) {
   const isNew = !family
   const [tab, setTab] = useState('overview')
   const [form, setForm] = useState({
@@ -415,7 +424,14 @@ function FamilyDetailModal({ userId, family, children: initialChildren, guardian
             <InvitationsTab userId={userId} family={family} guardians={initialGuardians} onChange={onChange} />
           )}
           {!isNew && tab === 'children' && (
-            <ChildrenTab userId={userId} familyId={family.id} children={initialChildren} onChange={onChange} />
+            <ChildrenTab
+              userId={userId}
+              familyId={family.id}
+              children={initialChildren}
+              licenseeProfile={licenseeProfile}
+              primaryGuardianName={primaryGuardianName(initialGuardians)}
+              onChange={onChange}
+            />
           )}
           {!isNew && tab === 'funding' && (
             <FundingTab
@@ -751,8 +767,24 @@ function FundingTab({ family, childrenList, onChange }) {
   )
 }
 
-function ChildrenTab({ userId, familyId, children, onChange }) {
+// Helper for the FamilyDetailModal: format the primary-guardian's name for
+// the intake form's parent_label default (PR #16).
+function primaryGuardianName(guardians) {
+  const list = Array.isArray(guardians) ? guardians : []
+  const primary = list.find(g => g && g.is_primary) || list[0]
+  if (!primary) return ''
+  return [primary.first_name, primary.last_name].filter(Boolean).join(' ').trim()
+}
+
+function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuardianName: primaryGuardian, onChange }) {
   const [adding, setAdding] = useState(false)
+  // PR #16: intake-form modal target. null when closed.
+  const [intakeTarget, setIntakeTarget] = useState(null)
+  // Licensed homes (family_home / group_home) see the Rule 7 intake surface.
+  // LEPs see the legacy 5-field form only.
+  const isLicensed =
+    licenseeProfile?.license_type === 'family_home' ||
+    licenseeProfile?.license_type === 'group_home'
   const [editing, setEditing] = useState(null)
   const [showArchived, setShowArchived] = useState(false)
   const [busyId, setBusyId] = useState(null)
@@ -830,6 +862,20 @@ function ChildrenTab({ userId, familyId, children, onChange }) {
               </div>
             </div>
             <div className="person-actions">
+              {isLicensed && (
+                <button
+                  className="icon-btn"
+                  title={child.intake_completed_at ? 'Re-record intake' : 'Record intake (Rule 7)'}
+                  onClick={() => setIntakeTarget(child)}
+                  style={{
+                    color: child.intake_completed_at ? 'var(--clr-sage-dark)' : 'var(--clr-warn-ink, #8a6a1a)',
+                  }}
+                >
+                  {child.intake_completed_at
+                    ? <span style={{ fontSize: 12, fontWeight: 600 }}>Intake ✓</span>
+                    : <span style={{ fontSize: 12, fontWeight: 600 }}>Intake</span>}
+                </button>
+              )}
               <button className="icon-btn" title="Edit" onClick={() => setEditing(child.id)}><Pencil /></button>
               <button
                 className="icon-btn"
@@ -884,6 +930,17 @@ function ChildrenTab({ userId, familyId, children, onChange }) {
           </div>
         </div>
       ))}
+
+      {intakeTarget && isLicensed && licenseeProfile && (
+        <ChildIntakeModal
+          userId={userId}
+          child={intakeTarget}
+          profile={licenseeProfile}
+          primaryGuardianName={primaryGuardian}
+          onClose={() => setIntakeTarget(null)}
+          onSaved={async () => { setIntakeTarget(null); await onChange() }}
+        />
+      )}
     </div>
   )
 }

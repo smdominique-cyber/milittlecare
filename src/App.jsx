@@ -41,6 +41,7 @@ import ParentMyFamilyPage from '@/pages/ParentMyFamilyPage'
 import ParentMessagesPage from '@/pages/ParentMessagesPage'
 import ParentMessageThreadPage from '@/pages/ParentMessageThreadPage'
 import ParentAcknowledgePage from '@/pages/ParentAcknowledgePage'
+import ParentIntakeAcknowledgePage from '@/pages/ParentIntakeAcknowledgePage'
 import MessagesPage from '@/pages/MessagesPage'
 import MessageThreadPage from '@/pages/MessageThreadPage'
 import {
@@ -74,6 +75,7 @@ export default function App() {
                 <Route path="/parent/messages" element={<ParentMessagesPage />} />
                 <Route path="/parent/messages/:childId" element={<ParentMessageThreadPage />} />
                 <Route path="/parent/acknowledge" element={<ParentAcknowledgePage />} />
+                <Route path="/parent/intake-acknowledge" element={<ParentIntakeAcknowledgePage />} />
 
                 {/* Staff invitation accept */}
                 <Route path="/staff-invite/:token" element={<StaffInviteAcceptPage />} />
