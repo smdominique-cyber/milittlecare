@@ -30,10 +30,12 @@ import {
   computeAckHash,
   computeEnvelopeHash,
 } from '@/lib/acknowledgments'
-import {
-  listPendingForParent,
-  resolvePendingForChild,
-} from '@/lib/parentIntakeReminders'
+// PR #16 follow-up (parent-confirm bug, 2026-05-29): `listPendingForParent`
+// is still used to populate the pending-card UI; `resolvePendingForChild`
+// is GONE because intake_confirm_for_parent (migration 025) now resolves
+// the reminder inline as part of the same atomic transaction that writes
+// the parent_portal acks.
+import { listPendingForParent } from '@/lib/parentIntakeReminders'
 import '@/styles/parent.css'
 
 const SUB_TYPE_LABEL = Object.freeze({
@@ -173,93 +175,56 @@ export default function ParentIntakeAcknowledgePage() {
       const existing = acksByChild[child.id] || []
       const subRows = existing.filter(a => a.type !== ACK_TYPES.CHILD_IN_CARE_STATEMENT)
 
-      // PR #16 follow-up (parent-confirm bug, 2026-05-29). The earlier
-      // implementation derived providerId only from existing[0]?.provider_id
-      // — but the "Send to parent's portal" channel writes a
-      // reminder_instances row and NO acknowledgments rows. Parents arriving
-      // through that channel therefore had existing = [], providerId = null,
-      // and the confirm handler threw "No provider on file for this child"
-      // before any RPC or insert fired. children.user_id is the canonical
-      // provider id; it is on the same row the parent already reads, so RLS
-      // is not the problem here. Prefer it; keep the acks-derived value as a
-      // defensive fallback for any legacy row that lacks user_id.
-      const providerId = child.user_id || (existing[0] ? existing[0].provider_id : null)
-      if (!providerId) throw new Error('No provider on file for this child.')
-
-      // Archive every existing active row for the child.
-      const archiveIds = existing.map(a => a.id)
-      if (archiveIds.length > 0) {
-        const { error: archiveErr } = await supabase
-          .from('acknowledgments')
-          .update({ archived_at: new Date().toISOString() })
-          .in('id', archiveIds)
-        if (archiveErr) throw archiveErr
-      }
-
-      // Write parent_portal rows for the same sub-types. We do not have
-      // the provider's premises payload from the parent side, so each
-      // sub-row's snapshot_hash is computed from { type, parentConfirmedAt }
-      // — a minimal but deterministic representation. The envelope hash
-      // is the composition of the sub-row hashes.
-      //
-      // When existing acks are empty (the portal-trigger normal state),
-      // subRows is empty; we still write the envelope row so the audit
-      // trail records that the parent confirmed the intake bundle on
-      // this date. computeEnvelopeHash([]) is deterministic. The
-      // per-disclosure sub-rows would normally have been pre-written by
-      // the provider via the in_person_paper or provider_override
-      // channels; the portal-trigger flow not pre-writing sub-rows is a
-      // separate scope question I'm flagging in the halt — for now the
-      // envelope-only confirm closes the loop without inventing fake
-      // sub-row data on the parent's behalf.
+      // PR #16 follow-up (parent-confirm bug, 2026-05-29). Build the
+      // bundle the parent is confirming. The RPC overrides every
+      // security-critical field server-side — provider_id (from
+      // children.user_id), acknowledged_via='parent_portal',
+      // acknowledged_by_user_id=auth.uid(), acknowledged_at=now(),
+      // subject_type/subject_id — so the parent's JS contributes
+      // ONLY the bundle shape (`type`, `snapshot_hash`,
+      // `snapshot_version` per row). Anything else included here is
+      // ignored by the RPC.
       const parentTimestamp = new Date().toISOString()
       const subPayloads = subRows.map(r => ({ type: r.type, parentConfirmedAt: parentTimestamp }))
       const subHashes = subPayloads.map(p => computeAckHash({ type: p.type, payload: p }))
       const envelopeHash = computeEnvelopeHash(subHashes)
 
-      const sharedFields = {
-        provider_id: providerId,
-        subject_type: 'child',
-        subject_id: child.id,
-        acknowledged_via: 'parent_portal',
-        acknowledged_by_user_id: user.id,
-        provider_override_reason: null,
-      }
-
-      const newRows = [
+      const rowsForRpc = [
         {
-          ...sharedFields,
           type: ACK_TYPES.CHILD_IN_CARE_STATEMENT,
           snapshot_hash: envelopeHash,
           snapshot_version: null,
         },
         ...subRows.map((r, i) => ({
-          ...sharedFields,
           type: r.type,
           snapshot_hash: subHashes[i],
           snapshot_version: r.snapshot_version || null,
         })),
       ]
 
-      const { error: insertErr } = await supabase
-        .from('acknowledgments')
-        .insert(newRows)
-      if (insertErr) throw insertErr
-
-      // PR #16 third pass: resolve every pending
-      // intake_acknowledgment_pending reminder for this child via the
-      // parent-scoped resolve RPC (wrapped in
-      // src/lib/parentIntakeReminders.js). Pre-pass shipped this loop
-      // but its source list was empty under RLS, so it never ran.
-      // Failures here are non-fatal (the acks already landed) but are
-      // surfaced via the helper's `failures` array so a dead loop
-      // would still produce a console.warn rather than hide silently.
-      const { failures } = await resolvePendingForChild(
-        supabase, pendingReminders, child.id,
+      // ── The single atomic call ─────────────────────────────────
+      //
+      // intake_confirm_for_parent (migration 025) is a SECURITY
+      // DEFINER RPC that does archive + insert + resolve in one
+      // transaction. The pre-fix JS issued the archive UPDATE and the
+      // parent_portal INSERT as two separate HTTP requests. The
+      // archive ran under the parent's session and was silently
+      // filtered to zero rows by RLS — the only UPDATE policy on
+      // acknowledgments is provider-scoped (`provider_id =
+      // auth.uid()`), and the parent isn't the provider. The INSERT
+      // then collided with the still-active provider_override rows on
+      // the `acknowledgments_active_unique` partial index. See
+      // migration 025's header for the root-cause writeup.
+      //
+      // The RPC also resolves any pending
+      // intake_acknowledgment_pending reminder for this child inline,
+      // so we no longer need the separate resolvePendingForChild call
+      // that confirmChild used to make.
+      const { error: rpcErr } = await supabase.rpc(
+        'intake_confirm_for_parent',
+        { p_child_id: child.id, p_rows: rowsForRpc },
       )
-      for (const f of failures) {
-        console.warn('reminder_instance_resolve_for_parent failed', f)
-      }
+      if (rpcErr) throw rpcErr
 
       // Optimistic: clear this child's acks + pending reminders so the
       // card disappears.
