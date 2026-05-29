@@ -164,16 +164,63 @@ describe('getChildFilesAuditState', () => {
     expect(out.pending_firearms_disclosures_count).toBe(1)
   })
 
-  it('drops the firearms pending count once a firearms_disclosure ack is recorded', async () => {
+  it('drops the firearms pending count once a parent-signed firearms_disclosure ack is recorded (parent_portal)', async () => {
+    // PR #16 follow-up (channel-aware audit, 2026-05-29). Firearms is
+    // a parent-signed item per R 400.1907; satisfied only by
+    // parent_portal or in_person_paper.
     mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
     mockState.children = [
       { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
     ]
     mockState.acks = [
-      { subject_id: 'k1', type: 'firearms_disclosure' },
+      { subject_id: 'k1', type: 'firearms_disclosure', acknowledged_via: 'parent_portal' },
     ]
     const out = await getChildFilesAuditState('u1')
     expect(out.pending_firearms_disclosures_count).toBe(0)
+  })
+
+  it('drops the firearms pending count under in_person_paper too (paper signature is the parent signature)', async () => {
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'firearms_disclosure', acknowledged_via: 'in_person_paper' },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    expect(out.pending_firearms_disclosures_count).toBe(0)
+  })
+
+  it('does NOT drop firearms pending count under provider_override alone (parent has not signed yet)', async () => {
+    // The regulatory-interpretation call documented in childFiles.js:
+    // provider_override is the licensee's attestation, not the parent's
+    // signature. R 400.1907's plain-text "signed by the parent" is not
+    // satisfied by it. To revisit: see the top-of-file note in
+    // src/lib/childFiles.js.
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'firearms_disclosure', acknowledged_via: 'provider_override' },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    expect(out.pending_firearms_disclosures_count).toBe(1)
+  })
+
+  it('drops the lead pending count under provider_override (lead is inform-only — channel does not matter)', async () => {
+    // Lead disclosure is R 400.1907(1)(b)(vi) — "the licensee shall
+    // inform the parent." The act of informing satisfies the rule;
+    // provider_override is exactly that act recorded.
+    mockState.profile = { home_built_before_1978: true, firearms_on_premises: false }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'lead_disclosure', acknowledged_via: 'provider_override' },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    expect(out.pending_lead_disclosures_count).toBe(0)
   })
 
   it('per-child independence: one child acks lead, the other does not', async () => {
@@ -224,37 +271,65 @@ describe('getChildFilesAuditState', () => {
 
   // ─── 16patch follow-up: compliance-meaningful confirm loop ──
   //
-  // The "Send to parent's portal" channel now pre-writes provider-
-  // attested sub-rows so the parent's confirm produces concrete
-  // parent_portal rows (the loop is compliance-meaningful, not
-  // mechanically closed). These cases pin the audit-state behavior
-  // through both phases:
-  //   - Phase A (post-send, pre-confirm): provider_override sub-rows
-  //     are active. getChildFilesAuditState counts them — counts drop
-  //     at SEND time.
-  //   - Phase B (post-parent-confirm): provider_override rows are
-  //     archived; parent_portal rows are active. Counts STAY at zero.
-  // The audit-state helper does not filter by channel — both phases
-  // see active rows of the required type, so pending = 0 in both.
-  // This is exactly the acceptance criterion the PR #22 score relies on.
+  // The "Send to parent's portal" channel now pre-writes the bundle as
+  // provider_override sub-rows; the parent's portal confirm archives
+  // them and re-stamps the bundle as parent_portal. Per R 400.1907
+  // (and per the audit-semantic update of 2026-05-29), the audit-state
+  // helper now applies channel-aware satisfaction:
+  //   - Lead is inform-only — any active ack satisfies, including
+  //     provider_override (phase A clears lead's count).
+  //   - Firearms (and the other four parent-signed types) are
+  //     satisfied only by parent_portal or in_person_paper —
+  //     provider_override alone does NOT satisfy them (phase A keeps
+  //     the firearms count pending; phase B clears it once the parent
+  //     confirms).
+  // Phase A and phase B together prove the channel transition is the
+  // compliance signal — not the mere presence of an ack row.
 
-  it('phase A — post-send-to-portal: provider_override rows clear pending counts', async () => {
+  it('phase A — post-send-to-portal: provider_override clears LEAD (inform-only) but firearms STAYS PENDING (parent-signed)', async () => {
     mockState.profile = { home_built_before_1978: true, firearms_on_premises: true }
     mockState.children = [
       { id: 'k1', intake_completed_at: '2026-05-29T12:00:00Z', records_last_reviewed_on: '2026-05-29', date_of_birth: '2024-01-01' },
     ]
-    // Phase A: only provider_override rows exist (the new
-    // handleSendToPortal bundle). The mock returns the ack subject+type
-    // tuples the helper consumes; channel is not in the projection
-    // because the helper does not filter by it.
+    // Provider has clicked Send-to-Portal: the bundle is fully written
+    // as provider_override; the parent has not confirmed yet.
     mockState.acks = [
-      { subject_id: 'k1', type: 'child_in_care_statement' },
-      { subject_id: 'k1', type: 'lead_disclosure' },
-      { subject_id: 'k1', type: 'firearms_disclosure' },
-      { subject_id: 'k1', type: 'food_provider_agreement' },
-      { subject_id: 'k1', type: 'licensing_notebook_offered' },
-      { subject_id: 'k1', type: 'health_condition' },
-      { subject_id: 'k1', type: 'discipline_policy_receipt' },
+      { subject_id: 'k1', type: 'child_in_care_statement', acknowledged_via: 'provider_override' },
+      { subject_id: 'k1', type: 'lead_disclosure', acknowledged_via: 'provider_override' },
+      { subject_id: 'k1', type: 'firearms_disclosure', acknowledged_via: 'provider_override' },
+      { subject_id: 'k1', type: 'food_provider_agreement', acknowledged_via: 'provider_override' },
+      { subject_id: 'k1', type: 'licensing_notebook_offered', acknowledged_via: 'provider_override' },
+      { subject_id: 'k1', type: 'health_condition', acknowledged_via: 'provider_override' },
+      { subject_id: 'k1', type: 'discipline_policy_receipt', acknowledged_via: 'provider_override' },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    // Lead (inform-only): provider_override IS the licensee's act of
+    // informing per R 400.1907(1)(b)(vi). Cleared.
+    expect(out.pending_lead_disclosures_count).toBe(0)
+    // Firearms (parent-signed): provider_override is the provider's
+    // attestation, not the parent's signature. STAYS pending until the
+    // parent confirms via portal (or signs in person on paper).
+    expect(out.pending_firearms_disclosures_count).toBe(1)
+    expect(out.intake_complete_count).toBe(1)
+  })
+
+  it('phase B — post-parent-confirm: parent_portal rows clear BOTH lead and firearms', async () => {
+    // After the parent confirms via the portal, the provider_override
+    // rows are archived (RLS soft-delete) and parent_portal rows are
+    // active. The channel transition is the audit story: provider
+    // attested, parent then confirmed.
+    mockState.profile = { home_built_before_1978: true, firearms_on_premises: true }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: '2026-05-29T12:00:00Z', records_last_reviewed_on: '2026-05-29', date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'child_in_care_statement', acknowledged_via: 'parent_portal' },
+      { subject_id: 'k1', type: 'lead_disclosure', acknowledged_via: 'parent_portal' },
+      { subject_id: 'k1', type: 'firearms_disclosure', acknowledged_via: 'parent_portal' },
+      { subject_id: 'k1', type: 'food_provider_agreement', acknowledged_via: 'parent_portal' },
+      { subject_id: 'k1', type: 'licensing_notebook_offered', acknowledged_via: 'parent_portal' },
+      { subject_id: 'k1', type: 'health_condition', acknowledged_via: 'parent_portal' },
+      { subject_id: 'k1', type: 'discipline_policy_receipt', acknowledged_via: 'parent_portal' },
     ]
     const out = await getChildFilesAuditState('u1')
     expect(out.pending_lead_disclosures_count).toBe(0)
@@ -262,53 +337,38 @@ describe('getChildFilesAuditState', () => {
     expect(out.intake_complete_count).toBe(1)
   })
 
-  it('phase B — post-parent-confirm: parent_portal rows keep counts at zero (no bounce-back)', async () => {
-    // Phase B: provider_override rows have been archived; the helper
-    // queries with archived_at IS NULL so it sees the parent_portal
-    // replacements. Subject+type tuples are the same set; what changed
-    // is the channel (provider_override → parent_portal). From the
-    // helper's standpoint active-row presence is what matters. Counts
-    // remain at zero — the channel transition does not cause a
-    // re-pending bounce.
-    mockState.profile = { home_built_before_1978: true, firearms_on_premises: true }
-    mockState.children = [
-      { id: 'k1', intake_completed_at: '2026-05-29T12:00:00Z', records_last_reviewed_on: '2026-05-29', date_of_birth: '2024-01-01' },
-    ]
-    mockState.acks = [
-      { subject_id: 'k1', type: 'child_in_care_statement' },
-      { subject_id: 'k1', type: 'lead_disclosure' },
-      { subject_id: 'k1', type: 'firearms_disclosure' },
-      { subject_id: 'k1', type: 'food_provider_agreement' },
-      { subject_id: 'k1', type: 'licensing_notebook_offered' },
-      { subject_id: 'k1', type: 'health_condition' },
-      { subject_id: 'k1', type: 'discipline_policy_receipt' },
-    ]
-    const out = await getChildFilesAuditState('u1')
-    expect(out.pending_lead_disclosures_count).toBe(0)
-    expect(out.pending_firearms_disclosures_count).toBe(0)
-    expect(out.intake_complete_count).toBe(1)
-  })
-
-  it('full loop, two children: one in phase A, one in phase B — neither pending', async () => {
+  it('mixed two children: one phase A (firearms pending), one phase B (firearms cleared) — lead cleared for both', async () => {
     mockState.profile = { home_built_before_1978: true, firearms_on_premises: true }
     mockState.children = [
       { id: 'k1', intake_completed_at: '2026-05-29T12:00:00Z', records_last_reviewed_on: '2026-05-29', date_of_birth: '2024-01-01' },
       { id: 'k2', intake_completed_at: '2026-05-29T13:00:00Z', records_last_reviewed_on: '2026-05-29', date_of_birth: '2023-06-15' },
     ]
-    // Mixed channels across two children; helper does not care which
-    // channel produced the active row, only that it exists.
     mockState.acks = [
-      // k1 — provider_override snapshot
-      { subject_id: 'k1', type: 'lead_disclosure' },
-      { subject_id: 'k1', type: 'firearms_disclosure' },
-      // k2 — parent_portal snapshot
-      { subject_id: 'k2', type: 'lead_disclosure' },
-      { subject_id: 'k2', type: 'firearms_disclosure' },
+      // k1 — phase A: provider_override
+      { subject_id: 'k1', type: 'lead_disclosure', acknowledged_via: 'provider_override' },
+      { subject_id: 'k1', type: 'firearms_disclosure', acknowledged_via: 'provider_override' },
+      // k2 — phase B: parent_portal
+      { subject_id: 'k2', type: 'lead_disclosure', acknowledged_via: 'parent_portal' },
+      { subject_id: 'k2', type: 'firearms_disclosure', acknowledged_via: 'parent_portal' },
     ]
     const out = await getChildFilesAuditState('u1')
+    // Lead inform-only: both cleared.
     expect(out.pending_lead_disclosures_count).toBe(0)
-    expect(out.pending_firearms_disclosures_count).toBe(0)
+    // Firearms parent-signed: k1 still pending, k2 cleared.
+    expect(out.pending_firearms_disclosures_count).toBe(1)
     expect(out.intake_complete_count).toBe(2)
+  })
+
+  it('in_person_paper satisfies firearms (real paper signature from parent)', async () => {
+    mockState.profile = { home_built_before_1978: true, firearms_on_premises: true }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: '2026-05-29T12:00:00Z', records_last_reviewed_on: '2026-05-29', date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'firearms_disclosure', acknowledged_via: 'in_person_paper' },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    expect(out.pending_firearms_disclosures_count).toBe(0)
   })
 
   it('returns children-only zeros when the acknowledgments table is unavailable (migration not applied)', async () => {

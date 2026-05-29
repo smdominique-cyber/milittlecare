@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   ACK_TYPES,
   CHILD_IN_CARE_SUB_TYPES,
+  arePremisesAnsweredForIntake,
   canonicalForHash,
   fnv1a32Hex,
   computeAckHash,
@@ -292,6 +293,103 @@ describe('isAnnualReviewDue', () => {
   it('true at or beyond 12 months', () => {
     expect(isAnnualReviewDue('2025-05-29', '2026-05-29')).toBe(true)
     expect(isAnnualReviewDue('2024-12-31', '2026-05-29')).toBe(true)
+  })
+})
+
+// ─── arePremisesAnsweredForIntake (the gate helper) ────────────────────
+
+describe('arePremisesAnsweredForIntake', () => {
+  it('ready=true when both booleans are answered (true/true)', () => {
+    const out = arePremisesAnsweredForIntake({
+      home_built_before_1978: true, firearms_on_premises: true,
+    })
+    expect(out.ready).toBe(true)
+    expect(out.missing).toEqual([])
+  })
+
+  it('ready=true when both booleans are answered false/false (false IS an answer)', () => {
+    const out = arePremisesAnsweredForIntake({
+      home_built_before_1978: false, firearms_on_premises: false,
+    })
+    expect(out.ready).toBe(true)
+    expect(out.missing).toEqual([])
+  })
+
+  it('ready=false when home_built_before_1978 is null', () => {
+    const out = arePremisesAnsweredForIntake({
+      home_built_before_1978: null, firearms_on_premises: true,
+    })
+    expect(out.ready).toBe(false)
+    expect(out.missing).toEqual(['home_built_before_1978'])
+  })
+
+  it('ready=false when firearms_on_premises is null', () => {
+    const out = arePremisesAnsweredForIntake({
+      home_built_before_1978: false, firearms_on_premises: null,
+    })
+    expect(out.ready).toBe(false)
+    expect(out.missing).toEqual(['firearms_on_premises'])
+  })
+
+  it('ready=false naming BOTH when both are null', () => {
+    const out = arePremisesAnsweredForIntake({
+      home_built_before_1978: null, firearms_on_premises: null,
+    })
+    expect(out.ready).toBe(false)
+    expect(out.missing).toEqual(['home_built_before_1978', 'firearms_on_premises'])
+  })
+
+  it('ready=false naming BOTH when the profile is null', () => {
+    const out = arePremisesAnsweredForIntake(null)
+    expect(out.ready).toBe(false)
+    expect(out.missing).toEqual(['home_built_before_1978', 'firearms_on_premises'])
+  })
+
+  it('treats undefined as missing (matches null semantics)', () => {
+    const out = arePremisesAnsweredForIntake({
+      home_built_before_1978: undefined, firearms_on_premises: undefined,
+    })
+    expect(out.ready).toBe(false)
+    expect(out.missing).toEqual(['home_built_before_1978', 'firearms_on_premises'])
+  })
+})
+
+// ─── requiredSubTypesForChild + firearms truth-table ───────────────────
+//
+// The premises gate makes both booleans non-null at write time; this
+// pins the consequence — firearms_disclosure must appear in the required
+// set for BOTH true AND false answers (only the snapshot payload's
+// `firearmsOnPremises` boolean differs). The lead disclosure remains
+// gated on home_built_before_1978 = true.
+
+describe('requiredSubTypesForChild — firearms behavior at the gate', () => {
+  const child = { id: 'c1', date_of_birth: '2024-01-01' }
+
+  it('firearms_disclosure is REQUIRED when firearms_on_premises = true', () => {
+    const out = requiredSubTypesForChild({
+      child,
+      profile: { home_built_before_1978: false, firearms_on_premises: true },
+      today: '2026-05-29',
+    })
+    expect(out).toContain(ACK_TYPES.FIREARMS_DISCLOSURE)
+  })
+
+  it('firearms_disclosure is REQUIRED when firearms_on_premises = false (copy varies; disclosure still required)', () => {
+    const out = requiredSubTypesForChild({
+      child,
+      profile: { home_built_before_1978: false, firearms_on_premises: false },
+      today: '2026-05-29',
+    })
+    expect(out).toContain(ACK_TYPES.FIREARMS_DISCLOSURE)
+  })
+
+  it('lead_disclosure REQUIRED only when home_built_before_1978 = true (truth table)', () => {
+    const profileTrue = { home_built_before_1978: true, firearms_on_premises: true }
+    const profileFalse = { home_built_before_1978: false, firearms_on_premises: true }
+    expect(requiredSubTypesForChild({ child, profile: profileTrue }))
+      .toContain(ACK_TYPES.LEAD_DISCLOSURE)
+    expect(requiredSubTypesForChild({ child, profile: profileFalse }))
+      .not.toContain(ACK_TYPES.LEAD_DISCLOSURE)
   })
 })
 
