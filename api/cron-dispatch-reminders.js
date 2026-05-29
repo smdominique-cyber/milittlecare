@@ -296,7 +296,7 @@ export default async function handler(req) {
 
     // 4) Fetch provider display names (best-effort; used in email footer).
     const providers = await supabaseGet(
-      `profiles?id=in.(${provList})&select=id,full_name,daycare_name`
+      `profiles?id=in.(${provList})&select=id,full_name,daycare_name,email`
     )
     const profileById = new Map(
       (Array.isArray(providers) ? providers : []).map(p => [p.id, p])
