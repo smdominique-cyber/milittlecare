@@ -141,17 +141,132 @@ export default function ChildIntakeModal({
     return false
   })()
 
-  // PR #16 UPDATE — "Send to parent's portal" trigger: instead of
-  // writing the acknowledgments bundle, insert a single
-  // reminder_instances row of category 'intake_acknowledgment_pending'
-  // for this child via the SECURITY DEFINER RPC added to migration 024.
-  // The hourly PR #15 dispatcher picks it up, emails the parent, and
-  // the parent's confirm action on /parent/intake-acknowledge resolves
-  // the reminder.
+  // PR #16 follow-up (compliance-meaningful confirm, 2026-05-29).
+  //
+  // Original behavior: this handler ONLY inserted a reminder_instances
+  // row and left no acknowledgments to confirm. The parent's portal
+  // confirm then wrote an empty envelope and never produced per-
+  // disclosure sub-rows — so pending_lead_disclosures_count /
+  // pending_firearms_disclosures_count stayed positive even after the
+  // loop "completed." Compliance theater, not compliance.
+  //
+  // Fix: pre-write the full provider-attested bundle (envelope + every
+  // required sub-row, per `requiredSubTypesForChild`) BEFORE firing
+  // the reminder. The rows are stamped `acknowledged_via =
+  // 'provider_override'` with an explicit reason that documents the
+  // portal-pending state. The provider's intake modal IS where the
+  // provider attests each disclosure, so this is honest audit data:
+  // provider attested at intake, parent has been notified to formally
+  // confirm at /parent/intake-acknowledge. The parent's portal confirm
+  // archives these rows and re-stamps the bundle as `parent_portal`
+  // (existing confirmChild path), preserving the channel transition as
+  // the audit story.
+  //
+  // Counts behavior: getChildFilesAuditState counts ANY active
+  // acknowledgments row of the required type — it does not filter by
+  // channel. Pending counts therefore drop to zero at SEND time
+  // (provider-attested rows are active) and STAY at zero after parent
+  // confirm (parent_portal rows replace provider_override). The
+  // approved acceptance criterion (16patch follow-up, 2026-05-29) is
+  // exactly this: counts drop at send, do not bounce back up on confirm.
+  //
+  // RLS: provider's INSERT under "Providers can insert their own
+  // acknowledgments" (migration 024) requires provider_id = auth.uid()
+  // — userId is passed as the licensee's auth uid by the caller. The
+  // archive UPDATE goes through "Providers can update their own
+  // acknowledgments" (same migration). The required-set derivation
+  // reads the licensee's premises booleans from `profile`, which the
+  // caller already pulled under the profiles "Users can view their
+  // own profile" policy (migration 001).
   async function handleSendToPortal() {
     setSaving(true)
     setError(null)
     try {
+      // 1. Archive any existing active rows so the new pre-attest
+      //    bundle is the only active set. Mirrors handleSaveBundle.
+      const existing = acks.filter(a => !a.archived_at)
+      if (existing.length > 0) {
+        const ids = existing.map(a => a.id)
+        const { error: archiveErr } = await supabase
+          .from('acknowledgments')
+          .update({ archived_at: new Date().toISOString() })
+          .in('id', ids)
+        if (archiveErr) throw archiveErr
+      }
+
+      // 2. Compute the sub-row hashes from the same payload composition
+      //    `handleSaveBundle` uses. `required` and `payloads` are the
+      //    same useMemos the existing channels rely on.
+      const subHashes = required.map(
+        t => computeAckHash({ type: t, payload: payloads[t] })
+      )
+      const envelopeHash = computeEnvelopeHash(subHashes)
+
+      // 3. Build the provider-attested rows. acknowledged_via =
+      //    'provider_override' with a reason naming the portal-pending
+      //    state. acknowledged_by_user_id stays null (parent has not
+      //    acknowledged yet); acknowledged_by_label stays null (no
+      //    paper signature was taken). The reason is the audit-trail
+      //    explanation an auditor reads.
+      const triggeredAtIso = new Date().toISOString()
+      const overrideReason =
+        `Provider attested at intake on ${triggeredAtIso.slice(0, 10)}; ` +
+        `parent notified to confirm via portal at ` +
+        `/parent/intake-acknowledge?child=${child.id}.`
+
+      const sharedFields = {
+        provider_id: userId,
+        subject_type: 'child',
+        subject_id: child.id,
+        acknowledged_via: 'provider_override',
+        acknowledged_by_user_id: null,
+        acknowledged_by_label: null,
+        provider_override_reason: overrideReason,
+      }
+
+      const rows = [
+        // Envelope row first.
+        {
+          ...sharedFields,
+          type: ACK_TYPES.CHILD_IN_CARE_STATEMENT,
+          snapshot_hash: envelopeHash,
+          snapshot_version: null,
+        },
+        // Sub-rows.
+        ...required.map((t, i) => ({
+          ...sharedFields,
+          type: t,
+          snapshot_hash: subHashes[i],
+          snapshot_version: COPY_VERSIONS[t] || null,
+        })),
+      ]
+
+      const { error: insertErr } = await supabase
+        .from('acknowledgments')
+        .insert(rows)
+      if (insertErr) throw insertErr
+
+      // 4. Stamp the child's intake_completed_at and per-row inputs.
+      //    Same payload the other channels write so re-renders show the
+      //    bundle as complete in the provider's view.
+      const childUpdate = {
+        intake_completed_at: triggeredAtIso,
+        food_provider: foodProvider,
+      }
+      if (healthSummary && healthSummary.trim().length > 0) {
+        childUpdate.medical_notes = healthSummary.trim()
+      }
+      const { error: childErr } = await supabase
+        .from('children')
+        .update(childUpdate)
+        .eq('id', child.id)
+      if (childErr) throw childErr
+
+      // 5. NOW fire the reminder. The dispatcher emails the parent;
+      //    the parent's confirm path (ParentIntakeAcknowledgePage) sees
+      //    the provider_override sub-rows as `existing` and re-stamps
+      //    each one as parent_portal — the existing-acks branch of
+      //    confirmChild, already tested.
       const body =
         `Your child care provider has requested your acknowledgment of ` +
         `Michigan-required intake disclosures for ${child.first_name || 'your child'}. ` +
@@ -164,7 +279,7 @@ export default function ChildIntakeModal({
           p_title: `Intake acknowledgments needed for ${child.first_name || 'your child'}`,
           p_body: body,
           p_cta_path: ctaPath,
-          p_trigger_at: new Date().toISOString(),
+          p_trigger_at: triggeredAtIso,
         }
       )
       if (rpcErr) throw rpcErr
@@ -407,10 +522,11 @@ export default function ChildIntakeModal({
                 )}
                 {channel === 'parent_portal_trigger' && (
                   <div style={{ marginTop: 8, fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', lineHeight: 1.5 }}>
-                    We will create a pending reminder for this child. The next
-                    hourly dispatcher run emails the parent (if they have opted
-                    in to email reminders) with a link to <code>/parent/intake-acknowledge</code>.
-                    The reminder clears automatically when the parent confirms.
+                    We will record your attestation of every disclosure above
+                    and notify the parent to formally confirm. The next hourly
+                    dispatcher run emails them a link to <code>/parent/intake-acknowledge</code>;
+                    when they confirm, your provider attestation is preserved
+                    in the audit trail and re-stamped as their portal confirmation.
                   </div>
                 )}
               </section>

@@ -93,9 +93,19 @@ export default function ParentIntakeAcknowledgePage() {
         }
 
         // Children in those families. PR #13 active filter.
+        //
+        // PR #16 follow-up (parent-confirm bug, 2026-05-29): include
+        // `user_id` — the canonical provider id for the child. The
+        // earlier confirm path resolved provider_id only from the first
+        // existing acknowledgment row, which is empty when the provider
+        // used the "Send to parent's portal" channel (that channel
+        // inserts a reminder_instances row but never pre-writes acks).
+        // children.user_id is on the same row as the columns we already
+        // SELECT here, so RLS allows the read whenever the row itself is
+        // readable (i.e., whenever the child appears in the page at all).
         const kidsResp = await supabase
           .from('children')
-          .select('id, first_name, last_name, family_id, date_of_birth')
+          .select('id, first_name, last_name, family_id, date_of_birth, user_id')
           .in('family_id', familyIds)
           .is('archived_at', null)
         if (kidsResp.error) throw kidsResp.error
@@ -162,7 +172,18 @@ export default function ParentIntakeAcknowledgePage() {
     try {
       const existing = acksByChild[child.id] || []
       const subRows = existing.filter(a => a.type !== ACK_TYPES.CHILD_IN_CARE_STATEMENT)
-      const providerId = existing[0] ? existing[0].provider_id : null
+
+      // PR #16 follow-up (parent-confirm bug, 2026-05-29). The earlier
+      // implementation derived providerId only from existing[0]?.provider_id
+      // — but the "Send to parent's portal" channel writes a
+      // reminder_instances row and NO acknowledgments rows. Parents arriving
+      // through that channel therefore had existing = [], providerId = null,
+      // and the confirm handler threw "No provider on file for this child"
+      // before any RPC or insert fired. children.user_id is the canonical
+      // provider id; it is on the same row the parent already reads, so RLS
+      // is not the problem here. Prefer it; keep the acks-derived value as a
+      // defensive fallback for any legacy row that lacks user_id.
+      const providerId = child.user_id || (existing[0] ? existing[0].provider_id : null)
       if (!providerId) throw new Error('No provider on file for this child.')
 
       // Archive every existing active row for the child.
@@ -180,6 +201,17 @@ export default function ParentIntakeAcknowledgePage() {
       // sub-row's snapshot_hash is computed from { type, parentConfirmedAt }
       // — a minimal but deterministic representation. The envelope hash
       // is the composition of the sub-row hashes.
+      //
+      // When existing acks are empty (the portal-trigger normal state),
+      // subRows is empty; we still write the envelope row so the audit
+      // trail records that the parent confirmed the intake bundle on
+      // this date. computeEnvelopeHash([]) is deterministic. The
+      // per-disclosure sub-rows would normally have been pre-written by
+      // the provider via the in_person_paper or provider_override
+      // channels; the portal-trigger flow not pre-writing sub-rows is a
+      // separate scope question I'm flagging in the halt — for now the
+      // envelope-only confirm closes the loop without inventing fake
+      // sub-row data on the parent's behalf.
       const parentTimestamp = new Date().toISOString()
       const subPayloads = subRows.map(r => ({ type: r.type, parentConfirmedAt: parentTimestamp }))
       const subHashes = subPayloads.map(p => computeAckHash({ type: p.type, payload: p }))
@@ -306,6 +338,14 @@ export default function ParentIntakeAcknowledgePage() {
       ) : (
         pending.map(child => {
           const acks = acksByChild[child.id] || []
+          const subTypeAcks = acks.filter(a => a.type !== ACK_TYPES.CHILD_IN_CARE_STATEMENT)
+          // Portal-trigger normal state: the provider sent a request but
+          // has not pre-written sub-row acknowledgments. The card shows
+          // a different copy block in that case so the parent isn't
+          // staring at an empty bullet list — flagging this is the
+          // copy-only half of the fix; the deeper sub-row population
+          // question is in the halt review.
+          const portalTriggeredWithoutAcks = subTypeAcks.length === 0
           return (
             <section
               key={child.id}
@@ -320,16 +360,24 @@ export default function ParentIntakeAcknowledgePage() {
               <h2 style={{ fontSize: '1.125rem', margin: '0 0 8px 0' }}>
                 {child.first_name} {child.last_name}
               </h2>
-              <p style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', margin: '0 0 12px 0' }}>
-                Your provider recorded the following on file. Confirming below stamps your acknowledgment.
-              </p>
-              <ul style={{ listStyle: 'disc', paddingLeft: 20, margin: '0 0 12px 0', fontSize: '0.875rem' }}>
-                {acks
-                  .filter(a => a.type !== ACK_TYPES.CHILD_IN_CARE_STATEMENT)
-                  .map(a => (
-                    <li key={a.id}>{SUB_TYPE_LABEL[a.type] || a.type}</li>
-                  ))}
-              </ul>
+              {portalTriggeredWithoutAcks ? (
+                <p style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', margin: '0 0 12px 0' }}>
+                  Your provider asked you to confirm the intake acknowledgment
+                  on file for {child.first_name || 'your child'}. Tap below to
+                  record your confirmation.
+                </p>
+              ) : (
+                <>
+                  <p style={{ fontSize: '0.8125rem', color: 'var(--clr-ink-soft)', margin: '0 0 12px 0' }}>
+                    Your provider recorded the following on file. Confirming below stamps your acknowledgment.
+                  </p>
+                  <ul style={{ listStyle: 'disc', paddingLeft: 20, margin: '0 0 12px 0', fontSize: '0.875rem' }}>
+                    {subTypeAcks.map(a => (
+                      <li key={a.id}>{SUB_TYPE_LABEL[a.type] || a.type}</li>
+                    ))}
+                  </ul>
+                </>
+              )}
               <button
                 onClick={() => confirmChild(child)}
                 disabled={busyChildId === child.id}
