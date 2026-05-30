@@ -39,14 +39,15 @@ import { listPendingForParent } from '@/lib/parentIntakeReminders'
 import '@/styles/parent.css'
 
 const SUB_TYPE_LABEL = Object.freeze({
-  [ACK_TYPES.CHILD_IN_CARE_STATEMENT]:    'Child-in-care statement (envelope)',
-  [ACK_TYPES.LEAD_DISCLOSURE]:            'Lead-based paint disclosure',
-  [ACK_TYPES.FIREARMS_DISCLOSURE]:        'Firearms on premises disclosure',
-  [ACK_TYPES.FOOD_PROVIDER_AGREEMENT]:    'Who provides food',
-  [ACK_TYPES.LICENSING_NOTEBOOK_OFFERED]: 'Licensing notebook offered',
-  [ACK_TYPES.INFANT_SAFE_SLEEP]:          'Infant safe sleep practices',
-  [ACK_TYPES.HEALTH_CONDITION]:           'Child health acknowledgment',
-  [ACK_TYPES.DISCIPLINE_POLICY_RECEIPT]:  'Discipline policy received',
+  [ACK_TYPES.CHILD_IN_CARE_STATEMENT]:        'Child-in-care statement (envelope)',
+  [ACK_TYPES.LEAD_DISCLOSURE]:                'Lead-based paint disclosure',
+  [ACK_TYPES.FIREARMS_DISCLOSURE]:            'Firearms on premises disclosure',
+  [ACK_TYPES.FOOD_PROVIDER_AGREEMENT]:        'Who provides food',
+  [ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY]: 'Licensing notebook availability',
+  [ACK_TYPES.LICENSING_RULES_OFFERED]:        'Licensing rules offered',
+  [ACK_TYPES.INFANT_SAFE_SLEEP]:              'Infant safe sleep practices',
+  [ACK_TYPES.HEALTH_CONDITION]:               'Child health acknowledgment',
+  [ACK_TYPES.DISCIPLINE_POLICY_RECEIPT]:      'Discipline policy received',
 })
 
 export default function ParentIntakeAcknowledgePage() {
