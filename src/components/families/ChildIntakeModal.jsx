@@ -26,24 +26,38 @@ import {
 // Copy version strings are stamped into each ack row's snapshot_hash via
 // the payload. Bumping a version invalidates prior acks of that type
 // (drift detection in getChildFileCompleteness).
+//
+// Note (2026-05-29): the key `licensing_notebook_offered` is the DB
+// string value for the constant ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY
+// (renamed in JS, value preserved for back-compat — see
+// src/lib/acknowledgments.js header). `licensing_rules_offered` is the
+// genuinely-new acknowledgment for R 400.1907(1)(b)(iii).
 const COPY_VERSIONS = Object.freeze({
   lead_disclosure: 'v1',
   firearms_disclosure: 'v1',
   food_provider_agreement: 'v1',
-  licensing_notebook_offered: 'v1',
+  licensing_notebook_offered: 'v1',  // DB string for LICENSING_NOTEBOOK_AVAILABILITY ((vii))
+  licensing_rules_offered: 'v1',      // (iii)
   infant_safe_sleep: 'v1',
   health_condition: 'v1',
   discipline_policy_receipt: 'v1',
 })
 
 const SUB_TYPE_LABEL = Object.freeze({
-  [ACK_TYPES.LEAD_DISCLOSURE]:            'Lead-based paint disclosure',
-  [ACK_TYPES.FIREARMS_DISCLOSURE]:        'Firearms on premises disclosure',
-  [ACK_TYPES.FOOD_PROVIDER_AGREEMENT]:    'Agreement on who provides food',
-  [ACK_TYPES.LICENSING_NOTEBOOK_OFFERED]: 'Licensing notebook offered to the parent',
-  [ACK_TYPES.INFANT_SAFE_SLEEP]:          'Infant safe-sleep practices',
-  [ACK_TYPES.HEALTH_CONDITION]:           'Condition of child health acknowledged',
-  [ACK_TYPES.DISCIPLINE_POLICY_RECEIPT]:  'Discipline policy received',
+  [ACK_TYPES.LEAD_DISCLOSURE]:                'Lead-based paint disclosure',
+  [ACK_TYPES.FIREARMS_DISCLOSURE]:            'Firearms on premises disclosure',
+  [ACK_TYPES.FOOD_PROVIDER_AGREEMENT]:        'Agreement on who provides food',
+  // R 400.1907(1)(b)(vii) — THIS home's licensing notebook
+  // (inspection reports, corrective actions, approval letters per
+  // R 400.1906(3)). Label was previously "Licensing notebook offered
+  // to the parent" — renamed 2026-05-29 to match (vii)'s "availability"
+  // language, since (iii) "offered" is now a separate type below.
+  [ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY]: 'Licensing notebook availability',
+  // R 400.1907(1)(b)(iii) — genuinely new 2026-05-29.
+  [ACK_TYPES.LICENSING_RULES_OFFERED]:        'Licensing rules offered to the parent',
+  [ACK_TYPES.INFANT_SAFE_SLEEP]:              'Infant safe-sleep practices',
+  [ACK_TYPES.HEALTH_CONDITION]:               'Condition of child health acknowledged',
+  [ACK_TYPES.DISCIPLINE_POLICY_RECEIPT]:      'Discipline policy received',
 })
 
 const SUB_TYPE_HELP = Object.freeze({
@@ -55,9 +69,13 @@ const SUB_TYPE_HELP = Object.freeze({
     'regardless of yes/no.',
   [ACK_TYPES.FOOD_PROVIDER_AGREEMENT]:
     'Confirm who provides meals: you (the provider), the parent, or both.',
-  [ACK_TYPES.LICENSING_NOTEBOOK_OFFERED]:
-    'Tell the parent the licensing notebook is available to them during ' +
-    'operating hours.',
+  [ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY]:
+    'Tell the parent your licensing notebook (inspection reports, ' +
+    'corrective action plans, approval letters per R 400.1906(3)) is ' +
+    'available to them during operating hours.',
+  [ACK_TYPES.LICENSING_RULES_OFFERED]:
+    'Tell the parent you can provide them a copy of the licensing rules ' +
+    '(R 400.1901–1951) on request.',
   [ACK_TYPES.INFANT_SAFE_SLEEP]:
     'Required for children under 18 months. Cover back-sleeping, no soft ' +
     'bedding, and supervision.',
@@ -689,8 +707,10 @@ function subTypePayload(type, ctx) {
       return { firearmsOnPremises: !!ctx.profile.firearms_on_premises, copyVersion: COPY_VERSIONS.firearms_disclosure }
     case ACK_TYPES.FOOD_PROVIDER_AGREEMENT:
       return { foodProvider: ctx.foodProvider }
-    case ACK_TYPES.LICENSING_NOTEBOOK_OFFERED:
+    case ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY:
       return { copyVersion: COPY_VERSIONS.licensing_notebook_offered }
+    case ACK_TYPES.LICENSING_RULES_OFFERED:
+      return { copyVersion: COPY_VERSIONS.licensing_rules_offered }
     case ACK_TYPES.INFANT_SAFE_SLEEP:
       return { copyVersion: COPY_VERSIONS.infant_safe_sleep }
     case ACK_TYPES.HEALTH_CONDITION:

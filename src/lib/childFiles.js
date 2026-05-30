@@ -75,16 +75,31 @@ export const INFORM_ONLY_TYPES = Object.freeze([
 ])
 
 /**
- * R 400.1907 subitems (b)(i)-(v): items "signed by the parent" /
- * "received by the parent". Active ack satisfies ONLY when channel is
- * in PARENT_SIGNED_SATISFYING_CHANNELS.
+ * R 400.1907(1)(b) parent-signed items — "signed by the parent" /
+ * "received by the parent" / "offered to the parent." Active ack
+ * satisfies ONLY when channel is in PARENT_SIGNED_SATISFYING_CHANNELS.
+ *
+ * Per the regulatory-interpretation note at the top of this file and
+ * the subitem mapping recorded in `src/lib/acknowledgments.js`, the
+ * seven R 400.1907(1)(b) items split into:
+ *   (vi)   lead_disclosure       — INFORM-ONLY, NOT in this list.
+ *   (v)    firearms_disclosure   — parent-signed, gated on premises.
+ *   (i)    health_condition      — parent-signed, always required.
+ *   (ii)   food_provider_agreement — parent-signed, always required.
+ *   (iii)  licensing_rules_offered — parent-signed, always required.
+ *                                    Added 2026-05-29 (was missing).
+ *   (iv)   discipline_policy_receipt — parent-signed, always required.
+ *   (vii)  licensing_notebook_offered — parent-signed, always required.
+ *          DB string preserved for back-compat; the constant in
+ *          `acknowledgments.js` is LICENSING_NOTEBOOK_AVAILABILITY.
  */
 export const PARENT_SIGNED_TYPES = Object.freeze([
-  'firearms_disclosure',
-  'food_provider_agreement',
-  'licensing_notebook_offered',
-  'health_condition',
-  'discipline_policy_receipt',
+  'firearms_disclosure',           // (b)(v)
+  'food_provider_agreement',       // (b)(ii)
+  'licensing_notebook_offered',    // (b)(vii) — DB value preserved; JS const is LICENSING_NOTEBOOK_AVAILABILITY
+  'licensing_rules_offered',       // (b)(iii) — added 2026-05-29
+  'health_condition',              // (b)(i)
+  'discipline_policy_receipt',     // (b)(iv)
 ])
 
 /**
@@ -105,7 +120,19 @@ export const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
  *                                                 the licensee has answered profiles.firearms_on_premises
  *                                                 (true or false; null = disclosure not yet required).
  * @property {number} food_provider_agreement     Parent-signed under R 400.1907(1)(b)(ii). Always required.
- * @property {number} licensing_notebook_offered  Parent-signed under R 400.1907(1)(b)(iii). Always required.
+ * @property {number} licensing_notebook_offered  Parent-signed under R 400.1907(1)(b)(vii) — notice of THIS
+ *                                                 home's licensing notebook availability per R 400.1906(3).
+ *                                                 DB string preserved for back-compat; the constant in
+ *                                                 acknowledgments.js is LICENSING_NOTEBOOK_AVAILABILITY.
+ *                                                 Always required. (The typedef key uses the DB string so
+ *                                                 PR #22's consumer reads the same shape it sees in
+ *                                                 acknowledgments rows.) The 2026-05-29 mapping fix corrected
+ *                                                 this — it was previously labeled (iii) in the typedef, which
+ *                                                 was wrong; the substance is (vii).
+ * @property {number} licensing_rules_offered     Parent-signed under R 400.1907(1)(b)(iii) — offer to
+ *                                                 provide a copy of the licensing rules (R 400.1901–1951).
+ *                                                 Always required. Added 2026-05-29 (the genuinely-missing
+ *                                                 acknowledgment that the bundle wasn't capturing).
  * @property {number} health_condition            Parent-signed under R 400.1907(1)(b)(i). Always required.
  * @property {number} discipline_policy_receipt   Parent-signed under R 400.1907(1)(b)(iv). Always required.
  */
@@ -122,7 +149,11 @@ export const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
  *                                                                                  home_built_before_1978=true AND no active ack
  *                                                                                  of any channel exists for the child.
  * @property {number}                         pending_parent_signatures_count      Total pending PARENT-SIGNED signature SLOTS across
- *                                                                                  all five R 400.1907(1)(b)(i-v) types and all
+ *                                                                                  all six R 400.1907(1)(b) parent-signed types —
+ *                                                                                  (i) health_condition, (ii) food_provider_agreement,
+ *                                                                                  (iii) licensing_rules_offered (added 2026-05-29),
+ *                                                                                  (iv) discipline_policy_receipt, (v) firearms,
+ *                                                                                  (vii) licensing_notebook_offered — and all
  *                                                                                  children. Counts slots, NOT children. PR #22's
  *                                                                                  headline number for the compliance score.
  * @property {ChildFilesPendingParentSignatures} pending_parent_signatures        Per-type breakdown of the parent-signed pending

@@ -13,16 +13,58 @@
 // authoritative validator and documents the shape per type).
 // -----------------------------------------------------------------------------
 
+// ─── R 400.1907 subitem mapping (regulatory-interpretation assumption) ──
+//
+// The R 400.1907(1)(b) child-in-care statement enumerates seven items
+// the parent must sign. Each JS constant below maps to one subitem; the
+// mapping is RECORDED HERE so a future maintainer can audit it without
+// reverse-engineering the help text. The mapping itself is a
+// regulatory-interpretation call — confirm with the licensing
+// consultant before PR #22 (Compliance Health Score) consumes the
+// pending-signature counts. Mirrors the channel-interpretation note
+// in `src/lib/childFiles.js` (same revisit pattern).
+//
+// Subitem → ACK_TYPES constant (string value):
+//   R 400.1907(1)(b)(i)   condition of child's health    → HEALTH_CONDITION
+//   R 400.1907(1)(b)(ii)  food provider agreement        → FOOD_PROVIDER_AGREEMENT
+//   R 400.1907(1)(b)(iii) offer of licensing RULES copy  → LICENSING_RULES_OFFERED (new 2026-05-29)
+//   R 400.1907(1)(b)(iv)  discipline policy receipt      → DISCIPLINE_POLICY_RECEIPT
+//   R 400.1907(1)(b)(v)   firearms on premises           → FIREARMS_DISCLOSURE (gated)
+//   R 400.1907(1)(b)(vi)  lead-based paint (inform-only) → LEAD_DISCLOSURE (gated, inform-only)
+//   R 400.1907(1)(b)(vii) availability of THIS home's
+//                         licensing notebook per
+//                         R 400.1906(3)                   → LICENSING_NOTEBOOK_AVAILABILITY
+//                                                          (formerly LICENSING_NOTEBOOK_OFFERED;
+//                                                           DB string value 'licensing_notebook_offered'
+//                                                           preserved for back-compat)
+//
+// Naming note (2026-05-29): the constant LICENSING_NOTEBOOK_OFFERED was
+// renamed in JS to LICENSING_NOTEBOOK_AVAILABILITY. The string value
+// stays `'licensing_notebook_offered'` so production rows are
+// unchanged — no migration. The constant rename is purely a clarity
+// fix: the help text and scope doc both describe (vii) "notice of
+// availability of THIS home's licensing notebook" but the old
+// identifier's "offered" verb misleadingly suggested (iii) "offer of
+// the licensing rules." (iii) is now a separate type
+// (LICENSING_RULES_OFFERED) — the genuinely-missing acknowledgment.
+
 export const ACK_TYPES = Object.freeze({
   // Rule 7 / R 400.1907 child-in-care statement bundle (PR #16).
-  CHILD_IN_CARE_STATEMENT:    'child_in_care_statement',     // envelope
-  LEAD_DISCLOSURE:            'lead_disclosure',             // sub-row, if home pre-1978
-  FIREARMS_DISCLOSURE:        'firearms_disclosure',         // sub-row, always (copy varies)
-  FOOD_PROVIDER_AGREEMENT:    'food_provider_agreement',
-  LICENSING_NOTEBOOK_OFFERED: 'licensing_notebook_offered',
-  INFANT_SAFE_SLEEP:          'infant_safe_sleep',           // sub-row, if child age < 18 months
-  HEALTH_CONDITION:           'health_condition',
-  DISCIPLINE_POLICY_RECEIPT:  'discipline_policy_receipt',   // sub-row + PR #17 standalone
+  CHILD_IN_CARE_STATEMENT:        'child_in_care_statement',     // envelope
+  LEAD_DISCLOSURE:                'lead_disclosure',             // (b)(vi) — inform-only, if home pre-1978
+  FIREARMS_DISCLOSURE:            'firearms_disclosure',         // (b)(v) — always (copy varies)
+  FOOD_PROVIDER_AGREEMENT:        'food_provider_agreement',     // (b)(ii)
+  // (b)(vii) — Notice of THIS home's licensing notebook
+  // availability per R 400.1906(3). String value preserved as
+  // 'licensing_notebook_offered' for back-compat — see header note.
+  LICENSING_NOTEBOOK_AVAILABILITY: 'licensing_notebook_offered',
+  // (b)(iii) — Offer to provide a copy of the licensing RULES
+  // (R 400.1901-1951). Added 2026-05-29; was missing from the bundle.
+  // String value chosen to be unambiguously distinct from (vii).
+  LICENSING_RULES_OFFERED:        'licensing_rules_offered',
+  INFANT_SAFE_SLEEP:              'infant_safe_sleep',           // R 400.1930, if child age < 18 months
+  HEALTH_CONDITION:               'health_condition',            // (b)(i)
+  DISCIPLINE_POLICY_RECEIPT:      'discipline_policy_receipt',   // (b)(iv) + PR #17 standalone
 
   // Future consumers (PR #17 + PR #20). Listed here so the catalog is
   // discoverable from one place.
@@ -41,7 +83,8 @@ export const CHILD_IN_CARE_SUB_TYPES = Object.freeze([
   ACK_TYPES.LEAD_DISCLOSURE,
   ACK_TYPES.FIREARMS_DISCLOSURE,
   ACK_TYPES.FOOD_PROVIDER_AGREEMENT,
-  ACK_TYPES.LICENSING_NOTEBOOK_OFFERED,
+  ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY,
+  ACK_TYPES.LICENSING_RULES_OFFERED,           // new 2026-05-29 — R 400.1907(1)(b)(iii)
   ACK_TYPES.INFANT_SAFE_SLEEP,
   ACK_TYPES.HEALTH_CONDITION,
   ACK_TYPES.DISCIPLINE_POLICY_RECEIPT,
@@ -61,7 +104,9 @@ export const CHILD_IN_CARE_SUB_TYPES = Object.freeze([
  *   - lead_disclosure: { homeBuiltBefore1978: boolean, copyVersion: string }
  *   - firearms_disclosure: { firearmsOnPremises: boolean, copyVersion: string }
  *   - food_provider_agreement: { foodProvider: 'provider'|'parent'|'both' }
- *   - licensing_notebook_offered: { copyVersion: string }
+ *   - licensing_notebook_offered (DB string for LICENSING_NOTEBOOK_AVAILABILITY,
+ *     R 400.1907(1)(b)(vii)): { copyVersion: string }
+ *   - licensing_rules_offered (R 400.1907(1)(b)(iii)): { copyVersion: string }
  *   - infant_safe_sleep: { copyVersion: string, childAgeMonths: number }
  *   - health_condition: { healthSummary: string|null }
  *   - discipline_policy_receipt: { policyVersion: number|string }
@@ -223,7 +268,12 @@ export function requiredSubTypesForChild({ child, profile, today }) {
     req.push(ACK_TYPES.FIREARMS_DISCLOSURE)
   }
   req.push(ACK_TYPES.FOOD_PROVIDER_AGREEMENT)
-  req.push(ACK_TYPES.LICENSING_NOTEBOOK_OFFERED)
+  // R 400.1907(1)(b)(vii) — notice of THIS home's licensing notebook
+  // availability per R 400.1906(3). Always required.
+  req.push(ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY)
+  // R 400.1907(1)(b)(iii) — offer to provide a copy of the licensing
+  // RULES (R 400.1901-1951). Always required. Added 2026-05-29.
+  req.push(ACK_TYPES.LICENSING_RULES_OFFERED)
   req.push(ACK_TYPES.HEALTH_CONDITION)
   req.push(ACK_TYPES.DISCIPLINE_POLICY_RECEIPT)
 

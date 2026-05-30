@@ -80,7 +80,7 @@ describe('computeAckHash', () => {
   })
 
   it('handles missing payload', () => {
-    expect(computeAckHash({ type: ACK_TYPES.LICENSING_NOTEBOOK_OFFERED }))
+    expect(computeAckHash({ type: ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY }))
       .toMatch(/^[0-9a-f]{8}$/)
   })
 })
@@ -199,6 +199,51 @@ describe('requiredSubTypesForChild', () => {
       .toContain(ACK_TYPES.INFANT_SAFE_SLEEP)
     expect(requiredSubTypesForChild({ child: toddler, profile, today: '2026-05-29' }))
       .not.toContain(ACK_TYPES.INFANT_SAFE_SLEEP)
+  })
+
+  // ─── R 400.1907(1)(b) licensing items — 2026-05-29 mapping fix ───────
+  //
+  // The bundle has two distinct licensing acknowledgments after the
+  // 2026-05-29 rename + addition:
+  //   - LICENSING_NOTEBOOK_AVAILABILITY (DB string 'licensing_notebook_offered'):
+  //     R 400.1907(1)(b)(vii) — notice that THIS home's licensing
+  //     notebook (inspection reports, corrective action plans per
+  //     R 400.1906(3)) is available during operating hours.
+  //   - LICENSING_RULES_OFFERED (DB string 'licensing_rules_offered'):
+  //     R 400.1907(1)(b)(iii) — offer to provide a copy of the
+  //     licensing rules (R 400.1901–1951).
+  //
+  // Both are always required for every active child of a licensed home.
+
+  it('always requires LICENSING_NOTEBOOK_AVAILABILITY (b)(vii)', () => {
+    const profile = { home_built_before_1978: false, firearms_on_premises: false }
+    expect(requiredSubTypesForChild({ child: baseChild, profile, today: '2026-05-29' }))
+      .toContain(ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY)
+    // Even when premises is fully unanswered (null/null).
+    const unset = { home_built_before_1978: null, firearms_on_premises: null }
+    expect(requiredSubTypesForChild({ child: baseChild, profile: unset, today: '2026-05-29' }))
+      .toContain(ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY)
+  })
+
+  it('always requires LICENSING_RULES_OFFERED (b)(iii) — the 2026-05-29 addition', () => {
+    const profile = { home_built_before_1978: false, firearms_on_premises: false }
+    expect(requiredSubTypesForChild({ child: baseChild, profile, today: '2026-05-29' }))
+      .toContain(ACK_TYPES.LICENSING_RULES_OFFERED)
+    const unset = { home_built_before_1978: null, firearms_on_premises: null }
+    expect(requiredSubTypesForChild({ child: baseChild, profile: unset, today: '2026-05-29' }))
+      .toContain(ACK_TYPES.LICENSING_RULES_OFFERED)
+  })
+
+  it('LICENSING_NOTEBOOK_AVAILABILITY string value is preserved as "licensing_notebook_offered" for back-compat', () => {
+    // No migration was applied for the JS rename — production rows
+    // already use this string. Future maintainers must not change
+    // this value without a one-shot UPDATE migration.
+    expect(ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY).toBe('licensing_notebook_offered')
+  })
+
+  it('LICENSING_RULES_OFFERED string value is distinct from notebook-availability', () => {
+    expect(ACK_TYPES.LICENSING_RULES_OFFERED).toBe('licensing_rules_offered')
+    expect(ACK_TYPES.LICENSING_RULES_OFFERED).not.toBe(ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY)
   })
 })
 
@@ -396,8 +441,8 @@ describe('requiredSubTypesForChild — firearms behavior at the gate', () => {
 // ─── Surface ───────────────────────────────────────────────────────────
 
 describe('exports', () => {
-  it('CHILD_IN_CARE_SUB_TYPES enumerates the seven sub-rows', () => {
-    expect(CHILD_IN_CARE_SUB_TYPES).toHaveLength(7)
+  it('CHILD_IN_CARE_SUB_TYPES enumerates the eight sub-rows (after 2026-05-29 licensing_rules_offered addition)', () => {
+    expect(CHILD_IN_CARE_SUB_TYPES).toHaveLength(8)
   })
 
   it('ACK_TYPES values match scope doc strings', () => {

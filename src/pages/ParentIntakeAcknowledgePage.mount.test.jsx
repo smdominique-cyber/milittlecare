@@ -368,8 +368,9 @@ describe('ParentIntakeAcknowledgePage confirm path — RPC-driven', () => {
       // hit acknowledgments_active_unique: a single provider_override
       // bundle, 5 active sub-rows + 1 envelope = 6 active rows. (The
       // production case had 5 because lead+firearms weren\'t required;
-      // here we exercise the full 7-row case so the full sweep is
-      // tested. Both shapes go through the same RPC call.)
+      // here we exercise the full 8-row case (envelope + 7 sub-rows
+      // post the 2026-05-29 licensing_rules_offered addition) so the
+      // full sweep is tested. Both shapes go through the same RPC call.)
       const PROVIDER_REASON =
         'Provider attested at intake on 2026-05-29; parent notified to confirm.'
       tableData.acknowledgments = [
@@ -382,12 +383,13 @@ describe('ParentIntakeAcknowledgePage confirm path — RPC-driven', () => {
           provider_override_reason: PROVIDER_REASON,
           archived_at: null,
         },
-        // sub-rows
+        // sub-rows (7 after 2026-05-29 — licensing_rules_offered added)
         ...[
           'lead_disclosure',
           'firearms_disclosure',
           'food_provider_agreement',
-          'licensing_notebook_offered',
+          'licensing_notebook_offered',   // R 400.1907(1)(b)(vii)
+          'licensing_rules_offered',      // R 400.1907(1)(b)(iii) — new 2026-05-29
           'health_condition',
           'discipline_policy_receipt',
         ].map((t, i) => ({
@@ -421,7 +423,9 @@ describe('ParentIntakeAcknowledgePage confirm path — RPC-driven', () => {
 
       const [call] = intakeConfirmCalls()
       const rows = call.args.p_rows
-      expect(rows).toHaveLength(7)
+      // 8 rows: envelope + 7 sub-rows (2026-05-29 width — adds
+      // licensing_rules_offered for R 400.1907(1)(b)(iii)).
+      expect(rows).toHaveLength(8)
       expect(rows.map(r => r.type).sort()).toEqual([
         'child_in_care_statement',
         'discipline_policy_receipt',
@@ -430,6 +434,7 @@ describe('ParentIntakeAcknowledgePage confirm path — RPC-driven', () => {
         'health_condition',
         'lead_disclosure',
         'licensing_notebook_offered',
+        'licensing_rules_offered',  // added 2026-05-29
       ])
 
       // STRUCTURAL — the production duplicate-key bug class cannot
