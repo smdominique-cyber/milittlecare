@@ -360,8 +360,30 @@
 
 .person-actions {
   display: flex;
-  gap: 4px;
+  gap: var(--space-2);
   flex-shrink: 0;
+  align-items: center;
+}
+
+/*
+ * 2026-05-30 — Consents Phase A added a sibling text-bearing
+ * "Consents" button next to the existing "Intake" button in this row.
+ * The base `.icon-btn` rule (deductions.css) sets a fixed 30×30 box
+ * for true icon buttons; text-bearing buttons inside this row
+ * overflowed that box and visually ran together ("IntakeConsents").
+ *
+ * Scope the override to `.person-actions` so other surfaces using
+ * `.icon-btn` (deductions table, etc.) keep the icon-only sizing.
+ *   - min-width keeps icon-only children (Edit, Archive, Restore) at
+ *     30 px square via grid-center.
+ *   - width: auto + horizontal padding lets text-bearing children
+ *     (Intake, Consents) size to their content with a comfortable
+ *     tap target.
+ */
+.person-actions .icon-btn {
+  width: auto;
+  min-width: 30px;
+  padding: 0 var(--space-2);
 }
 
 /* Attendance */
