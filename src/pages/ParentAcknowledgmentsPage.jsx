@@ -33,7 +33,11 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { ACK_TYPES } from '@/lib/acknowledgments'
+// cc-followup-consent-count-parity (2026-05-30): the parent badge
+// computes "any consent pending for this child?" via the SAME shared
+// pure function the provider audit helper uses. Was inline before;
+// drifted-rule risk has been eliminated structurally.
+import { pendingEnrollmentConsentsForChild } from '@/lib/childFiles'
 import ParentAcknowledgePage from './ParentAcknowledgePage'
 import ParentIntakeAcknowledgePage from './ParentIntakeAcknowledgePage'
 import ParentEnrollmentConsentsPanel from './ParentEnrollmentConsentsPanel'
@@ -127,21 +131,22 @@ export default function ParentAcknowledgmentsPage() {
           .is('archived_at', null)
         if (cancelled || ackResp.error) return
 
-        const SATISFYING = new Set(['parent_portal', 'in_person_paper'])
-        const havePer = new Map()  // childId → Set<type-of-parent-signed-active>
+        // Group acks per child. Channel + revocation-pair logic lives
+        // in `pendingEnrollmentConsentsForChild` — same function the
+        // provider-side `getChildFilesAuditState` calls. Parent badge
+        // aggregates children-affected only.
+        const acksByChild = new Map()
         for (const a of ackResp.data || []) {
-          if (!SATISFYING.has(a.acknowledged_via)) continue
-          let s = havePer.get(a.subject_id)
-          if (!s) { s = new Set(); havePer.set(a.subject_id, s) }
-          s.add(a.type)
+          let list = acksByChild.get(a.subject_id)
+          if (!list) { list = []; acksByChild.set(a.subject_id, list) }
+          list.push(a)
         }
         let affected = 0
         for (const k of kids) {
-          const have = havePer.get(k.id) || new Set()
-          const fieldTripOk = have.has(ACK_TYPES.FIELD_TRIP_PERMISSION)
-          const photoCaptured = have.has(ACK_TYPES.PHOTO_SHARING_CONSENT) ||
-                                have.has(ACK_TYPES.PHOTO_SHARING_CONSENT_REVOKED)
-          if (!fieldTripOk || !photoCaptured) affected += 1
+          const verdict = pendingEnrollmentConsentsForChild({
+            activeAcks: acksByChild.get(k.id) || [],
+          })
+          if (verdict.any_pending) affected += 1
         }
         if (!cancelled) setConsentsPendingCount(affected)
       } catch {

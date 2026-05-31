@@ -170,6 +170,79 @@ export const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
 ])
 
 /**
+ * Single source of truth for "which enrollment consents are pending for
+ * this one child?" Pure function — no Supabase, no I/O. Used by both
+ * the provider-side audit helper (`getChildFilesAuditState`) and the
+ * parent-side surfaces (`ParentAcknowledgmentsPage` tab badge,
+ * `EnrollmentConsentsPendingBanner`). Both paths fetch acks under
+ * different RLS contexts but apply the SAME verdict rule via this
+ * function — keeps the two surfaces from drifting on:
+ *   - the channel rule (parent_portal / in_person_paper satisfy;
+ *     provider_override alone does not),
+ *   - the revocation-pair rule (an active `<type>_revoked` row recorded
+ *     via a satisfying channel counts as "preference captured"),
+ *   - the licensing-required vs provider-protective split.
+ *
+ * The function returns the per-child verdict only. Each caller
+ * aggregates as it needs — slot-counts + children-affected on the
+ * helper side; distinct-children-affected on the parent badge.
+ *
+ * @param {object}   args
+ * @param {Array<{type: string, acknowledged_via: string}>} args.activeAcks
+ *   The child's active (non-archived) acknowledgment rows. Each row
+ *   must carry at least `type` and `acknowledged_via`. Extra fields
+ *   are ignored — both call sites pass slightly different projections.
+ * @returns {{
+ *   enrollment_consents_pending:           string[],
+ *   provider_protective_consents_pending:  string[],
+ *   any_pending:                           boolean,
+ * }}
+ */
+export function pendingEnrollmentConsentsForChild({ activeAcks }) {
+  const rows = Array.isArray(activeAcks) ? activeAcks : []
+
+  // Build the set of types this child has acknowledged via a channel
+  // that satisfies the parent-signed rule. provider_override rows are
+  // filtered out here — they exist in the audit trail but do NOT count
+  // as preference captured.
+  const satisfyingTypes = new Set()
+  for (const a of rows) {
+    if (!a || !a.type) continue
+    if (!PARENT_SIGNED_SATISFYING_CHANNELS.includes(a.acknowledged_via)) continue
+    satisfyingTypes.add(a.type)
+  }
+
+  // Licensing-required: each type is pending iff there is no
+  // satisfying ack of that exact type. No revocation concept — a
+  // licensing-required ack is signed once; re-acknowledgment archives
+  // the prior row.
+  const enrollment_consents_pending = []
+  for (const t of ENROLLMENT_CONSENT_TYPES) {
+    if (!satisfyingTypes.has(t)) enrollment_consents_pending.push(t)
+  }
+
+  // Provider-protective: each type is pending iff NEITHER a satisfying
+  // consent ack of the type NOR a satisfying revocation-pair ack
+  // exists. An active revocation pair means the parent has expressed
+  // a "no" — preference captured, just as a no.
+  const provider_protective_consents_pending = []
+  for (const t of PROVIDER_PROTECTIVE_CONSENT_TYPES) {
+    if (satisfyingTypes.has(t)) continue
+    const revocationKey = REVOCATION_PAIRS[t]
+    if (revocationKey && satisfyingTypes.has(revocationKey)) continue
+    provider_protective_consents_pending.push(t)
+  }
+
+  return {
+    enrollment_consents_pending,
+    provider_protective_consents_pending,
+    any_pending:
+      enrollment_consents_pending.length > 0 ||
+      provider_protective_consents_pending.length > 0,
+  }
+}
+
+/**
  * @typedef {Object} ChildFilesPendingParentSignatures
  * @property {number} firearms_disclosure         Parent-signed under R 400.1907(1)(b)(v). Pending unless an
  *                                                 active ack with acknowledged_via IN ('parent_portal',
@@ -406,6 +479,10 @@ export async function getChildFilesAuditState(licenseeId) {
   const PARENT_SIGNED_SATISFYING_SET = new Set(PARENT_SIGNED_SATISFYING_CHANNELS)
   const anyChannelByChild = new Map()
   const parentSignedByChild = new Map()
+  // Per-child raw ack rows — fed to `pendingEnrollmentConsentsForChild`
+  // for the enrollment-consent blocks. Same data the intake-bundle
+  // indexes are built from; one extra Map.
+  const allAcksByChild = new Map()
   for (const a of acks) {
     if (!a || !a.subject_id) continue
     let any = anyChannelByChild.get(a.subject_id)
@@ -416,6 +493,9 @@ export async function getChildFilesAuditState(licenseeId) {
       if (!ps) { ps = new Set(); parentSignedByChild.set(a.subject_id, ps) }
       ps.add(a.type)
     }
+    let raw = allAcksByChild.get(a.subject_id)
+    if (!raw) { raw = []; allAcksByChild.set(a.subject_id, raw) }
+    raw.push(a)
   }
 
   // 4) Compute counts.
@@ -474,6 +554,14 @@ export async function getChildFilesAuditState(licenseeId) {
   // Both apply to EVERY active child of a licensed home; there is no
   // requiredSubTypesForChild gate here because these aren't part of
   // the R 400.1907 intake bundle.
+  // Per-child verdict comes from `pendingEnrollmentConsentsForChild`
+  // (single source of truth for the channel + revocation-pair rule).
+  // The helper aggregates slot-counts + children-affected here; the
+  // parent-side surfaces (ParentAcknowledgmentsPage tab badge,
+  // EnrollmentConsentsPendingBanner) call the SAME function and
+  // aggregate children-affected only. cc-followup-consent-count-parity
+  // pinned that two-path agreement structurally — both paths now share
+  // the verdict logic; only the aggregation shape differs per caller.
   const pending_enrollment_consents = emptyEnrollmentConsentsBreakdown()
   let pending_enrollment_consents_count = 0
   let children_with_pending_enrollment_consents_count = 0
@@ -483,31 +571,24 @@ export async function getChildFilesAuditState(licenseeId) {
   let children_with_pending_provider_protective_consents_count = 0
 
   for (const c of children) {
-    const haveParentSigned = parentSignedByChild.get(c.id)
+    const activeAcks = allAcksByChild.get(c.id) || []
+    const verdict = pendingEnrollmentConsentsForChild({ activeAcks })
 
-    // Licensing-required block.
-    let childHasEnrollmentPending = false
-    for (const t of ENROLLMENT_CONSENT_TYPES) {
-      if (haveParentSigned && haveParentSigned.has(t)) continue
+    for (const t of verdict.enrollment_consents_pending) {
       pending_enrollment_consents[t] += 1
       pending_enrollment_consents_count += 1
-      childHasEnrollmentPending = true
     }
-    if (childHasEnrollmentPending) children_with_pending_enrollment_consents_count += 1
+    if (verdict.enrollment_consents_pending.length > 0) {
+      children_with_pending_enrollment_consents_count += 1
+    }
 
-    // Provider-protective block — revocation-aware.
-    let childHasProtectivePending = false
-    for (const t of PROVIDER_PROTECTIVE_CONSENT_TYPES) {
-      const consentSatisfied  = haveParentSigned && haveParentSigned.has(t)
-      const revocationPairKey = REVOCATION_PAIRS[t]
-      const revocationCaptured =
-        revocationPairKey && haveParentSigned && haveParentSigned.has(revocationPairKey)
-      if (consentSatisfied || revocationCaptured) continue
+    for (const t of verdict.provider_protective_consents_pending) {
       pending_provider_protective_consents[t] += 1
       pending_provider_protective_consents_count += 1
-      childHasProtectivePending = true
     }
-    if (childHasProtectivePending) children_with_pending_provider_protective_consents_count += 1
+    if (verdict.provider_protective_consents_pending.length > 0) {
+      children_with_pending_provider_protective_consents_count += 1
+    }
   }
 
   return {

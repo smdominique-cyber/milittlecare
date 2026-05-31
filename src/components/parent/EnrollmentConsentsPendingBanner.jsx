@@ -24,9 +24,11 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ShieldAlert } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { ACK_TYPES } from '@/lib/acknowledgments'
-
-const SATISFYING_CHANNELS = new Set(['parent_portal', 'in_person_paper'])
+// cc-followup-consent-count-parity (2026-05-30): banner uses the SAME
+// shared verdict function the provider audit helper does. Inline logic
+// was here previously; the drift risk on the revocation-pair rule is
+// now structurally eliminated.
+import { pendingEnrollmentConsentsForChild } from '@/lib/childFiles'
 
 /**
  * @param {object} props
@@ -73,7 +75,9 @@ export default function EnrollmentConsentsPendingBanner({ children: childrenProp
         }
 
         // 2) Pull active enrollment-consent acks for those children.
-        //    Parent has RLS SELECT on their linked children's acks.
+        //    Parent has RLS SELECT on their linked children's acks
+        //    (migration 024). Projection covers everything the shared
+        //    verdict function reads — `type` and `acknowledged_via`.
         const ackResp = await supabase
           .from('acknowledgments')
           .select('subject_id, type, acknowledged_via')
@@ -82,26 +86,22 @@ export default function EnrollmentConsentsPendingBanner({ children: childrenProp
           .is('archived_at', null)
         if (cancelled) return
 
-        // 3) Index parent-signed acks per child.
-        const havePer = new Map()  // childId → Set<type>
+        // 3) Group raw acks per child and feed each child's set to
+        //    the shared verdict function. Same function the provider
+        //    audit helper calls — channel rule + revocation-pair rule
+        //    live in one place.
+        const acksByChild = new Map()
         for (const a of ackResp.data || []) {
-          if (!SATISFYING_CHANNELS.has(a.acknowledged_via)) continue
-          let s = havePer.get(a.subject_id)
-          if (!s) { s = new Set(); havePer.set(a.subject_id, s) }
-          s.add(a.type)
+          let list = acksByChild.get(a.subject_id)
+          if (!list) { list = []; acksByChild.set(a.subject_id, list) }
+          list.push(a)
         }
-
-        // 4) Compute affected children. Field trip = pending if no
-        //    parent-signed field_trip_permission. Photo = pending if
-        //    neither a parent-signed consent nor a parent-signed
-        //    revocation. A child with EITHER pending is affected.
         const affected = []
         for (const k of kids) {
-          const have = havePer.get(k.id) || new Set()
-          const fieldTripOk = have.has(ACK_TYPES.FIELD_TRIP_PERMISSION)
-          const photoCaptured = have.has(ACK_TYPES.PHOTO_SHARING_CONSENT) ||
-                                have.has(ACK_TYPES.PHOTO_SHARING_CONSENT_REVOKED)
-          if (!fieldTripOk || !photoCaptured) affected.push(k)
+          const verdict = pendingEnrollmentConsentsForChild({
+            activeAcks: acksByChild.get(k.id) || [],
+          })
+          if (verdict.any_pending) affected.push(k)
         }
         if (!cancelled) {
           setPendingChildren(affected)
