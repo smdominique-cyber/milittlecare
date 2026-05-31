@@ -78,6 +78,15 @@ function emptyBreakdown() {
   }
 }
 
+// Phase A breakdown helpers — separate fixture so the existing
+// intake-bundle emptyBreakdown stays focused on parent-signed types.
+function emptyEnrollmentConsentsBreakdown() {
+  return { field_trip_permission: 0 }
+}
+function emptyProviderProtectiveConsentsBreakdown() {
+  return { photo_sharing_consent: 0 }
+}
+
 describe('getChildFilesAuditState', () => {
   it('returns the empty/zero shape when no licenseeId is provided', async () => {
     const out = await getChildFilesAuditState(null)
@@ -92,6 +101,12 @@ describe('getChildFilesAuditState', () => {
       pending_parent_signatures_count: 0,
       pending_parent_signatures: emptyBreakdown(),
       children_with_pending_parent_signatures_count: 0,
+      pending_enrollment_consents_count: 0,
+      pending_enrollment_consents: emptyEnrollmentConsentsBreakdown(),
+      pending_provider_protective_consents_count: 0,
+      pending_provider_protective_consents: emptyProviderProtectiveConsentsBreakdown(),
+      children_with_pending_enrollment_consents_count: 0,
+      children_with_pending_provider_protective_consents_count: 0,
     })
   })
 
@@ -99,7 +114,8 @@ describe('getChildFilesAuditState', () => {
     // Profile premises answered → firearms is in the required set →
     // firearms counts toward the rollup. With one child and no acks,
     // every always-required parent-signed type is pending (6 total
-    // after the 2026-05-29 licensing_rules_offered addition).
+    // after the 2026-05-29 licensing_rules_offered addition). Consents
+    // Phase A (2026-05-30) added six new top-level keys.
     mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
     mockState.children = [
       { id: 'c1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
@@ -109,13 +125,19 @@ describe('getChildFilesAuditState', () => {
     expect(Object.keys(out).sort()).toEqual([
       'active_children_count',
       'annual_review_overdue_count',
+      'children_with_pending_enrollment_consents_count',
       'children_with_pending_parent_signatures_count',
+      'children_with_pending_provider_protective_consents_count',
       'domain',
       'intake_complete_count',
       'intake_incomplete_count',
+      'pending_enrollment_consents',
+      'pending_enrollment_consents_count',
       'pending_lead_disclosures_count',
       'pending_parent_signatures',
       'pending_parent_signatures_count',
+      'pending_provider_protective_consents',
+      'pending_provider_protective_consents_count',
       'type',
     ])
     expect(out.domain).toBe('child_files')
@@ -602,6 +624,197 @@ describe('getChildFilesAuditState', () => {
     ]
     const out = await getChildFilesAuditState('u1')
     expect(out.pending_parent_signatures.firearms_disclosure).toBe(0)
+  })
+
+  // ─── Consents Phase A — enrollment-level consents (2026-05-30) ──
+  //
+  // Two separate audit blocks per Option A:
+  //   - LICENSING-REQUIRED (field_trip_permission)
+  //   - PROVIDER-PROTECTIVE (photo_sharing_consent) with revocation pair
+  //
+  // Channel-aware satisfaction same as the intake parent-signed types.
+  // The provider-protective block ALSO recognizes an active revocation-
+  // pair row as "preference captured" (only no-record-either-way counts
+  // as pending).
+  //
+  // Phase A is intentionally provider-recorded: in_person_paper /
+  // provider_override only. No parent-portal self-confirm. Tests
+  // pin the channel rule the same way the intake-bundle tests do.
+
+  describe('enrollment_consents (licensing-required) — field_trip_permission', () => {
+    it('pending when no record exists (1 child, empty acks → 1 slot, 1 child affected)', async () => {
+      mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = []
+      const out = await getChildFilesAuditState('u1')
+      expect(out.pending_enrollment_consents.field_trip_permission).toBe(1)
+      expect(out.pending_enrollment_consents_count).toBe(1)
+      expect(out.children_with_pending_enrollment_consents_count).toBe(1)
+    })
+
+    it('cleared by in_person_paper record', async () => {
+      mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = [
+        { subject_id: 'k1', type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
+      ]
+      const out = await getChildFilesAuditState('u1')
+      expect(out.pending_enrollment_consents.field_trip_permission).toBe(0)
+      expect(out.pending_enrollment_consents_count).toBe(0)
+      expect(out.children_with_pending_enrollment_consents_count).toBe(0)
+    })
+
+    it('cleared by parent_portal record (reserved for Phase B; the channel rule already supports it)', async () => {
+      mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = [
+        { subject_id: 'k1', type: 'field_trip_permission', acknowledged_via: 'parent_portal' },
+      ]
+      const out = await getChildFilesAuditState('u1')
+      expect(out.pending_enrollment_consents.field_trip_permission).toBe(0)
+    })
+
+    it('NOT cleared by provider_override alone (parent has not signed — same parent-signed rule as intake)', async () => {
+      mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = [
+        { subject_id: 'k1', type: 'field_trip_permission', acknowledged_via: 'provider_override' },
+      ]
+      const out = await getChildFilesAuditState('u1')
+      expect(out.pending_enrollment_consents.field_trip_permission).toBe(1)
+    })
+
+    it('does NOT mix into intake parent-signed rollup (audit blocks are distinct)', async () => {
+      mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = [
+        { subject_id: 'k1', type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
+      ]
+      const out = await getChildFilesAuditState('u1')
+      // field_trip ack does NOT appear under the intake bundle.
+      expect(out.pending_parent_signatures).not.toHaveProperty('field_trip_permission')
+      // Intake count is computed independently (no parent-signed intake
+      // acks here, premises both false so 6 intake types still pending).
+      expect(out.pending_parent_signatures_count).toBe(6)
+    })
+  })
+
+  describe('provider_protective_consents — photo_sharing_consent (revocation-aware)', () => {
+    it('pending when no record either way', async () => {
+      mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = []
+      const out = await getChildFilesAuditState('u1')
+      expect(out.pending_provider_protective_consents.photo_sharing_consent).toBe(1)
+      expect(out.pending_provider_protective_consents_count).toBe(1)
+      expect(out.children_with_pending_provider_protective_consents_count).toBe(1)
+    })
+
+    it('cleared by a parent-signed consent (in_person_paper)', async () => {
+      mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = [
+        { subject_id: 'k1', type: 'photo_sharing_consent', acknowledged_via: 'in_person_paper' },
+      ]
+      const out = await getChildFilesAuditState('u1')
+      expect(out.pending_provider_protective_consents.photo_sharing_consent).toBe(0)
+    })
+
+    it('cleared by a parent-signed REVOCATION pair (preference is captured, just as a no)', async () => {
+      // The revocation pair is the audit-trail signal that the parent
+      // expressed a no. From the audit-state's standpoint, that's
+      // "preference recorded" — distinct from "no record either way."
+      mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = [
+        { subject_id: 'k1', type: 'photo_sharing_consent_revoked', acknowledged_via: 'in_person_paper' },
+      ]
+      const out = await getChildFilesAuditState('u1')
+      expect(out.pending_provider_protective_consents.photo_sharing_consent).toBe(0)
+      expect(out.pending_provider_protective_consents_count).toBe(0)
+    })
+
+    it('NOT cleared by provider_override consent alone (same parent-signed rule)', async () => {
+      mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = [
+        { subject_id: 'k1', type: 'photo_sharing_consent', acknowledged_via: 'provider_override' },
+      ]
+      const out = await getChildFilesAuditState('u1')
+      expect(out.pending_provider_protective_consents.photo_sharing_consent).toBe(1)
+    })
+
+    it('NOT cleared by provider_override revocation alone (the parent-signed rule applies to both sides)', async () => {
+      mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = [
+        { subject_id: 'k1', type: 'photo_sharing_consent_revoked', acknowledged_via: 'provider_override' },
+      ]
+      const out = await getChildFilesAuditState('u1')
+      expect(out.pending_provider_protective_consents.photo_sharing_consent).toBe(1)
+    })
+  })
+
+  describe('Phase A blocks are independent of intake', () => {
+    it('a fully satisfied intake bundle does NOT clear enrollment-consent pending counts', async () => {
+      mockState.profile = { home_built_before_1978: true, firearms_on_premises: true }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: '2026-05-30T12:00:00Z', records_last_reviewed_on: '2026-05-30', date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = [
+        // Full intake bundle (parent_portal) but NO field_trip / no photo consent.
+        { subject_id: 'k1', type: 'child_in_care_statement', acknowledged_via: 'parent_portal' },
+        ...['lead_disclosure', 'firearms_disclosure', 'food_provider_agreement',
+            'licensing_notebook_offered', 'licensing_rules_offered',
+            'health_condition', 'discipline_policy_receipt']
+          .map(t => ({ subject_id: 'k1', type: t, acknowledged_via: 'parent_portal' })),
+      ]
+      const out = await getChildFilesAuditState('u1')
+      expect(out.pending_parent_signatures_count).toBe(0)              // intake fully cleared
+      expect(out.pending_enrollment_consents_count).toBe(1)            // field_trip still pending
+      expect(out.pending_provider_protective_consents_count).toBe(1)   // photo still pending
+    })
+
+    it('mixed: intake satisfied, field_trip satisfied, photo revoked — every block reads as captured', async () => {
+      mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      mockState.children = [
+        { id: 'k1', intake_completed_at: '2026-05-30T12:00:00Z', records_last_reviewed_on: '2026-05-30', date_of_birth: '2024-01-01' },
+      ]
+      mockState.acks = [
+        ...['firearms_disclosure', 'food_provider_agreement',
+            'licensing_notebook_offered', 'licensing_rules_offered',
+            'health_condition', 'discipline_policy_receipt']
+          .map(t => ({ subject_id: 'k1', type: t, acknowledged_via: 'in_person_paper' })),
+        { subject_id: 'k1', type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
+        { subject_id: 'k1', type: 'photo_sharing_consent_revoked', acknowledged_via: 'in_person_paper' },
+      ]
+      const out = await getChildFilesAuditState('u1')
+      expect(out.pending_parent_signatures_count).toBe(0)
+      expect(out.pending_enrollment_consents_count).toBe(0)
+      expect(out.pending_provider_protective_consents_count).toBe(0)
+      expect(out.children_with_pending_enrollment_consents_count).toBe(0)
+      expect(out.children_with_pending_provider_protective_consents_count).toBe(0)
+    })
   })
 
   it('returns children-only zeros when the acknowledgments table is unavailable (migration not applied)', async () => {

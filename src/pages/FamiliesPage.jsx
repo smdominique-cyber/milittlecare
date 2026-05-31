@@ -12,6 +12,7 @@ import { partitionChildren } from '@/lib/children'
 import FundingSourceList from '@/components/funding/FundingSourceList'
 import FundingSourceForm from '@/components/funding/FundingSourceForm'
 import ChildIntakeModal from '@/components/families/ChildIntakeModal'
+import EnrollmentConsentsModal from '@/components/families/EnrollmentConsentsModal'
 import MiRegistryWarningBanner from '@/components/miregistry/MiRegistryWarningBanner'
 import '@/styles/families.css'
 
@@ -780,6 +781,11 @@ function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuard
   const [adding, setAdding] = useState(false)
   // PR #16: intake-form modal target. null when closed.
   const [intakeTarget, setIntakeTarget] = useState(null)
+  // Consents Phase A (2026-05-30): enrollment-level consents modal target.
+  // Sibling to intakeTarget — separate surface so the regulatory
+  // boundary stays visible in the UI (intake = R 400.1907 bundle;
+  // consents = enrollment-level items outside the bundle).
+  const [consentsTarget, setConsentsTarget] = useState(null)
   // Licensed homes (family_home / group_home) see the Rule 7 intake surface.
   // LEPs see the legacy 5-field form only.
   const isLicensed =
@@ -876,6 +882,16 @@ function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuard
                     : <span style={{ fontSize: 12, fontWeight: 600 }}>Intake</span>}
                 </button>
               )}
+              {isLicensed && (
+                <button
+                  className="icon-btn"
+                  title="Record enrollment consents (field trip, photo sharing)"
+                  onClick={() => setConsentsTarget(child)}
+                  style={{ color: 'var(--clr-ink-mid)' }}
+                >
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>Consents</span>
+                </button>
+              )}
               <button className="icon-btn" title="Edit" onClick={() => setEditing(child.id)}><Pencil /></button>
               <button
                 className="icon-btn"
@@ -939,6 +955,16 @@ function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuard
           primaryGuardianName={primaryGuardian}
           onClose={() => setIntakeTarget(null)}
           onSaved={async () => { setIntakeTarget(null); await onChange() }}
+        />
+      )}
+
+      {consentsTarget && isLicensed && (
+        <EnrollmentConsentsModal
+          userId={userId}
+          child={consentsTarget}
+          primaryGuardianName={primaryGuardian}
+          onClose={() => setConsentsTarget(null)}
+          onSaved={async () => { setConsentsTarget(null); await onChange() }}
         />
       )}
     </div>

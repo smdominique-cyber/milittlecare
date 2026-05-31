@@ -33,11 +33,14 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { ACK_TYPES } from '@/lib/acknowledgments'
 import ParentAcknowledgePage from './ParentAcknowledgePage'
 import ParentIntakeAcknowledgePage from './ParentIntakeAcknowledgePage'
+import ParentEnrollmentConsentsPanel from './ParentEnrollmentConsentsPanel'
 
 const TAB_ATTENDANCE = 'attendance'
 const TAB_INTAKE = 'intake'
+const TAB_CONSENTS = 'consents'
 
 export default function ParentAcknowledgmentsPage() {
   const location = useLocation()
@@ -48,7 +51,7 @@ export default function ParentAcknowledgmentsPage() {
 
   // Initial tab: URL hint wins, then route, then default.
   const [activeTab, setActiveTab] = useState(() => {
-    if (urlTab === TAB_INTAKE || urlTab === TAB_ATTENDANCE) return urlTab
+    if (urlTab === TAB_INTAKE || urlTab === TAB_ATTENDANCE || urlTab === TAB_CONSENTS) return urlTab
     if (isIntakeRoute) return TAB_INTAKE
     return TAB_ATTENDANCE
   })
@@ -80,6 +83,75 @@ export default function ParentAcknowledgmentsPage() {
     return () => { cancelled = true }
   }, [])
 
+  // Consents Phase A (2026-05-30): badge count for the Consents tab.
+  // "Pending" here means a child of this parent has no field_trip_permission
+  // record AND/OR no photo_sharing preference (consent or revocation)
+  // recorded by a parent-signed channel. Computed from the parent's own
+  // direct SELECT on acknowledgments (parents have RLS on their linked
+  // children's acks per migration 024). Badge counts DISTINCT children
+  // affected — same shape as the intake badge.
+  //
+  // Note: Phase A has no parent-portal self-confirm for these consents,
+  // so the badge is informational only — the action surface for the
+  // parent is "talk to your provider," not a confirm button.
+  const [consentsPendingCount, setConsentsPendingCount] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    async function fetchConsentsCount() {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (cancelled || !user) return
+        const linksResp = await supabase
+          .from('parent_family_links')
+          .select('family_id')
+          .eq('parent_id', user.id)
+          .eq('status', 'active')
+        if (cancelled || linksResp.error) return
+        const familyIds = (linksResp.data || []).map(r => r.family_id)
+        if (familyIds.length === 0) return
+
+        const kidsResp = await supabase
+          .from('children')
+          .select('id')
+          .in('family_id', familyIds)
+          .is('archived_at', null)
+        if (cancelled || kidsResp.error) return
+        const kids = kidsResp.data || []
+        if (kids.length === 0) return
+
+        const ackResp = await supabase
+          .from('acknowledgments')
+          .select('subject_id, type, acknowledged_via')
+          .eq('subject_type', 'child')
+          .in('subject_id', kids.map(k => k.id))
+          .is('archived_at', null)
+        if (cancelled || ackResp.error) return
+
+        const SATISFYING = new Set(['parent_portal', 'in_person_paper'])
+        const havePer = new Map()  // childId → Set<type-of-parent-signed-active>
+        for (const a of ackResp.data || []) {
+          if (!SATISFYING.has(a.acknowledged_via)) continue
+          let s = havePer.get(a.subject_id)
+          if (!s) { s = new Set(); havePer.set(a.subject_id, s) }
+          s.add(a.type)
+        }
+        let affected = 0
+        for (const k of kids) {
+          const have = havePer.get(k.id) || new Set()
+          const fieldTripOk = have.has(ACK_TYPES.FIELD_TRIP_PERMISSION)
+          const photoCaptured = have.has(ACK_TYPES.PHOTO_SHARING_CONSENT) ||
+                                have.has(ACK_TYPES.PHOTO_SHARING_CONSENT_REVOKED)
+          if (!fieldTripOk || !photoCaptured) affected += 1
+        }
+        if (!cancelled) setConsentsPendingCount(affected)
+      } catch {
+        // non-fatal
+      }
+    }
+    fetchConsentsCount()
+    return () => { cancelled = true }
+  }, [])
+
   return (
     <div className="parent-acknowledgments-wrapper">
       <nav role="tablist" aria-label="Parent acknowledgments"
@@ -106,12 +178,28 @@ export default function ParentAcknowledgmentsPage() {
             </span>
           )}
         </button>
+        <button
+          role="tab"
+          aria-selected={activeTab === TAB_CONSENTS}
+          onClick={() => setActiveTab(TAB_CONSENTS)}
+          style={tabStripStyles.tab(activeTab === TAB_CONSENTS)}
+        >
+          Consents
+          {consentsPendingCount > 0 && (
+            <span
+              style={tabStripStyles.badge}
+              aria-label={`${consentsPendingCount} ${consentsPendingCount === 1 ? 'child' : 'children'} with missing consent records`}
+            >
+              {consentsPendingCount}
+            </span>
+          )}
+        </button>
       </nav>
 
       <div role="tabpanel">
-        {activeTab === TAB_ATTENDANCE
-          ? <ParentAcknowledgePage />
-          : <ParentIntakeAcknowledgePage />}
+        {activeTab === TAB_ATTENDANCE && <ParentAcknowledgePage />}
+        {activeTab === TAB_INTAKE     && <ParentIntakeAcknowledgePage />}
+        {activeTab === TAB_CONSENTS   && <ParentEnrollmentConsentsPanel />}
       </div>
     </div>
   )

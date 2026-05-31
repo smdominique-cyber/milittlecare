@@ -520,4 +520,25 @@ describe('Consents Phase A: enrollment-level types (standalone, not in intake bu
     // health + discipline + infant_safe_sleep = 8.
     expect(out).toHaveLength(8)
   })
+
+  it('PHOTO_SHARING_CONSENT_REVOKED string value is "photo_sharing_consent_revoked"', () => {
+    expect(ACK_TYPES.PHOTO_SHARING_CONSENT_REVOKED).toBe('photo_sharing_consent_revoked')
+  })
+
+  it('PHOTO_SHARING_CONSENT_REVOKED is distinct from PHOTO_SHARING_CONSENT', () => {
+    expect(ACK_TYPES.PHOTO_SHARING_CONSENT_REVOKED).not.toBe(ACK_TYPES.PHOTO_SHARING_CONSENT)
+  })
+
+  it('PHOTO_SHARING_CONSENT_REVOKED is NOT in CHILD_IN_CARE_SUB_TYPES (it is a revocation pair, not intake)', () => {
+    expect(CHILD_IN_CARE_SUB_TYPES).not.toContain(ACK_TYPES.PHOTO_SHARING_CONSENT_REVOKED)
+  })
+
+  it('requiredSubTypesForChild does NOT return PHOTO_SHARING_CONSENT_REVOKED (revocation rows are not part of any required-set)', () => {
+    const out = requiredSubTypesForChild({
+      child: { id: 'c1', date_of_birth: '2024-01-01' },
+      profile: { home_built_before_1978: true, firearms_on_premises: true },
+      today: '2026-05-30',
+    })
+    expect(out).not.toContain(ACK_TYPES.PHOTO_SHARING_CONSENT_REVOKED)
+  })
 })

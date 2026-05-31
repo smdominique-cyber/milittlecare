@@ -115,9 +115,24 @@ export const ACK_TYPES = Object.freeze({
   // OUT and would be separate, more carefully-worded consents.
   // The consent language is placeholder — final wording needs
   // lawyer/insurer review before the provider relies on it.
-  // REVOCABLE (the one new mechanic in Consents Phase A) — model
-  // pending halt review; see pr-consents-A-scope.md § Revocability.
+  // REVOCABLE via the PHOTO_SHARING_CONSENT_REVOKED pair (below).
   PHOTO_SHARING_CONSENT:             'photo_sharing_consent',
+
+  // Revocation pair for PHOTO_SHARING_CONSENT (Option (a) — archive
+  // active consent + write revocation-type row). When a parent
+  // withdraws consent, the provider records:
+  //   1) archive the active 'photo_sharing_consent' row
+  //   2) insert a new 'photo_sharing_consent_revoked' row
+  // Both rows survive in the audit trail; current state reads as
+  // "active revoked row exists, no active consent row" = revoked.
+  // The audit-state helper treats this category as RECORDED (not
+  // pending) regardless of whether the current state is consent or
+  // revocation — the parent's preference is captured either way.
+  // NOTE (2026-05-30, Consents Phase A): until the messaging-
+  // enforcement follow-up ships, an active revoked row does NOT
+  // stop photo-attachment sends through the messaging system. The
+  // record is captured; the enforcement is a fast-follow PR.
+  PHOTO_SHARING_CONSENT_REVOKED:     'photo_sharing_consent_revoked',
 })
 
 /**

@@ -103,6 +103,63 @@ export const PARENT_SIGNED_TYPES = Object.freeze([
 ])
 
 /**
+ * Enrollment-level LICENSING-REQUIRED consents (Consents Phase A, 2026-05-30).
+ *
+ * Separate from the intake bundle: these are sign-once-at-enrollment items
+ * that licensing requires by rule (MiLEAP can ask for them). They are
+ * NOT part of the R 400.1907 child-in-care statement envelope and do NOT
+ * flow through requiredSubTypesForChild — instead the audit-state helper
+ * counts them in their own dedicated block so PR #22's compliance score
+ * can weigh them distinctly from intake signatures.
+ *
+ * Channel-aware satisfaction: same rule as PARENT_SIGNED_TYPES — only
+ * parent_portal or in_person_paper satisfies; provider_override alone
+ * does not. (Phase A's recording flow is provider-driven —
+ * in_person_paper or provider_override — pending Phase B's generalized
+ * parent-portal confirm path.)
+ *
+ * No revocation concept — a licensing-required acknowledgment is signed
+ * once; re-acknowledgment archives the prior row.
+ */
+export const ENROLLMENT_CONSENT_TYPES = Object.freeze([
+  'field_trip_permission',         // R 400.1952(2) — non-vehicle field trips, sign at initial enrollment
+])
+
+/**
+ * Enrollment-level PROVIDER-PROTECTIVE consents (Consents Phase A, 2026-05-30).
+ *
+ * No rule citation — these are captured for liability / parent-trust,
+ * not compliance. PR #22 must score them DISTINCTLY from licensing-
+ * required consents (a missing photo consent is a prudence gap, not a
+ * regulatory violation).
+ *
+ * REVOCABLE — each entry pairs with a `<type>_revoked` ACK_TYPES value
+ * (see REVOCATION_PAIRS below). The audit-state helper treats either
+ * an active consent OR an active revocation as "recorded" (preference
+ * captured); only the no-record-either-way case counts as pending.
+ *
+ * Channel-aware satisfaction: same parent-signed rule as the others —
+ * parent_portal / in_person_paper satisfy; provider_override alone
+ * does not.
+ */
+export const PROVIDER_PROTECTIVE_CONSENT_TYPES = Object.freeze([
+  'photo_sharing_consent',         // no rule (licensing silent); see acknowledgments.js header note
+])
+
+/**
+ * Revocation pairing for revocable provider-protective consents.
+ * Map of consent type → revocation-pair type. The presence of an
+ * active revocation-pair row counts as "preference recorded" (parent
+ * has expressed a no), distinct from "preference unknown."
+ *
+ * Currently only photo_sharing_consent is revocable. Future revocable
+ * consents add entries here.
+ */
+export const REVOCATION_PAIRS = Object.freeze({
+  photo_sharing_consent: 'photo_sharing_consent_revoked',
+})
+
+/**
  * Which `acknowledged_via` values count as a parent's signature on a
  * parent-signed type. See the regulatory-interpretation note at the
  * top of this file for the reasoning + revisit conditions.
@@ -169,6 +226,34 @@ export const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
  *                                                                                  3 signatures contributes 3 to
  *                                                                                  pending_parent_signatures_count but 1 to this
  *                                                                                  field).
+ * @property {number}                         pending_enrollment_consents_count    Total pending LICENSING-REQUIRED enrollment-
+ *                                                                                  consent slots (currently field_trip_permission
+ *                                                                                  only). Channel-aware: parent_portal /
+ *                                                                                  in_person_paper satisfy. Counts slots, NOT
+ *                                                                                  children. Consents Phase A (2026-05-30).
+ * @property {ChildFilesPendingEnrollmentConsents} pending_enrollment_consents     Per-type breakdown of licensing-required
+ *                                                                                  enrollment-consent pending slots.
+ * @property {number}                         pending_provider_protective_consents_count
+ *                                                                                  Total pending PROVIDER-PROTECTIVE enrollment-
+ *                                                                                  consent slots (currently photo_sharing_consent
+ *                                                                                  only). NOT a licensing compliance signal —
+ *                                                                                  PR #22 scores this distinctly from
+ *                                                                                  enrollment_consents. "Pending" = no record
+ *                                                                                  either way (neither active consent nor active
+ *                                                                                  revocation pair).
+ * @property {ChildFilesPendingProviderProtectiveConsents} pending_provider_protective_consents
+ *                                                                                  Per-type breakdown of provider-protective
+ *                                                                                  pending slots. Revocation-aware: an active
+ *                                                                                  revocation pair counts as preference captured
+ *                                                                                  and is therefore NOT pending.
+ * @property {number}                         children_with_pending_enrollment_consents_count
+ *                                                                                  Distinct children missing ≥1 licensing-required
+ *                                                                                  enrollment consent. The compliance-side
+ *                                                                                  children-affected metric.
+ * @property {number}                         children_with_pending_provider_protective_consents_count
+ *                                                                                  Distinct children with no provider-protective
+ *                                                                                  preference captured. Data-quality metric, NOT
+ *                                                                                  compliance.
  *
  * Shape rationale (2026-05-29): the previous shape exported only
  * `pending_firearms_disclosures_count` for the parent-signed bucket,
@@ -182,6 +267,39 @@ export const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
  * `pending_parent_signatures.firearms_disclosure`. Lead (inform-only)
  * stays a separate top-level field because it's a distinct regulatory
  * category, not a parent signature.
+ *
+ * Consents Phase A extension (2026-05-30 — Option A from
+ * pr-consents-A-scope.md): added FOUR new fields covering enrollment-
+ * level consents that sit OUTSIDE the R 400.1907 intake bundle:
+ *   - pending_enrollment_consents_count / _consents object — licensing-
+ *     required category (currently field_trip_permission only).
+ *     Channel-aware satisfaction.
+ *   - pending_provider_protective_consents_count / _consents object —
+ *     not-a-licensing-gap category (currently photo_sharing_consent
+ *     only). Channel-aware AND revocation-aware: "preference recorded"
+ *     = active consent ack OR active revocation pair. Only the
+ *     no-record-either-way case counts as pending.
+ *   - children_with_pending_enrollment_consents_count — distinct
+ *     children missing ≥1 licensing-required enrollment consent. PR #22
+ *     scores this distinctly from intake.
+ *   - children_with_pending_provider_protective_consents_count —
+ *     distinct children with no preference captured. NOT a compliance
+ *     signal — for the prudence / data-quality side of the score.
+ */
+
+/**
+ * @typedef {Object} ChildFilesPendingEnrollmentConsents
+ * @property {number} field_trip_permission   R 400.1952(2) — written permission for non-vehicle
+ *                                            field trips at initial enrollment. Always required;
+ *                                            satisfied only by parent_portal / in_person_paper.
+ */
+
+/**
+ * @typedef {Object} ChildFilesPendingProviderProtectiveConsents
+ * @property {number} photo_sharing_consent   No rule (licensing silent). "Pending" means NO record
+ *                                            either way — neither an active consent ack nor an
+ *                                            active revocation pair. An active revocation counts
+ *                                            as "preference captured" and is therefore NOT pending.
  */
 
 /**
@@ -200,6 +318,13 @@ export async function getChildFilesAuditState(licenseeId) {
     pending_parent_signatures_count: 0,
     pending_parent_signatures: emptyParentSignaturesBreakdown(),
     children_with_pending_parent_signatures_count: 0,
+    // Consents Phase A (2026-05-30) — enrollment-level consents.
+    pending_enrollment_consents_count: 0,
+    pending_enrollment_consents: emptyEnrollmentConsentsBreakdown(),
+    pending_provider_protective_consents_count: 0,
+    pending_provider_protective_consents: emptyProviderProtectiveConsentsBreakdown(),
+    children_with_pending_enrollment_consents_count: 0,
+    children_with_pending_provider_protective_consents_count: 0,
   }
 
   if (!licenseeId) return empty
@@ -334,6 +459,57 @@ export async function getChildFilesAuditState(licenseeId) {
     if (childHasAnyPending) children_with_pending_parent_signatures_count += 1
   }
 
+  // ─── Consents Phase A (2026-05-30) — enrollment-level consents ──
+  //
+  // Two separate blocks per the Option A audit-state shape:
+  //  - LICENSING-REQUIRED (currently field_trip_permission only).
+  //    Channel-aware: only parent_portal / in_person_paper satisfy.
+  //    No revocation concept — re-acknowledge to update.
+  //  - PROVIDER-PROTECTIVE (currently photo_sharing_consent only).
+  //    Channel-aware AND revocation-aware: an active revocation-pair
+  //    row recorded via a parent-signed channel ALSO counts as
+  //    "preference captured." Only the no-record-either-way state
+  //    counts as pending.
+  //
+  // Both apply to EVERY active child of a licensed home; there is no
+  // requiredSubTypesForChild gate here because these aren't part of
+  // the R 400.1907 intake bundle.
+  const pending_enrollment_consents = emptyEnrollmentConsentsBreakdown()
+  let pending_enrollment_consents_count = 0
+  let children_with_pending_enrollment_consents_count = 0
+
+  const pending_provider_protective_consents = emptyProviderProtectiveConsentsBreakdown()
+  let pending_provider_protective_consents_count = 0
+  let children_with_pending_provider_protective_consents_count = 0
+
+  for (const c of children) {
+    const haveParentSigned = parentSignedByChild.get(c.id)
+
+    // Licensing-required block.
+    let childHasEnrollmentPending = false
+    for (const t of ENROLLMENT_CONSENT_TYPES) {
+      if (haveParentSigned && haveParentSigned.has(t)) continue
+      pending_enrollment_consents[t] += 1
+      pending_enrollment_consents_count += 1
+      childHasEnrollmentPending = true
+    }
+    if (childHasEnrollmentPending) children_with_pending_enrollment_consents_count += 1
+
+    // Provider-protective block — revocation-aware.
+    let childHasProtectivePending = false
+    for (const t of PROVIDER_PROTECTIVE_CONSENT_TYPES) {
+      const consentSatisfied  = haveParentSigned && haveParentSigned.has(t)
+      const revocationPairKey = REVOCATION_PAIRS[t]
+      const revocationCaptured =
+        revocationPairKey && haveParentSigned && haveParentSigned.has(revocationPairKey)
+      if (consentSatisfied || revocationCaptured) continue
+      pending_provider_protective_consents[t] += 1
+      pending_provider_protective_consents_count += 1
+      childHasProtectivePending = true
+    }
+    if (childHasProtectivePending) children_with_pending_provider_protective_consents_count += 1
+  }
+
   return {
     domain: 'child_files',
     type: 'type_2',
@@ -345,6 +521,12 @@ export async function getChildFilesAuditState(licenseeId) {
     pending_parent_signatures_count,
     pending_parent_signatures,
     children_with_pending_parent_signatures_count,
+    pending_enrollment_consents_count,
+    pending_enrollment_consents,
+    pending_provider_protective_consents_count,
+    pending_provider_protective_consents,
+    children_with_pending_enrollment_consents_count,
+    children_with_pending_provider_protective_consents_count,
   }
 }
 
@@ -361,6 +543,27 @@ export async function getChildFilesAuditState(licenseeId) {
 function emptyParentSignaturesBreakdown() {
   const out = {}
   for (const t of PARENT_SIGNED_TYPES) out[t] = 0
+  return out
+}
+
+/**
+ * Build the `pending_enrollment_consents` breakdown object with every
+ * ENROLLMENT_CONSENT_TYPES key initialized to 0. Same stable-shape
+ * pattern as the parent-signatures breakdown.
+ */
+function emptyEnrollmentConsentsBreakdown() {
+  const out = {}
+  for (const t of ENROLLMENT_CONSENT_TYPES) out[t] = 0
+  return out
+}
+
+/**
+ * Build the `pending_provider_protective_consents` breakdown object
+ * with every PROVIDER_PROTECTIVE_CONSENT_TYPES key initialized to 0.
+ */
+function emptyProviderProtectiveConsentsBreakdown() {
+  const out = {}
+  for (const t of PROVIDER_PROTECTIVE_CONSENT_TYPES) out[t] = 0
   return out
 }
 
