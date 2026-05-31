@@ -5,6 +5,7 @@ import { Shield, CheckCircle, Lock, LogOut, AlertCircle, Loader, Calendar, Zap, 
 import AutopayEnrollment from '@/components/parent/AutopayEnrollment'
 import BusinessInfoSection from '@/components/parent/BusinessInfoSection'
 import AcknowledgmentBanner from '@/components/parent/AcknowledgmentBanner'
+import EnrollmentConsentsPendingBanner from '@/components/parent/EnrollmentConsentsPendingBanner'
 import InstallBanner from '@/components/ui/InstallBanner'
 import '@/styles/parent.css'
 
@@ -437,6 +438,19 @@ export default function ParentDashboardPage() {
 
         {/* Acknowledgment digest banner (PR #12) */}
         {session?.user?.id && <AcknowledgmentBanner parentId={session.user.id} />}
+
+        {/* Consents Phase A (2026-05-30) — enrollment-consent discovery banner.
+            Informational only: in Phase A there is no parent-portal
+            self-confirm path for these consents (P3); the banner links to
+            the read-only Consents tab and the copy frames the action as
+            "talk to your provider." A future Phase B with a generalized
+            parent-confirm RPC can flip this to an actionable surface. */}
+        {session?.user?.id && (
+          <EnrollmentConsentsPendingBanner
+            parentId={session.user.id}
+            children={children}
+          />
+        )}
 
         {/* Password setup banner */}
         {showPasswordBanner && (
