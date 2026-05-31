@@ -451,3 +451,73 @@ describe('exports', () => {
     expect(ACK_TYPES.FIREARMS_DISCLOSURE).toBe('firearms_disclosure')
   })
 })
+
+// ─── Consents Phase A — standalone enrollment consents (2026-05-30) ──
+//
+// Per docs/pr-consents-A-scope.md: FIELD_TRIP_PERMISSION (R 400.1952(2),
+// licensing-required) and PHOTO_SHARING_CONSENT (no rule, provider-
+// protective) are STANDALONE per-child acknowledgments. They are
+// explicitly NOT part of the R 400.1907 intake bundle — mixing them
+// into the child-in-care statement envelope would mislead an auditor
+// about which signatures satisfy which rule.
+//
+// These tests pin the standalone-not-bundled invariant BEFORE any
+// audit-state wiring happens. Future maintainers who accidentally
+// add either type to CHILD_IN_CARE_SUB_TYPES or requiredSubTypesForChild
+// will see these tests fail.
+
+describe('Consents Phase A: enrollment-level types (standalone, not in intake bundle)', () => {
+  it('FIELD_TRIP_PERMISSION string value is "field_trip_permission"', () => {
+    expect(ACK_TYPES.FIELD_TRIP_PERMISSION).toBe('field_trip_permission')
+  })
+
+  it('PHOTO_SHARING_CONSENT string value is "photo_sharing_consent"', () => {
+    expect(ACK_TYPES.PHOTO_SHARING_CONSENT).toBe('photo_sharing_consent')
+  })
+
+  it('the two new types have distinct string values (no string collision)', () => {
+    expect(ACK_TYPES.FIELD_TRIP_PERMISSION)
+      .not.toBe(ACK_TYPES.PHOTO_SHARING_CONSENT)
+  })
+
+  it('FIELD_TRIP_PERMISSION is NOT in CHILD_IN_CARE_SUB_TYPES (it is enrollment-level, not an intake sub-row)', () => {
+    expect(CHILD_IN_CARE_SUB_TYPES).not.toContain(ACK_TYPES.FIELD_TRIP_PERMISSION)
+  })
+
+  it('PHOTO_SHARING_CONSENT is NOT in CHILD_IN_CARE_SUB_TYPES (provider-protective, not regulatory intake)', () => {
+    expect(CHILD_IN_CARE_SUB_TYPES).not.toContain(ACK_TYPES.PHOTO_SHARING_CONSENT)
+  })
+
+  it('requiredSubTypesForChild does NOT return FIELD_TRIP_PERMISSION (it is not part of the intake bundle)', () => {
+    const out = requiredSubTypesForChild({
+      child: { id: 'c1', date_of_birth: '2024-01-01' },
+      profile: { home_built_before_1978: true, firearms_on_premises: true },
+      today: '2026-05-30',
+    })
+    expect(out).not.toContain(ACK_TYPES.FIELD_TRIP_PERMISSION)
+  })
+
+  it('requiredSubTypesForChild does NOT return PHOTO_SHARING_CONSENT (not a regulatory intake item)', () => {
+    const out = requiredSubTypesForChild({
+      child: { id: 'c1', date_of_birth: '2024-01-01' },
+      profile: { home_built_before_1978: true, firearms_on_premises: true },
+      today: '2026-05-30',
+    })
+    expect(out).not.toContain(ACK_TYPES.PHOTO_SHARING_CONSENT)
+  })
+
+  it('intake bundle width is unchanged by the addition of Consents Phase A types', () => {
+    // Sanity: requiredSubTypesForChild returns the same 8-item set
+    // (premises both answered, infant) it did pre-addition. If a future
+    // change wires these types into the intake bundle, this assertion
+    // catches the unintended scope-creep.
+    const out = requiredSubTypesForChild({
+      child: { id: 'c1', date_of_birth: '2026-01-01' },  // <18mo → infant_safe_sleep included
+      profile: { home_built_before_1978: true, firearms_on_premises: true },
+      today: '2026-05-30',
+    })
+    // Pre-Phase-A widths: lead + firearms + food + notebook + rules +
+    // health + discipline + infant_safe_sleep = 8.
+    expect(out).toHaveLength(8)
+  })
+})

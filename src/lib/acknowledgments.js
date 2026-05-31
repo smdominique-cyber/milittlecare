@@ -71,6 +71,53 @@ export const ACK_TYPES = Object.freeze({
   STAFF_DISCIPLINE_POLICY_RECEIPT:   'staff_discipline_policy_receipt',
   MEDICATION_PERMISSION_OTC_BLANKET: 'medication_permission_otc_blanket',
   MEDICATION_PERMISSION:             'medication_permission',
+
+  // ─── Enrollment-level consents (Consents Phase A, 2026-05-30) ──
+  //
+  // STANDALONE per-child acknowledgments — explicitly NOT in
+  // CHILD_IN_CARE_SUB_TYPES and NOT added to
+  // requiredSubTypesForChild's intake bundle. These are enrollment-
+  // level (sign once at the start of care, durable thereafter), not
+  // R 400.1907 child-in-care statement items. Mixing them into the
+  // intake envelope would mislead an auditor about which signatures
+  // satisfy which rule.
+  //
+  // Both share the polymorphic shape used by the intake types:
+  //   subject_type='child', subject_id=<child uuid>. One active row
+  //   per (provider_id, type, child) — the acknowledgments_active_unique
+  //   partial index already covers that.
+  //
+  // PARENT-SIGNED for both: satisfied by parent_portal or
+  // in_person_paper; provider_override alone does NOT satisfy
+  // (same channel-aware rule as the parent-signed intake types).
+  //
+  // CONSENT CATEGORY tag (for the future PR #22 compliance score):
+  //   FIELD_TRIP_PERMISSION    → 'licensing_required'   R 400.1952(2)
+  //   PHOTO_SHARING_CONSENT    → 'provider_protective'  no rule
+  // The two categories MUST score distinctly in #22 — a missing
+  // field-trip permission is a regulatory gap; a missing photo
+  // consent is a prudence gap. See pr-consents-A-scope.md §
+  // "Classification note for the compliance score (PR #22)."
+
+  // R 400.1952(2) — "At the time of initial enrollment, a licensee
+  // shall obtain written permission from a child's parent for the
+  // child to go on field trips that do not involve a vehicle."
+  // LICENSING-REQUIRED. Sign-once. Parent-signed.
+  FIELD_TRIP_PERMISSION:             'field_trip_permission',
+
+  // PROVIDER-PROTECTIVE consent — no rule citation. Michigan
+  // licensing is SILENT on photo sharing (verified against the
+  // 2019 and 2026 rule sets). This is captured for liability /
+  // parent-trust reasons. Narrow scope: consent to share photos
+  // of the parent's OWN child WITH that parent — matches the
+  // existing message-attachment feature in src/lib/messages.js.
+  // Broader uses (marketing, multi-child photos, white-label) are
+  // OUT and would be separate, more carefully-worded consents.
+  // The consent language is placeholder — final wording needs
+  // lawyer/insurer review before the provider relies on it.
+  // REVOCABLE (the one new mechanic in Consents Phase A) — model
+  // pending halt review; see pr-consents-A-scope.md § Revocability.
+  PHOTO_SHARING_CONSENT:             'photo_sharing_consent',
 })
 
 /**
