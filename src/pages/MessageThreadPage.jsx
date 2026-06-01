@@ -12,7 +12,12 @@ import {
   notifyParentsOfMessage,
   getSignedPhotoUrls,
 } from '@/lib/messages'
-import { ChevronLeft, ImagePlus, Send, X } from 'lucide-react'
+// PR Messaging Photo-Consent Reminder (2026-06-01) — shared sibling
+// of pendingEnrollmentConsentsForChild that exposes the photo-specific
+// verdict for the non-blocking reminder. Single source of truth for
+// the channel rule across all four consent surfaces.
+import { photoConsentNeedsReminderForChild } from '@/lib/childFiles'
+import { ChevronLeft, ImagePlus, Send, X, AlertCircle } from 'lucide-react'
 import '@/styles/messages.css'
 
 const MAX_PHOTOS = 5
@@ -46,6 +51,17 @@ export default function MessageThreadPage() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(null)
   const [lightboxUrl, setLightboxUrl] = useState(null)
+  // PR Messaging Photo-Consent Reminder (2026-06-01).
+  // `photoConsentReminder` is true when the child's photo_sharing_consent
+  // is anything other than affirmative parent-signed (revoked, never
+  // recorded, or provider-override only). The reminder fires at SEND
+  // time when photos are pending. `showConsentReminder` is the modal's
+  // visibility flag. Send proceeds when the provider clicks through;
+  // we do NOT log a "sent despite revocation" audit row (per scope,
+  // the photo content might not even depict this child — the reminder
+  // is a courtesy memory-aid, not a compliance event).
+  const [photoConsentReminder, setPhotoConsentReminder] = useState(false)
+  const [showConsentReminder, setShowConsentReminder] = useState(false)
 
   const messagesEndRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -96,8 +112,42 @@ export default function MessageThreadPage() {
       // Mark parent messages read
       await markParentMessagesRead(t.id)
     }
+    await loadPhotoConsentReminderState(c.id)
     setLoading(false)
     setTimeout(scrollToBottom, 50)
+  }
+
+  // Loads the child's active acknowledgments and computes the photo-
+  // consent reminder verdict via the shared helper. Provider SELECT
+  // RLS on acknowledgments (migration 024) permits this read.
+  async function loadPhotoConsentReminderState(targetChildId) {
+    try {
+      const { data, error: ackErr } = await supabase
+        .from('acknowledgments')
+        .select('type, acknowledged_via')
+        .eq('provider_id', licenseeId)
+        .eq('subject_type', 'child')
+        .eq('subject_id', targetChildId)
+        .is('archived_at', null)
+      if (ackErr) {
+        // Fire-on-uncertainty: a failed consent read at photo-send
+        // time is a high-risk moment, and silently suppressing the
+        // courtesy reminder is the silent-failure pattern. The
+        // non-blocking modal is cheap; missing it when consent is
+        // actually revoked is not. Default to fire when the state
+        // is unknown.
+        setPhotoConsentReminder(true)
+        return
+      }
+      setPhotoConsentReminder(
+        photoConsentNeedsReminderForChild({ activeAcks: data || [] })
+      )
+    } catch {
+      // Same fire-on-uncertainty rule as the ackErr branch above —
+      // the safe default for a courtesy reminder is to surface, not
+      // suppress, when consent state could not be determined.
+      setPhotoConsentReminder(true)
+    }
   }
 
   async function refreshSignedUrls(msgs) {
@@ -135,6 +185,27 @@ export default function MessageThreadPage() {
   async function handleSend() {
     if (sending) return
     if (!body.trim() && pendingPhotos.length === 0) return
+
+    // PR Messaging Photo-Consent Reminder (2026-06-01).
+    // Gate ONLY at send time, ONLY when there are pending photos, ONLY
+    // when the verdict says the parent's photo-consent preference is
+    // anything other than active affirmative. Text-only messages
+    // (pendingPhotos.length === 0) bypass this gate completely.
+    // Non-blocking: the modal's "Send anyway" button calls
+    // `doSend()` to proceed; nothing logged on proceed.
+    if (pendingPhotos.length > 0 && photoConsentReminder) {
+      setShowConsentReminder(true)
+      return
+    }
+
+    await doSend()
+  }
+
+  // Extracted from handleSend so the reminder modal can call it
+  // directly after the provider clicks through. Same logic; just
+  // factored out of the gate above.
+  async function doSend() {
+    if (sending) return
     setSending(true)
     setError(null)
 
@@ -363,6 +434,97 @@ export default function MessageThreadPage() {
             <X size={20} />
           </button>
           <img src={lightboxUrl} alt="" onClick={(e) => e.stopPropagation()} />
+        </div>
+      )}
+
+      {/* PR Messaging Photo-Consent Reminder (2026-06-01).
+          Non-blocking. Send always proceeds when the provider clicks
+          "Send anyway." Copy frames this as a courtesy memory-aid, not
+          a violation claim — the system cannot inspect photo content,
+          so "if this photo includes [child]" is the honest framing.
+          We do NOT write an audit row when the provider proceeds. */}
+      {showConsentReminder && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="photo-consent-reminder-title"
+        >
+          <div className="modal-card" style={{ maxWidth: 480, width: '95%' }}>
+            <div
+              className="modal-header"
+              style={{ position: 'sticky', top: 0, background: 'white', zIndex: 1 }}
+            >
+              <span className="modal-title" id="photo-consent-reminder-title">
+                A quick reminder before you send
+              </span>
+              <button
+                className="modal-close"
+                onClick={() => setShowConsentReminder(false)}
+                aria-label="Close reminder"
+                style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div
+              className="modal-body"
+              style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+            >
+              <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                <AlertCircle
+                  size={20}
+                  style={{ color: 'var(--clr-amber, #8a6a1a)', flexShrink: 0, marginTop: 2 }}
+                  aria-hidden="true"
+                />
+                <p style={{ margin: 0, fontSize: '0.9375rem', lineHeight: 1.5 }}>
+                  Photo consent for <strong>{child?.first_name || 'this child'}</strong>{' '}
+                  is on file as withdrawn (or not yet recorded).{' '}
+                  If this photo includes {child?.first_name || 'this child'},
+                  consider whether to send it.
+                </p>
+              </div>
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: '0.8125rem',
+                  color: 'var(--clr-ink-soft)',
+                  lineHeight: 1.45,
+                }}
+              >
+                This is a courtesy reminder, not a block — your judgment
+                governs what to send. Photos can&apos;t be auto-checked against
+                consent, so the system can&apos;t tell whether a given image
+                actually depicts {child?.first_name || 'this child'}.
+              </p>
+            </div>
+
+            <div
+              className="modal-footer"
+              style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', padding: 12 }}
+            >
+              <button
+                className="btn-discard"
+                onClick={() => setShowConsentReminder(false)}
+                disabled={sending}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-save"
+                onClick={() => {
+                  setShowConsentReminder(false)
+                  doSend()
+                }}
+                disabled={sending}
+                type="button"
+              >
+                Send anyway
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

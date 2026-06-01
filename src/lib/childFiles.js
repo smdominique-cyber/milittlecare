@@ -243,6 +243,57 @@ export function pendingEnrollmentConsentsForChild({ activeAcks }) {
 }
 
 /**
+ * Thin sibling of `pendingEnrollmentConsentsForChild` exposing just the
+ * photo-sharing consent verdict for the messaging photo-attach
+ * reminder (PR Messaging Photo-Consent Reminder, 2026-06-01).
+ *
+ * Returns true when the provider should see the non-blocking reminder
+ * before attaching/sending a photo in this child's message thread.
+ *
+ * IMPORTANT — different semantic from the audit-state verdict:
+ *   `pendingEnrollmentConsentsForChild` answers "is the parent's
+ *   preference CAPTURED?" — and counts an active revoked row under a
+ *   satisfying channel as "yes, captured" (just as a no). That's
+ *   correct for compliance reporting.
+ *
+ *   This function answers a different question — "should the provider
+ *   be reminded that this photo might be against the parent's stated
+ *   preference?" Per the PR scope, the answer is YES whenever consent
+ *   is anything other than active affirmative parent-signed consent:
+ *     - revoked under any channel → reminder fires
+ *     - no record either way → reminder fires
+ *     - affirmative consent under provider_override only → reminder fires
+ *       (parent never actually signed; same parent-signed rule)
+ *     - affirmative consent under parent_portal or in_person_paper → no reminder
+ *
+ *   We deliberately do NOT delegate to `pendingEnrollmentConsentsForChild`
+ *   because its "captured" semantic would suppress the reminder for
+ *   revoked-state children — exactly the case the scope says MUST fire.
+ *
+ * Reuse invariant: this function shares the
+ * `PARENT_SIGNED_SATISFYING_CHANNELS` constant with every other
+ * consent surface. If the channel rule ever changes (e.g., a future
+ * channel value is added to the satisfying set), this function updates
+ * in lockstep with the audit helper and the parent surfaces. The drift
+ * risk the cc-followup parity refactor pinned is preserved.
+ *
+ * @param {object} args
+ * @param {Array<{type: string, acknowledged_via: string}>} args.activeAcks
+ * @returns {boolean}  true when the reminder should fire.
+ */
+export function photoConsentNeedsReminderForChild({ activeAcks }) {
+  const rows = Array.isArray(activeAcks) ? activeAcks : []
+  for (const a of rows) {
+    if (!a || a.type !== 'photo_sharing_consent') continue
+    if (PARENT_SIGNED_SATISFYING_CHANNELS.includes(a.acknowledged_via)) {
+      // Active affirmative parent-signed consent → reminder suppressed.
+      return false
+    }
+  }
+  return true
+}
+
+/**
  * @typedef {Object} ChildFilesPendingParentSignatures
  * @property {number} firearms_disclosure         Parent-signed under R 400.1907(1)(b)(v). Pending unless an
  *                                                 active ack with acknowledged_via IN ('parent_portal',
