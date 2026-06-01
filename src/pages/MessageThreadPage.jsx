@@ -129,18 +129,31 @@ export default function MessageThreadPage() {
         .eq('subject_type', 'child')
         .eq('subject_id', targetChildId)
         .is('archived_at', null)
+      // TEMP verification log (remove before merge — see commit
+      // fix(messaging): fire photo-consent reminder on read failure).
+      // Surfaces the licenseeId and childId actually used, whether the
+      // read errored, and what rows came back, so the preview build
+      // reveals whether the live suppression bug is a failed read
+      // hitting the fallback or a verdict / gate / render issue.
+      console.log('[photo-consent read] licenseeId=', licenseeId, 'ackErr=', ackErr, 'rows=', data)
       if (ackErr) {
-        // Non-fatal — default to NOT showing the reminder rather than
-        // nag the provider on a failed read. The Consents tab is the
-        // backstop for missing consent state.
-        setPhotoConsentReminder(false)
+        // Fire-on-uncertainty: a failed consent read at photo-send
+        // time is a high-risk moment, and silently suppressing the
+        // courtesy reminder is the silent-failure pattern. The
+        // non-blocking modal is cheap; missing it when consent is
+        // actually revoked is not. Default to fire when the state
+        // is unknown.
+        setPhotoConsentReminder(true)
         return
       }
       setPhotoConsentReminder(
         photoConsentNeedsReminderForChild({ activeAcks: data || [] })
       )
     } catch {
-      setPhotoConsentReminder(false)
+      // Same fire-on-uncertainty rule as the ackErr branch above —
+      // the safe default for a courtesy reminder is to surface, not
+      // suppress, when consent state could not be determined.
+      setPhotoConsentReminder(true)
     }
   }
 
@@ -187,6 +200,10 @@ export default function MessageThreadPage() {
     // (pendingPhotos.length === 0) bypass this gate completely.
     // Non-blocking: the modal's "Send anyway" button calls
     // `doSend()` to proceed; nothing logged on proceed.
+    // TEMP verification log (remove before merge — see commit
+    // fix(messaging): fire photo-consent reminder on read failure).
+    // Confirms in preview what the gate actually sees at send time.
+    console.log('[photo-consent gate] pendingPhotos=', pendingPhotos.length, 'photoConsentReminder=', photoConsentReminder)
     if (pendingPhotos.length > 0 && photoConsentReminder) {
       setShowConsentReminder(true)
       return
