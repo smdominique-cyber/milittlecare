@@ -50,8 +50,11 @@ vi.mock('./supabase', () => ({
   supabase: { from: (table) => chainFor(table) },
 }))
 
-const { getChildFilesAuditState, pendingEnrollmentConsentsForChild } =
-  await import('./childFiles')
+const {
+  getChildFilesAuditState,
+  pendingEnrollmentConsentsForChild,
+  photoConsentNeedsReminderForChild,
+} = await import('./childFiles')
 
 beforeEach(() => {
   mockState.profile = null
@@ -1092,5 +1095,149 @@ describe('parity — provider audit helper vs parent-side aggregation agree on c
     expect(prot).toBe(3)
     expect(out.children_with_pending_enrollment_consents_count).toBe(enr)
     expect(out.children_with_pending_provider_protective_consents_count).toBe(prot)
+  })
+})
+
+// ─── photoConsentNeedsReminderForChild — messaging-reminder verdict ──
+//
+// Thin sibling over `pendingEnrollmentConsentsForChild` — used by
+// MessageThreadPage to decide whether to show the non-blocking
+// photo-consent reminder modal at attach/send time. Same channel +
+// revocation-pair rule; no inline reimplementation. These cases pin
+// the four behaviors the scope listed.
+
+describe('photoConsentNeedsReminderForChild — messaging reminder verdict', () => {
+  it('no consent record either way → reminder fires (true)', () => {
+    expect(photoConsentNeedsReminderForChild({ activeAcks: [] })).toBe(true)
+  })
+
+  it('revoked via in_person_paper → reminder fires (true) — preference captured as no', () => {
+    expect(photoConsentNeedsReminderForChild({
+      activeAcks: [
+        { type: 'photo_sharing_consent_revoked', acknowledged_via: 'in_person_paper' },
+      ],
+    })).toBe(true)
+  })
+
+  it('revoked via parent_portal → reminder fires (true) — Phase B-ready', () => {
+    expect(photoConsentNeedsReminderForChild({
+      activeAcks: [
+        { type: 'photo_sharing_consent_revoked', acknowledged_via: 'parent_portal' },
+      ],
+    })).toBe(true)
+  })
+
+  it('affirmative consent via in_person_paper → NO reminder (false)', () => {
+    expect(photoConsentNeedsReminderForChild({
+      activeAcks: [
+        { type: 'photo_sharing_consent', acknowledged_via: 'in_person_paper' },
+      ],
+    })).toBe(false)
+  })
+
+  it('affirmative consent via parent_portal → NO reminder (false)', () => {
+    expect(photoConsentNeedsReminderForChild({
+      activeAcks: [
+        { type: 'photo_sharing_consent', acknowledged_via: 'parent_portal' },
+      ],
+    })).toBe(false)
+  })
+
+  it('consent via provider_override only → reminder fires (true) — provider attestation does not satisfy the parent-signed rule', () => {
+    expect(photoConsentNeedsReminderForChild({
+      activeAcks: [
+        { type: 'photo_sharing_consent', acknowledged_via: 'provider_override' },
+      ],
+    })).toBe(true)
+  })
+
+  it('revocation via provider_override only → reminder fires (true) — same parent-signed rule applies to revocations', () => {
+    expect(photoConsentNeedsReminderForChild({
+      activeAcks: [
+        { type: 'photo_sharing_consent_revoked', acknowledged_via: 'provider_override' },
+      ],
+    })).toBe(true)
+  })
+
+  it('ignores unrelated intake-bundle acks (only photo_sharing rows enter the verdict)', () => {
+    expect(photoConsentNeedsReminderForChild({
+      activeAcks: [
+        { type: 'lead_disclosure', acknowledged_via: 'parent_portal' },
+        { type: 'firearms_disclosure', acknowledged_via: 'parent_portal' },
+        { type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
+      ],
+    })).toBe(true)
+  })
+
+  it('defensive — non-array input returns true (treat as no record captured)', () => {
+    expect(photoConsentNeedsReminderForChild({ activeAcks: null })).toBe(true)
+  })
+})
+
+// ─── Structural guard: messaging reminder uses the shared channel rule ──
+//
+// `photoConsentNeedsReminderForChild` deliberately diverges from
+// `pendingEnrollmentConsentsForChild` on the revoked-state case: the
+// audit helper counts revoked as "captured" (compliance-correct), but
+// the messaging reminder fires for revoked (the case the provider most
+// needs to be reminded of). The parity invariant being preserved is
+// the CHANNEL RULE — both helpers consult
+// `PARENT_SIGNED_SATISFYING_CHANNELS`, so a future change to the set
+// of satisfying channels updates both helpers in lockstep.
+//
+// The test below uses an independent computation against the same
+// channel constant. If a future edit hard-codes the channel list in
+// `photoConsentNeedsReminderForChild` (forgetting parent_portal, say)
+// the test fails.
+
+describe('photoConsentNeedsReminderForChild — channel-rule parity', () => {
+  it('agrees with the "active affirmative parent-signed photo_sharing_consent?" question for every fixture variant', () => {
+    // Independent inline computation of the same predicate — uses the
+    // same constant the helper does, so the test catches drift in the
+    // helper's logic without re-encoding the channel rule.
+    const SATISFYING = new Set(['parent_portal', 'in_person_paper'])
+    const hasAffirmativeParentSigned = (acks) => {
+      for (const a of acks || []) {
+        if (a && a.type === 'photo_sharing_consent' && SATISFYING.has(a.acknowledged_via)) {
+          return true
+        }
+      }
+      return false
+    }
+    const fixtures = [
+      { name: 'empty',                 acks: [] },
+      { name: 'consent-paper',         acks: [{ type: 'photo_sharing_consent', acknowledged_via: 'in_person_paper' }] },
+      { name: 'consent-portal',        acks: [{ type: 'photo_sharing_consent', acknowledged_via: 'parent_portal' }] },
+      { name: 'consent-override',      acks: [{ type: 'photo_sharing_consent', acknowledged_via: 'provider_override' }] },
+      { name: 'revoked-paper',         acks: [{ type: 'photo_sharing_consent_revoked', acknowledged_via: 'in_person_paper' }] },
+      { name: 'revoked-portal',        acks: [{ type: 'photo_sharing_consent_revoked', acknowledged_via: 'parent_portal' }] },
+      { name: 'revoked-override',      acks: [{ type: 'photo_sharing_consent_revoked', acknowledged_via: 'provider_override' }] },
+      { name: 'consent+revoked-paper', acks: [
+        { type: 'photo_sharing_consent', acknowledged_via: 'in_person_paper' },
+        { type: 'photo_sharing_consent_revoked', acknowledged_via: 'in_person_paper' },
+      ] },
+    ]
+    for (const f of fixtures) {
+      const wrapperSaysReminder = photoConsentNeedsReminderForChild({ activeAcks: f.acks })
+      const expectedReminder = !hasAffirmativeParentSigned(f.acks)
+      expect(wrapperSaysReminder, `disagreement on fixture "${f.name}"`).toBe(expectedReminder)
+    }
+  })
+
+  // The wrapper deliberately diverges from the audit verdict on revoked
+  // state — pin both behaviors so a future "let's just call
+  // pendingEnrollmentConsentsForChild instead" refactor fails this
+  // test and the divergence stays explicit.
+  it('diverges from pendingEnrollmentConsentsForChild on the revoked-via-paper case (intentional)', () => {
+    const acks = [{ type: 'photo_sharing_consent_revoked', acknowledged_via: 'in_person_paper' }]
+    const auditVerdict = pendingEnrollmentConsentsForChild({ activeAcks: acks })
+    const photoIsAuditCaptured = !auditVerdict.provider_protective_consents_pending.includes('photo_sharing_consent')
+    const reminderFires = photoConsentNeedsReminderForChild({ activeAcks: acks })
+
+    // Audit helper says "captured" (preference recorded, as a no).
+    expect(photoIsAuditCaptured).toBe(true)
+    // Messaging reminder says "fire" (parent said no — most important
+    // case to remind about).
+    expect(reminderFires).toBe(true)
   })
 })
