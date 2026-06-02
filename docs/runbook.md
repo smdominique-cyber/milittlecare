@@ -45,6 +45,272 @@ against the actual table state are the only reliable confirmation.
 
 ## Pending Application
 
+### Migration 029 — `consent_attachments` table + `consent-attachments` storage bucket (Consent Attachments Part 1)
+
+**Status:** PENDING — written 2026-06-02, not yet applied to production. Awaits Seth's manual application via the Supabase web SQL editor and verification screenshots **including the four-test gate** (provider write/read; linked parent metadata list + Edge Function content read; cross-tenant parent denial via BOTH the metadata RLS and the Edge Function) before promotion to Migration History below.
+
+**File:** `supabase/migrations/029_consent_attachments.sql`
+
+**What it does:**
+- Creates `public.consent_attachments` — the polymorphic metadata table (provider-scoped) that holds file references for signed-paper-scan attachments to consent records. Polymorphic via `target_type` (`'acknowledgment'` | `'medication_authorization'`) + `target_id uuid`.
+- Soft-delete pair (`archived_at`, `archived_by`); 4-year `retention_until` default; no DELETE policy at table OR storage level.
+- RLS: provider SELECT/INSERT/UPDATE, plus a parent SELECT-only policy that performs the three-path join to verify parent_family_links → child → consent ownership (mirrors the Edge Function's resolution).
+- Creates the `consent-attachments` private storage bucket with the owner-only RLS template (first-folder-segment match) shared with `receipts` (mig 002) and `funding-documents` (mig 008).
+
+**Dependency:** migration 028 (`medication_authorizations`, `medication_administration_events`) must already be applied. If 028 is still pending, **apply 028 first** and verify (per its runbook entry below). The parent SELECT policy and the Edge Function both join through `medication_authorizations` for the medication-permission resolution path, and the `target_type='medication_authorization'` branch references that table.
+
+Also requires migration 024's `parent_family_links → children → acknowledgments` pattern (already applied per Migration History).
+
+**Apply procedure:** open the file on the feature branch, copy the entire contents, paste into the Supabase web SQL editor (production project), run. The migration is idempotent (IF NOT EXISTS, ON CONFLICT DO NOTHING for the bucket insert, DROP-then-CREATE for policies/triggers).
+
+The Edge Function `api/consent-attachment-url.js` is shipped in the same PR as application code; Vercel picks it up on the next deploy automatically. Required env vars (already present): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
+
+**Verification queries (paste each into the SQL editor and screenshot):**
+
+```sql
+-- (a) consent_attachments table exists with the expected columns.
+select column_name, data_type, is_nullable
+from information_schema.columns
+where table_schema='public' and table_name='consent_attachments'
+order by ordinal_position;
+-- expect: id, provider_id, target_type, target_id, storage_path,
+--         original_filename, content_type, file_size_bytes,
+--         uploaded_at, uploaded_by_user_id, retention_until,
+--         archived_at, archived_by, notes, created_at, updated_at
+--         (16 rows)
+```
+
+```sql
+-- (b) CHECK constraint on target_type is in place.
+select conname, pg_get_constraintdef(oid)
+from pg_constraint
+where conrelid = 'public.consent_attachments'::regclass
+  and contype = 'c';
+-- expect: chk_consent_attachments_target_type with
+--         CHECK (target_type = ANY (ARRAY['acknowledgment'::text, 'medication_authorization'::text]))
+```
+
+```sql
+-- (c) Both RLS policy sets exist on the metadata table.
+select policyname, cmd
+from pg_policies
+where schemaname='public' and tablename='consent_attachments'
+order by policyname;
+-- expect at least 4 policies:
+--   "Providers can view their own consent attachments" (SELECT)
+--   "Providers can insert their own consent attachments" (INSERT)
+--   "Providers can update their own consent attachments" (UPDATE)
+--   "Parents can list consent attachments for their children" (SELECT)
+-- NO DELETE policy.
+```
+
+```sql
+-- (d) Storage bucket exists and is private.
+select id, name, public
+from storage.buckets
+where id = 'consent-attachments';
+-- expect: 1 row; public = false.
+```
+
+```sql
+-- (e) Storage RLS policies exist (provider-only, no UPDATE).
+select policyname, cmd
+from pg_policies
+where schemaname='storage' and tablename='objects'
+  and policyname like '%consent attachments%'
+order by policyname;
+-- expect 3 policies (INSERT, SELECT, DELETE). NO UPDATE.
+```
+
+```sql
+-- (f) Indexes exist.
+select indexname, indexdef
+from pg_indexes
+where schemaname='public' and tablename='consent_attachments'
+order by indexname;
+-- expect:
+--   consent_attachments_pkey
+--   consent_attachments_target_active_idx        (partial)
+--   consent_attachments_provider_active_idx      (partial)
+--   consent_attachments_retention_idx            (partial)
+```
+
+```sql
+-- (g) Table is empty (no data backfill in this migration).
+select count(*) from public.consent_attachments;
+-- expect: 0.
+```
+
+### ⚠️ The four-test verification gate (the cross-tenant denial is the privacy boundary)
+
+The vitest suite cannot reach the Edge Function or the parent metadata RLS — both run against real auth in production. These four SQL/HTTP tests prove the privacy boundary. **Test 4 is the gate** — if either of its sub-checks leaks (Family A's attachment shows in Parent B's metadata list, OR the Edge Function returns a signed URL to Parent B), the feature is not safe to ship.
+
+#### Setup
+
+- **Two test families** (A and B) with at least one child each (`child_a`, `child_b`).
+- **Two test parents** (`parent_a` linked via `parent_family_links` to family A; `parent_b` linked to family B). Both with `status='active'`.
+- The signed-in **test provider** (the licensee for both families).
+- **One existing consent** for `child_a` — for example, a `field_trip_permission` ack row in `acknowledgments`. Note its `id` (you'll need it as `<ack_a_id>`).
+
+Find or create the IDs:
+
+```sql
+-- Get the children + their family ids:
+select c.id as child_id, c.first_name, c.family_id, f.family_name
+  from public.children c
+  join public.families f on f.id = c.family_id
+ where c.user_id = '<provider auth.uid()>'
+   and c.archived_at is null
+ order by f.family_name, c.first_name;
+
+-- Get the two test parents' auth uids + their family links:
+select pp.id as parent_user_id, pp.email, pfl.family_id, pfl.status
+  from public.parent_profiles pp
+  join public.parent_family_links pfl on pfl.parent_id = pp.id
+ where pp.email in ('<parent_a email>', '<parent_b email>')
+ order by pp.email;
+
+-- Find a child-scoped ack for child_a:
+select id from public.acknowledgments
+ where provider_id = '<provider auth.uid()>'
+   and subject_type = 'child'
+   and subject_id = '<child_a id>'
+   and archived_at is null
+ limit 1;
+```
+
+#### Test 1 — Provider write + provider read (must SUCCEED)
+
+```sql
+-- Insert a fake scan metadata row pointing at <ack_a_id>. In real
+-- use the UI uploads a file first; here we skip the actual file
+-- upload and seed the metadata directly to exercise the RLS path.
+-- Use a fake storage_path that follows the format the bucket
+-- expects: <provider_auth_uid>/<target_id>/<fake>.pdf
+insert into public.consent_attachments (
+  provider_id, target_type, target_id,
+  storage_path, original_filename, content_type, file_size_bytes,
+  uploaded_by_user_id, notes
+) values (
+  '<provider auth.uid()>',
+  'acknowledgment',
+  '<ack_a_id>',
+  '<provider auth.uid()>/<ack_a_id>/test-fake.pdf',
+  'test-fake.pdf',
+  'application/pdf',
+  12345,
+  '<provider auth.uid()>',
+  'Test row for Part 1 verification gate.'
+) returning id;
+-- Record the returned id as <attachment_a_id>.
+```
+
+```sql
+-- Provider reads via direct SELECT (provider RLS):
+select id, target_id, original_filename, archived_at
+  from public.consent_attachments
+ where id = '<attachment_a_id>';
+-- expect 1 row.
+```
+
+**Pass:** the row inserts and the provider can read it back.
+
+#### Test 2 — Linked parent (Parent A) metadata list (must SUCCEED)
+
+Sign in as **Parent A** via the parent portal (or use the supabase-js client with their JWT in a test harness).
+
+```sql
+-- As Parent A — direct SELECT against consent_attachments:
+select id, target_id, original_filename
+  from public.consent_attachments
+ where target_type = 'acknowledgment'
+   and target_id = '<ack_a_id>';
+-- expect 1 row (the test attachment). Parent metadata RLS allows.
+```
+
+**Pass:** Parent A sees the metadata row via the parent SELECT policy.
+
+#### Test 3 — Linked parent (Parent A) Edge Function content read (must SUCCEED)
+
+```bash
+# As Parent A (with their JWT), call the Edge Function:
+curl -X POST https://<preview-deploy>.vercel.app/api/consent-attachment-url \
+  -H "Authorization: Bearer <parent_a JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"attachment_id":"<attachment_a_id>"}'
+# expect: HTTP 200, { "signedUrl": "https://...", "expires_in_seconds": 900 }
+```
+
+**Pass:** Parent A receives a signed URL and (optionally) opening it in a browser would render the file (we seeded fake metadata so the file may 404 at storage; the function returning the signedUrl is the pass — separate from whether a real file exists).
+
+#### Test 4 — UNLINKED parent (Parent B) — THE PRIVACY BOUNDARY (must DENY on both sub-checks)
+
+##### 4a. Parent B direct SELECT (must return ZERO rows)
+
+Sign in as **Parent B**.
+
+```sql
+-- As Parent B — direct SELECT against the SAME attachment id:
+select id, target_id, original_filename
+  from public.consent_attachments
+ where id = '<attachment_a_id>';
+-- expect: ZERO rows. The parent metadata RLS denies.
+
+select id, target_id, original_filename
+  from public.consent_attachments
+ where target_type = 'acknowledgment'
+   and target_id = '<ack_a_id>';
+-- expect: ZERO rows. Same denial via the per-consent query.
+```
+
+##### 4b. Parent B Edge Function call (must return 404)
+
+```bash
+# As Parent B (with their JWT) — call the Edge Function with the SAME attachment_id:
+curl -X POST https://<preview-deploy>.vercel.app/api/consent-attachment-url \
+  -H "Authorization: Bearer <parent_b JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"attachment_id":"<attachment_a_id>"}'
+# expect: HTTP 404, { "error": "Not found" }
+# NO signed URL in the response. NO 200.
+```
+
+**Pass criteria (both sub-checks must deny):**
+- 4a: zero rows returned from both queries (the parent metadata RLS strips them).
+- 4b: HTTP 404 with no signedUrl in the body (the Edge Function denies via the parent_family_links check).
+
+**If either sub-check leaks** (4a returns the row, or 4b returns a signedUrl), the privacy boundary is broken. **Halt the deploy.** Do not proceed to Part 2 UI. Investigate the policy / function before promoting the migration to Migration History.
+
+#### Cleanup
+
+```sql
+-- Archive the test row when verification is complete:
+update public.consent_attachments
+   set archived_at = now()
+ where id = '<attachment_a_id>';
+```
+
+**Rollback (if needed — destructive):**
+
+⚠️ Do NOT rollback if production attachment rows exist — retention applies. Export the table first.
+
+```sql
+drop policy if exists "Providers can delete their own consent attachments" on storage.objects;
+drop policy if exists "Providers can view their own consent attachments" on storage.objects;
+drop policy if exists "Providers can upload their own consent attachments" on storage.objects;
+delete from storage.buckets where id = 'consent-attachments';
+
+drop policy if exists "Parents can list consent attachments for their children" on public.consent_attachments;
+drop policy if exists "Providers can update their own consent attachments" on public.consent_attachments;
+drop policy if exists "Providers can insert their own consent attachments" on public.consent_attachments;
+drop policy if exists "Providers can view their own consent attachments" on public.consent_attachments;
+drop trigger if exists consent_attachments_set_updated_at on public.consent_attachments;
+drop index if exists public.consent_attachments_retention_idx;
+drop index if exists public.consent_attachments_provider_active_idx;
+drop index if exists public.consent_attachments_target_active_idx;
+drop table if exists public.consent_attachments;
+```
+
 ### Migration 028 — medication authorizations + administration events + role-gate trigger (PR #20 Part 1)
 
 **Status:** PENDING — written 2026-06-02, not yet applied to production. Awaits Seth's manual application via the Supabase web SQL editor and verification screenshots **including the three trigger tests (Pair A negative + positive, Pair B positive)** before promotion to Migration History below.
