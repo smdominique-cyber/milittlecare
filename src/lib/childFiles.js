@@ -122,8 +122,90 @@ export const PARENT_SIGNED_TYPES = Object.freeze([
  * once; re-acknowledgment archives the prior row.
  */
 export const ENROLLMENT_CONSENT_TYPES = Object.freeze([
-  'field_trip_permission',         // R 400.1952(2) — non-vehicle field trips, sign at initial enrollment
+  'field_trip_permission',                  // R 400.1952(2) — non-vehicle field trips, sign at initial enrollment
+  // Consents Phase B (2026-06-01) — time-bound recurring (annual).
+  // Both share the same shape: parent-signed, one active row per
+  // (provider, type, child), expires_at = acknowledged_at + 1 year,
+  // renewal via archive-then-insert.
+  'transportation_routine_annual',          // R 400.1952(1)(a) — "at least annually"; R 400.8149(1) parallel center rule.
+  'water_activities_on_premises_seasonal',  // R 400.1934(10)(b) — "once per season"; "season" undefined, mapped to once annually per scope §7.
 ])
+
+/**
+ * Time-bound types (Consents Phase B) — the subset of
+ * ENROLLMENT_CONSENT_TYPES that carry an `expires_at` on every
+ * captured row. Read paths use this to know which types to render
+ * with renewal copy ("expired YYYY-MM-DD — needs renewal") versus
+ * sign-once copy ("not on file yet"). The write paths use it to
+ * know which inserts must set `expires_at = acknowledged_at + 1y`.
+ *
+ * The shape is type-level, not row-level: every row of a TIME_BOUND
+ * type carries `expires_at`; every row of a non-TIME_BOUND type
+ * leaves it NULL. This keeps the column purely additive
+ * (pre-Phase-B rows are unaffected) and the audit predicate
+ * NULL-safe.
+ */
+export const TIME_BOUND_TYPES = Object.freeze([
+  'transportation_routine_annual',
+  'water_activities_on_premises_seasonal',
+])
+
+/**
+ * Time-bound row write helper — returns the ISO timestamp that an
+ * insert / renewal should use for `expires_at`. Pure: takes the
+ * acknowledged_at value the caller is about to write, returns
+ * acknowledged_at + 1 year. Same formula for both Phase B types.
+ *
+ * @param {string|Date} acknowledgedAtIso  the row's acknowledged_at
+ * @returns {string}                       ISO timestamp +1 year
+ */
+export function computePhaseBExpiresAt(acknowledgedAtIso) {
+  const base = acknowledgedAtIso instanceof Date
+    ? acknowledgedAtIso
+    : new Date(acknowledgedAtIso || Date.now())
+  const out = new Date(base.getTime())
+  out.setUTCFullYear(out.getUTCFullYear() + 1)
+  return out.toISOString()
+}
+
+/**
+ * Partition active (non-archived) acknowledgment rows into the two
+ * arrays the Phase B verdict needs: currently-valid (`activeAcks`)
+ * vs. captured-but-lapsed (`expiredAcks`). Pure function — takes
+ * the wall-clock moment as an explicit argument so the verdict
+ * stays deterministic and the caller controls "now."
+ *
+ * Rows with `expires_at = NULL` are always in `activeAcks` (Phase A
+ * types, durable consents). Rows with `expires_at > now` are
+ * `activeAcks`. Rows with `expires_at <= now` are `expiredAcks`.
+ *
+ * @param {object} args
+ * @param {Array<{expires_at?: string|null}>} args.rows
+ * @param {Date|string|number} [args.now]  wall-clock "now"; default Date.now()
+ * @returns {{ activeAcks: object[], expiredAcks: object[] }}
+ */
+export function partitionAcksByExpiry({ rows, now } = {}) {
+  const list = Array.isArray(rows) ? rows : []
+  const nowMs = now != null
+    ? (now instanceof Date ? now.getTime() : Date.parse(String(now)))
+    : Date.now()
+  const activeAcks = []
+  const expiredAcks = []
+  for (const r of list) {
+    if (!r) continue
+    if (r.expires_at == null) {
+      activeAcks.push(r)
+      continue
+    }
+    const exp = Date.parse(r.expires_at)
+    if (!Number.isFinite(exp) || exp > nowMs) {
+      activeAcks.push(r)
+    } else {
+      expiredAcks.push(r)
+    }
+  }
+  return { activeAcks, expiredAcks }
+}
 
 /**
  * Enrollment-level PROVIDER-PROTECTIVE consents (Consents Phase A, 2026-05-30).
@@ -171,17 +253,34 @@ export const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
 
 /**
  * Single source of truth for "which enrollment consents are pending for
- * this one child?" Pure function — no Supabase, no I/O. Used by both
- * the provider-side audit helper (`getChildFilesAuditState`) and the
- * parent-side surfaces (`ParentAcknowledgmentsPage` tab badge,
- * `EnrollmentConsentsPendingBanner`). Both paths fetch acks under
- * different RLS contexts but apply the SAME verdict rule via this
- * function — keeps the two surfaces from drifting on:
+ * this one child?" Pure function — no Supabase, no I/O, no `now()`
+ * reference. Used by both the provider-side audit helper
+ * (`getChildFilesAuditState`) and the parent-side surfaces
+ * (`ParentAcknowledgmentsPage` tab badge,
+ * `EnrollmentConsentsPendingBanner`, `ParentEnrollmentConsentsPanel`).
+ * Both paths fetch acks under different RLS contexts but apply the
+ * SAME verdict rule via this function — keeps the surfaces from
+ * drifting on:
  *   - the channel rule (parent_portal / in_person_paper satisfy;
  *     provider_override alone does not),
  *   - the revocation-pair rule (an active `<type>_revoked` row recorded
  *     via a satisfying channel counts as "preference captured"),
- *   - the licensing-required vs provider-protective split.
+ *   - the licensing-required vs provider-protective split,
+ *   - the Phase B expiry distinction (captured-but-lapsed is a
+ *     different state than never-captured).
+ *
+ * ── Phase B addition (2026-06-01) ──
+ * The caller pre-partitions active-non-archived rows into two
+ * arrays via `partitionAcksByExpiry` (or its own equivalent):
+ *   - `activeAcks`  : rows with `expires_at IS NULL OR > now()`.
+ *                    These are CURRENTLY VALID.
+ *   - `expiredAcks` : rows with `expires_at <= now()`.
+ *                    These are CAPTURED BUT LAPSED.
+ * The verdict does pure set arithmetic over the two arrays; `now()`
+ * never appears in this function. Phase A callers that omit
+ * `expiredAcks` get the identical pre-Phase-B behavior (every Phase
+ * A type has `expires_at = NULL`, so the partition puts everything in
+ * `activeAcks` anyway).
  *
  * The function returns the per-child verdict only. Each caller
  * aggregates as it needs — slot-counts + children-affected on the
@@ -189,42 +288,65 @@ export const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
  *
  * @param {object}   args
  * @param {Array<{type: string, acknowledged_via: string}>} args.activeAcks
- *   The child's active (non-archived) acknowledgment rows. Each row
- *   must carry at least `type` and `acknowledged_via`. Extra fields
- *   are ignored — both call sites pass slightly different projections.
+ *   The child's currently-valid acknowledgment rows. Each row must
+ *   carry at least `type` and `acknowledged_via`. Extra fields are
+ *   ignored — both call sites pass slightly different projections.
+ * @param {Array<{type: string, acknowledged_via: string}>} [args.expiredAcks=[]]
+ *   The child's captured-but-lapsed rows (active in the DB sense —
+ *   `archived_at IS NULL` — but past `expires_at`). Used to
+ *   distinguish "captured then lapsed" from "never captured."
  * @returns {{
  *   enrollment_consents_pending:           string[],
+ *   enrollment_consents_expired:           string[],
  *   provider_protective_consents_pending:  string[],
  *   any_pending:                           boolean,
  * }}
  */
-export function pendingEnrollmentConsentsForChild({ activeAcks }) {
-  const rows = Array.isArray(activeAcks) ? activeAcks : []
+export function pendingEnrollmentConsentsForChild({ activeAcks, expiredAcks } = {}) {
+  const active = Array.isArray(activeAcks) ? activeAcks : []
+  const expired = Array.isArray(expiredAcks) ? expiredAcks : []
 
-  // Build the set of types this child has acknowledged via a channel
-  // that satisfies the parent-signed rule. provider_override rows are
-  // filtered out here — they exist in the audit trail but do NOT count
-  // as preference captured.
+  // Set of types this child has captured via a satisfying channel
+  // and that are CURRENTLY VALID. provider_override rows are filtered
+  // out — they exist in the audit trail but do NOT count as
+  // preference captured.
   const satisfyingTypes = new Set()
-  for (const a of rows) {
+  for (const a of active) {
     if (!a || !a.type) continue
     if (!PARENT_SIGNED_SATISFYING_CHANNELS.includes(a.acknowledged_via)) continue
     satisfyingTypes.add(a.type)
   }
 
-  // Licensing-required: each type is pending iff there is no
-  // satisfying ack of that exact type. No revocation concept — a
-  // licensing-required ack is signed once; re-acknowledgment archives
-  // the prior row.
+  // Set of types this child once captured (via a satisfying channel)
+  // that have since lapsed. A provider_override row that's expired
+  // is NOT counted as "captured then lapsed" — the parent never
+  // signed in the first place, so the type is still "never captured."
+  const expiredSatisfyingTypes = new Set()
+  for (const a of expired) {
+    if (!a || !a.type) continue
+    if (!PARENT_SIGNED_SATISFYING_CHANNELS.includes(a.acknowledged_via)) continue
+    expiredSatisfyingTypes.add(a.type)
+  }
+
+  // Licensing-required: split into pending (never captured) vs.
+  // expired (captured-but-lapsed). A currently-valid satisfying row
+  // wins over an expired one (a renewed type isn't expired).
   const enrollment_consents_pending = []
+  const enrollment_consents_expired = []
   for (const t of ENROLLMENT_CONSENT_TYPES) {
-    if (!satisfyingTypes.has(t)) enrollment_consents_pending.push(t)
+    if (satisfyingTypes.has(t)) continue
+    if (expiredSatisfyingTypes.has(t)) {
+      enrollment_consents_expired.push(t)
+    } else {
+      enrollment_consents_pending.push(t)
+    }
   }
 
   // Provider-protective: each type is pending iff NEITHER a satisfying
   // consent ack of the type NOR a satisfying revocation-pair ack
   // exists. An active revocation pair means the parent has expressed
-  // a "no" — preference captured, just as a no.
+  // a "no" — preference captured, just as a no. No expiry concept
+  // for this category (the existing types are durable Phase A).
   const provider_protective_consents_pending = []
   for (const t of PROVIDER_PROTECTIVE_CONSENT_TYPES) {
     if (satisfyingTypes.has(t)) continue
@@ -235,9 +357,11 @@ export function pendingEnrollmentConsentsForChild({ activeAcks }) {
 
   return {
     enrollment_consents_pending,
+    enrollment_consents_expired,
     provider_protective_consents_pending,
     any_pending:
       enrollment_consents_pending.length > 0 ||
+      enrollment_consents_expired.length > 0 ||
       provider_protective_consents_pending.length > 0,
   }
 }
@@ -449,6 +573,17 @@ export async function getChildFilesAuditState(licenseeId) {
     pending_provider_protective_consents: emptyProviderProtectiveConsentsBreakdown(),
     children_with_pending_enrollment_consents_count: 0,
     children_with_pending_provider_protective_consents_count: 0,
+    // Consents Phase B (2026-06-01) — time-bound expiry tracking.
+    // A consent is "expired" when its row is active (archived_at IS NULL)
+    // under a satisfying channel but `expires_at <= now()`. The
+    // `_pending_count` counts NEVER-CAPTURED slots; the `_expired_count`
+    // counts CAPTURED-BUT-LAPSED slots. Both contribute to
+    // `children_with_pending_enrollment_consents_count` (a child with
+    // any compliance gap, pending or expired, is "affected"). PR #22
+    // weighs the two states separately — see pr-consents-B-scope.md
+    // § Classification.
+    pending_enrollment_consents_expired_count: 0,
+    pending_enrollment_consents_expired: emptyEnrollmentConsentsBreakdown(),
   }
 
   if (!licenseeId) return empty
@@ -490,11 +625,14 @@ export async function getChildFilesAuditState(licenseeId) {
   //    satisfaction rule (see the regulatory note at the top of this
   //    file: parent-signed types are satisfied only by parent_portal /
   //    in_person_paper rows; lead is satisfied by any active row).
+  //    Phase B (2026-06-01): we additionally select `expires_at` and
+  //    partition the rows into currently-valid vs. expired before
+  //    feeding the verdict. The verdict stays pure (no now() inside).
   let acks = []
   try {
     const { data, error } = await supabase
       .from('acknowledgments')
-      .select('subject_id, type, acknowledged_via')
+      .select('subject_id, type, acknowledged_via, expires_at')
       .eq('provider_id', licenseeId)
       .eq('subject_type', 'child')
       .in('subject_id', childIds)
@@ -521,21 +659,48 @@ export async function getChildFilesAuditState(licenseeId) {
     }
   }
 
-  // Index acks per child:
-  //   anyChannelByChild  : childId -> Set<type>   any active row, any channel
-  //   parentSignedByChild: childId -> Set<type>   active row with channel
-  //                                                 IN PARENT_SIGNED_SATISFYING_CHANNELS
-  // Parent-signed types check against parentSignedByChild; inform-only
-  // types check against anyChannelByChild.
+  // Index acks per child. Phase B (2026-06-01) split:
+  //   anyChannelByChild       : childId -> Set<type>  any CURRENTLY-VALID
+  //                                                    row, any channel.
+  //                                                    Expired rows excluded
+  //                                                    — they no longer
+  //                                                    inform the parent.
+  //   parentSignedByChild     : childId -> Set<type>  currently-valid row
+  //                                                    with channel IN
+  //                                                    PARENT_SIGNED_SATISFYING_CHANNELS.
+  //   activeAcksByChild       : childId -> object[]   currently-valid rows.
+  //   expiredAcksByChild      : childId -> object[]   active-in-DB-sense
+  //                                                    (archived_at IS NULL)
+  //                                                    but past expires_at.
+  // The two raw-rows Maps feed `pendingEnrollmentConsentsForChild`
+  // separately so the verdict can distinguish never-captured from
+  // captured-but-lapsed without referencing now() itself.
+  //
+  // Lead (inform-only) uses anyChannelByChild — an expired lead
+  // disclosure stops counting because the rule's "informed" state
+  // refers to current standing. (Lead never gets expires_at set today,
+  // so this is a no-op for it; the structure is consistent across
+  // all read paths.)
   const PARENT_SIGNED_SATISFYING_SET = new Set(PARENT_SIGNED_SATISFYING_CHANNELS)
+  const nowMs = Date.now()
   const anyChannelByChild = new Map()
   const parentSignedByChild = new Map()
-  // Per-child raw ack rows — fed to `pendingEnrollmentConsentsForChild`
-  // for the enrollment-consent blocks. Same data the intake-bundle
-  // indexes are built from; one extra Map.
-  const allAcksByChild = new Map()
+  const activeAcksByChild = new Map()
+  const expiredAcksByChild = new Map()
   for (const a of acks) {
     if (!a || !a.subject_id) continue
+    const expMs = a.expires_at == null ? null : Date.parse(a.expires_at)
+    const isExpired = expMs != null && Number.isFinite(expMs) && expMs <= nowMs
+
+    if (isExpired) {
+      let ex = expiredAcksByChild.get(a.subject_id)
+      if (!ex) { ex = []; expiredAcksByChild.set(a.subject_id, ex) }
+      ex.push(a)
+      // Expired rows do NOT inform anyChannelByChild or
+      // parentSignedByChild — current standing only.
+      continue
+    }
+
     let any = anyChannelByChild.get(a.subject_id)
     if (!any) { any = new Set(); anyChannelByChild.set(a.subject_id, any) }
     any.add(a.type)
@@ -544,8 +709,8 @@ export async function getChildFilesAuditState(licenseeId) {
       if (!ps) { ps = new Set(); parentSignedByChild.set(a.subject_id, ps) }
       ps.add(a.type)
     }
-    let raw = allAcksByChild.get(a.subject_id)
-    if (!raw) { raw = []; allAcksByChild.set(a.subject_id, raw) }
+    let raw = activeAcksByChild.get(a.subject_id)
+    if (!raw) { raw = []; activeAcksByChild.set(a.subject_id, raw) }
     raw.push(a)
   }
 
@@ -617,19 +782,34 @@ export async function getChildFilesAuditState(licenseeId) {
   let pending_enrollment_consents_count = 0
   let children_with_pending_enrollment_consents_count = 0
 
+  // Phase B (2026-06-01) — expired-consent breakdown. Same keys as the
+  // pending breakdown so consumers can read the shape stably.
+  const pending_enrollment_consents_expired = emptyEnrollmentConsentsBreakdown()
+  let pending_enrollment_consents_expired_count = 0
+
   const pending_provider_protective_consents = emptyProviderProtectiveConsentsBreakdown()
   let pending_provider_protective_consents_count = 0
   let children_with_pending_provider_protective_consents_count = 0
 
   for (const c of children) {
-    const activeAcks = allAcksByChild.get(c.id) || []
-    const verdict = pendingEnrollmentConsentsForChild({ activeAcks })
+    const activeAcks = activeAcksByChild.get(c.id) || []
+    const expiredAcks = expiredAcksByChild.get(c.id) || []
+    const verdict = pendingEnrollmentConsentsForChild({ activeAcks, expiredAcks })
 
     for (const t of verdict.enrollment_consents_pending) {
       pending_enrollment_consents[t] += 1
       pending_enrollment_consents_count += 1
     }
-    if (verdict.enrollment_consents_pending.length > 0) {
+    for (const t of verdict.enrollment_consents_expired) {
+      pending_enrollment_consents_expired[t] += 1
+      pending_enrollment_consents_expired_count += 1
+    }
+    // children_with_pending_enrollment_consents_count tracks children
+    // with ANY licensing-required compliance gap (pending OR expired).
+    // PR #22 may weight pending and expired separately, but the
+    // children-affected metric counts the child once either way.
+    if (verdict.enrollment_consents_pending.length > 0
+      || verdict.enrollment_consents_expired.length > 0) {
       children_with_pending_enrollment_consents_count += 1
     }
 
@@ -659,6 +839,8 @@ export async function getChildFilesAuditState(licenseeId) {
     pending_provider_protective_consents,
     children_with_pending_enrollment_consents_count,
     children_with_pending_provider_protective_consents_count,
+    pending_enrollment_consents_expired_count,
+    pending_enrollment_consents_expired,
   }
 }
 

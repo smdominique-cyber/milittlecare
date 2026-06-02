@@ -133,6 +133,51 @@ export const ACK_TYPES = Object.freeze({
   // stop photo-attachment sends through the messaging system. The
   // record is captured; the enforcement is a fast-follow PR.
   PHOTO_SHARING_CONSENT_REVOKED:     'photo_sharing_consent_revoked',
+
+  // ─── Time-bound recurring consents (Consents Phase B, 2026-06-01) ──
+  //
+  // Same polymorphic shape as the Phase A enrollment consents
+  // (subject_type='child', subject_id=<child uuid>, one active row
+  // per (provider_id, type, child)), but with an EXPIRY DIMENSION
+  // the engine learned in migration 026: each Phase B row carries
+  // `expires_at = acknowledged_at + interval '1 year'`. The read
+  // predicate `archived_at IS NULL AND (expires_at IS NULL OR
+  // expires_at > now())` filters expired rows out of "currently
+  // satisfied." The verdict function distinguishes the two states
+  // (never-captured vs. captured-but-lapsed) via two pre-partitioned
+  // arrays — see `pendingEnrollmentConsentsForChild` in childFiles.js.
+  //
+  // Both Phase B types use the SAME annual cadence:
+  //   - Routine transportation per R 400.1952(1)(a) "at least
+  //     annually" (parallel center rule R 400.8149(1) confirms).
+  //   - On-premises water per R 400.1934(10)(b) "once per season."
+  //     "Season" is undefined anywhere in the Michigan child-care
+  //     rules; the provider-adopted operating interpretation maps
+  //     it to once annually, renewed each spring ahead of the
+  //     water-activity months. This is the single knob that
+  //     changes if a licensing consultant later defines "season."
+  //
+  // BOUNDARY WITH PHASE C: R 400.1901(1)(jj) — "routine
+  // transportation" is regularly scheduled travel on the same day
+  // of the week, at the same time, to the same destination. ANY
+  // DEVIATION is nonroutine transportation. The annual blanket
+  // (Phase B) covers the routine pattern; deviations go through
+  // Phase C's per-trip dimension (still deferred).
+  //
+  // RENEWAL = archive prior row + insert new row, same archive-
+  // then-insert protocol as Phase A re-ack. Mandatory because the
+  // `acknowledgments_active_unique` partial index still considers
+  // an expired-but-not-archived row "active"; insert-before-archive
+  // would violate the unique constraint.
+  //
+  // CHANNEL: parent-signed under R 400.1907's same rule. Only
+  // parent_portal / in_person_paper satisfy; provider_override
+  // alone does NOT (same rule as field_trip_permission and the
+  // intake parent-signed types).
+  //
+  // CONSENT CATEGORY tag: both LICENSING-REQUIRED for PR #22.
+  TRANSPORTATION_ROUTINE_ANNUAL:         'transportation_routine_annual',
+  WATER_ACTIVITIES_ON_PREMISES_SEASONAL: 'water_activities_on_premises_seasonal',
 })
 
 /**

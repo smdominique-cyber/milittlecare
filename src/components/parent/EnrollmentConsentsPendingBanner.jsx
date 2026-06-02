@@ -28,7 +28,13 @@ import { supabase } from '@/lib/supabase'
 // shared verdict function the provider audit helper does. Inline logic
 // was here previously; the drift risk on the revocation-pair rule is
 // now structurally eliminated.
-import { pendingEnrollmentConsentsForChild } from '@/lib/childFiles'
+// Consents Phase B (2026-06-01): the banner now also partitions acks
+// by expiry before feeding the verdict, so the "captured then lapsed"
+// state surfaces in the banner copy alongside "never captured."
+import {
+  pendingEnrollmentConsentsForChild,
+  partitionAcksByExpiry,
+} from '@/lib/childFiles'
 
 /**
  * @param {object} props
@@ -77,19 +83,24 @@ export default function EnrollmentConsentsPendingBanner({ children: childrenProp
         // 2) Pull active enrollment-consent acks for those children.
         //    Parent has RLS SELECT on their linked children's acks
         //    (migration 024). Projection covers everything the shared
-        //    verdict function reads — `type` and `acknowledged_via`.
+        //    verdict function reads — `type`, `acknowledged_via`, and
+        //    (Phase B, 2026-06-01) `expires_at` so we can partition
+        //    captured-but-lapsed rows from currently-valid ones.
         const ackResp = await supabase
           .from('acknowledgments')
-          .select('subject_id, type, acknowledged_via')
+          .select('subject_id, type, acknowledged_via, expires_at')
           .eq('subject_type', 'child')
           .in('subject_id', kids.map(k => k.id))
           .is('archived_at', null)
         if (cancelled) return
 
-        // 3) Group raw acks per child and feed each child's set to
-        //    the shared verdict function. Same function the provider
-        //    audit helper calls — channel rule + revocation-pair rule
-        //    live in one place.
+        // 3) Group raw acks per child, partition each child's acks
+        //    into currently-valid vs. expired via the shared helper,
+        //    then feed both arrays to the shared verdict. The verdict
+        //    distinguishes never-captured (pending) from
+        //    captured-but-lapsed (expired); the banner surfaces
+        //    either as a compliance gap (any_pending = true if
+        //    either is non-empty).
         const acksByChild = new Map()
         for (const a of ackResp.data || []) {
           let list = acksByChild.get(a.subject_id)
@@ -98,8 +109,12 @@ export default function EnrollmentConsentsPendingBanner({ children: childrenProp
         }
         const affected = []
         for (const k of kids) {
+          const { activeAcks, expiredAcks } = partitionAcksByExpiry({
+            rows: acksByChild.get(k.id) || [],
+          })
           const verdict = pendingEnrollmentConsentsForChild({
-            activeAcks: acksByChild.get(k.id) || [],
+            activeAcks,
+            expiredAcks,
           })
           if (verdict.any_pending) affected.push(k)
         }

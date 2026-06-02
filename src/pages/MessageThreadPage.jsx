@@ -16,7 +16,10 @@ import {
 // of pendingEnrollmentConsentsForChild that exposes the photo-specific
 // verdict for the non-blocking reminder. Single source of truth for
 // the channel rule across all four consent surfaces.
-import { photoConsentNeedsReminderForChild } from '@/lib/childFiles'
+import {
+  photoConsentNeedsReminderForChild,
+  partitionAcksByExpiry,
+} from '@/lib/childFiles'
 import { ChevronLeft, ImagePlus, Send, X, AlertCircle } from 'lucide-react'
 import '@/styles/messages.css'
 
@@ -122,9 +125,17 @@ export default function MessageThreadPage() {
   // RLS on acknowledgments (migration 024) permits this read.
   async function loadPhotoConsentReminderState(targetChildId) {
     try {
+      // Consents Phase B (2026-06-01) — select expires_at and apply
+      // the expiry-aware filter for consistency across all consent
+      // read paths. Photo consent has no expiry today (expires_at is
+      // always NULL for photo_sharing_consent / _revoked rows), so
+      // the filter is a no-op here — but applying it uniformly keeps
+      // every read surface consistent with the audit predicate and
+      // prevents drift if a future feature ever sets expires_at on
+      // a photo-consent row.
       const { data, error: ackErr } = await supabase
         .from('acknowledgments')
-        .select('type, acknowledged_via')
+        .select('type, acknowledged_via, expires_at')
         .eq('provider_id', licenseeId)
         .eq('subject_type', 'child')
         .eq('subject_id', targetChildId)
@@ -139,8 +150,13 @@ export default function MessageThreadPage() {
         setPhotoConsentReminder(true)
         return
       }
+      // Partition by the expiry predicate; only currently-valid rows
+      // inform the photo verdict. Expired rows are ignored here (the
+      // photo verdict reads only photo_sharing_consent rows under a
+      // satisfying channel — same semantic as before Phase B).
+      const { activeAcks } = partitionAcksByExpiry({ rows: data || [] })
       setPhotoConsentReminder(
-        photoConsentNeedsReminderForChild({ activeAcks: data || [] })
+        photoConsentNeedsReminderForChild({ activeAcks })
       )
     } catch {
       // Same fire-on-uncertainty rule as the ackErr branch above —
