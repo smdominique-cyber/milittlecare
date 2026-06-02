@@ -178,6 +178,50 @@ export const ACK_TYPES = Object.freeze({
   // CONSENT CATEGORY tag: both LICENSING-REQUIRED for PR #22.
   TRANSPORTATION_ROUTINE_ANNUAL:         'transportation_routine_annual',
   WATER_ACTIVITIES_ON_PREMISES_SEASONAL: 'water_activities_on_premises_seasonal',
+
+  // ─── Per-occurrence consents (Consents Phase C, 2026-06-01) ──
+  //
+  // Event records, NOT enrollment state. One acknowledgments row per
+  // trip / outing — multiple ACTIVE rows per (provider, type, child)
+  // are EXPECTED and permitted by the relaxed
+  // `acknowledgments_active_unique` partial index (migration 027). A
+  // new trip is a new row, never a re-ack. No expires_at — these are
+  // durable, tied to a specific event date in `occurrence_metadata`.
+  //
+  // BOUNDARY WITH PHASE B (verbatim from rules PDF):
+  //   R 400.1952(1)(b) "Nonroutine transportation, before each trip."
+  //   R 400.1934(10)(a) "Before each outdoor water activity at a
+  //                      swimming pool, lake, or other body of water
+  //                      off the child care home premises."
+  // Phase B ships the (a)/(b) durable counterparts (annual routine
+  // transport, seasonal on-premises water). Phase C ships the
+  // per-occurrence other half. The R 400.1901(1)(jj) "any deviation"
+  // clause for transport and R 400.1901(1)(yy) for the water-activity
+  // scope (water-table play / slip-and-slide / wading pools /
+  // sprinklers DO NOT count) are the precise boundaries.
+  //
+  // AUDIT SEMANTIC: these types are NOT counted in
+  // `enrollment_consents_pending` or `enrollment_consents_expired`.
+  // A child with no recorded trips is NOT non-compliant — there is
+  // no "should be on file" verdict for an event consent. The verdict
+  // function excludes them via `PER_OCCURRENCE_CONSENT_TYPES`
+  // (kept structurally separate from `ENROLLMENT_CONSENT_TYPES` —
+  // see childFiles.js for rationale).
+  //
+  // CHANNEL: same parent-signed rule. Only parent_portal /
+  // in_person_paper satisfy; provider_override alone does not.
+  //
+  // METADATA: each row carries an `occurrence_metadata jsonb` payload
+  // (trip_date + destination for transport; outing_date +
+  // water_body_type + location for water). Shape validated by
+  // helpers in `src/lib/childFiles.js` — DO NOT construct the jsonb
+  // inline at call sites or field-name drift creeps in.
+  //
+  // CONSENT CATEGORY tag: both LICENSING-REQUIRED for PR #22, but
+  // they are EVENT RECORDS, not enrollment-state gaps — the score
+  // must treat them as a recency signal, not a "pending" gap.
+  TRANSPORTATION_NONROUTINE_PER_TRIP:        'transportation_nonroutine_per_trip',
+  WATER_ACTIVITIES_OFF_PREMISES_PER_TRIP:    'water_activities_off_premises_per_trip',
 })
 
 /**

@@ -125,6 +125,12 @@ describe('getChildFilesAuditState', () => {
       // Phase B (2026-06-01) — expired-state tracking on time-bound types.
       pending_enrollment_consents_expired_count: 0,
       pending_enrollment_consents_expired: emptyEnrollmentConsentsBreakdown(),
+      // Phase C (2026-06-01) — per-occurrence event-record rollup
+      // (informational, NOT a compliance signal).
+      per_occurrence_consents_recorded: {
+        transportation_nonroutine_per_trip: 0,
+        water_activities_off_premises_per_trip: 0,
+      },
     })
   })
 
@@ -151,6 +157,7 @@ describe('getChildFilesAuditState', () => {
       'domain',
       'intake_complete_count',
       'intake_incomplete_count',
+      // Phase C (2026-06-01) — informational per-occurrence rollup.
       'pending_enrollment_consents',
       'pending_enrollment_consents_count',
       'pending_enrollment_consents_expired',
@@ -160,6 +167,7 @@ describe('getChildFilesAuditState', () => {
       'pending_parent_signatures_count',
       'pending_provider_protective_consents',
       'pending_provider_protective_consents_count',
+      'per_occurrence_consents_recorded',
       'type',
     ])
     expect(out.domain).toBe('child_files')
@@ -1690,5 +1698,337 @@ describe('Phase B renewal protocol — archive-then-insert state transitions', (
     // Sanity: priorAtExpiry is in the future at NOW (i.e., early
     // renewal really is "renewing before lapse").
     expect(Date.parse(priorAtExpiry)).toBeGreaterThan(NOW.getTime())
+  })
+})
+
+// ─── Consents Phase C (2026-06-01) — per-occurrence consents ──
+//
+// Exercises the verdict exclusion (per-occurrence types are NOT in
+// the pending/expired rollup — a child with no recorded trips is NOT
+// non-compliant), the metadata helpers (single source of truth for
+// the jsonb shape; throw on missing required fields; strip unknown
+// keys), the audit-state rollup (per_occurrence_consents_recorded
+// counts distinct children per type), and the backward-compat
+// invariant (durable types and existing rows unaffected).
+
+const {
+  PER_OCCURRENCE_CONSENT_TYPES,
+  WATER_BODY_TYPE_OPTIONS,
+  buildTransportNonroutineOccurrenceMetadata,
+  buildWaterOffPremisesOccurrenceMetadata,
+} = await import('./childFiles')
+
+describe('Phase C constants — PER_OCCURRENCE_CONSENT_TYPES', () => {
+  it('enumerates exactly the two per-occurrence types', () => {
+    expect([...PER_OCCURRENCE_CONSENT_TYPES].sort()).toEqual([
+      'transportation_nonroutine_per_trip',
+      'water_activities_off_premises_per_trip',
+    ])
+  })
+
+  it('water-body-type options match the helper enum', () => {
+    expect([...WATER_BODY_TYPE_OPTIONS]).toEqual([
+      'pool', 'lake', 'pond', 'river', 'beach', 'other',
+    ])
+  })
+})
+
+describe('Phase C metadata helpers — single source of truth', () => {
+  describe('buildTransportNonroutineOccurrenceMetadata', () => {
+    it('returns the validated shape for the happy path', () => {
+      const out = buildTransportNonroutineOccurrenceMetadata({
+        trip_date: '2026-07-15',
+        destination: 'Public library',
+        purpose: 'Story time',
+        vehicle_description: "Provider's minivan",
+        estimated_return: '2026-07-15T12:00:00Z',
+      })
+      expect(out).toEqual({
+        trip_date: '2026-07-15',
+        destination: 'Public library',
+        purpose: 'Story time',
+        vehicle_description: "Provider's minivan",
+        estimated_return: '2026-07-15T12:00:00Z',
+      })
+    })
+
+    it('throws on missing required field (trip_date)', () => {
+      expect(() => buildTransportNonroutineOccurrenceMetadata({
+        destination: 'Library',
+      })).toThrow(/trip_date/)
+    })
+
+    it('throws on missing required field (destination)', () => {
+      expect(() => buildTransportNonroutineOccurrenceMetadata({
+        trip_date: '2026-07-15',
+      })).toThrow(/destination/)
+    })
+
+    it('throws on blank required field', () => {
+      expect(() => buildTransportNonroutineOccurrenceMetadata({
+        trip_date: '2026-07-15',
+        destination: '   ',
+      })).toThrow(/destination/)
+    })
+
+    it('omits empty optional fields rather than carrying them as blank strings', () => {
+      const out = buildTransportNonroutineOccurrenceMetadata({
+        trip_date: '2026-07-15',
+        destination: 'Library',
+        purpose: '',
+        vehicle_description: '   ',
+      })
+      expect(out).toEqual({
+        trip_date: '2026-07-15',
+        destination: 'Library',
+      })
+    })
+
+    it('strips unknown keys (defense against field-name typos at call sites)', () => {
+      const out = buildTransportNonroutineOccurrenceMetadata({
+        trip_date: '2026-07-15',
+        destination: 'Library',
+        tripDate: '2026-08-20',   // typo: camelCase, should be silently dropped
+        random: 'noise',
+      })
+      expect(out).not.toHaveProperty('tripDate')
+      expect(out).not.toHaveProperty('random')
+      expect(out.trip_date).toBe('2026-07-15')
+    })
+
+    it('trims string values', () => {
+      const out = buildTransportNonroutineOccurrenceMetadata({
+        trip_date: '  2026-07-15  ',
+        destination: '  Library  ',
+      })
+      expect(out.trip_date).toBe('2026-07-15')
+      expect(out.destination).toBe('Library')
+    })
+  })
+
+  describe('buildWaterOffPremisesOccurrenceMetadata', () => {
+    it('returns the validated shape for the happy path', () => {
+      const out = buildWaterOffPremisesOccurrenceMetadata({
+        outing_date: '2026-08-10',
+        water_body_type: 'pool',
+        location: 'Community Pool',
+        address: '123 Main St',
+        supervising_adult: 'Provider',
+      })
+      expect(out).toEqual({
+        outing_date: '2026-08-10',
+        water_body_type: 'pool',
+        location: 'Community Pool',
+        address: '123 Main St',
+        supervising_adult: 'Provider',
+      })
+    })
+
+    it('throws on missing required field (water_body_type)', () => {
+      expect(() => buildWaterOffPremisesOccurrenceMetadata({
+        outing_date: '2026-08-10',
+        location: 'Pool',
+      })).toThrow(/water_body_type/)
+    })
+
+    it('throws on water_body_type outside the enum', () => {
+      expect(() => buildWaterOffPremisesOccurrenceMetadata({
+        outing_date: '2026-08-10',
+        water_body_type: 'aquifer',
+        location: 'Pool',
+      })).toThrow(/water_body_type must be one of/)
+    })
+
+    it('accepts every enum value', () => {
+      for (const t of WATER_BODY_TYPE_OPTIONS) {
+        const out = buildWaterOffPremisesOccurrenceMetadata({
+          outing_date: '2026-08-10',
+          water_body_type: t,
+          location: 'X',
+        })
+        expect(out.water_body_type).toBe(t)
+      }
+    })
+  })
+})
+
+describe('Phase C verdict — per-occurrence types excluded from pending/expired', () => {
+  it('a child with NO rows of any type → per-occurrence types do NOT appear in enrollment_consents_pending', () => {
+    const v = pendingEnrollmentConsentsForChild({ activeAcks: [], expiredAcks: [] })
+    expect(v.enrollment_consents_pending).not.toContain('transportation_nonroutine_per_trip')
+    expect(v.enrollment_consents_pending).not.toContain('water_activities_off_premises_per_trip')
+    expect(v.enrollment_consents_expired).not.toContain('transportation_nonroutine_per_trip')
+    expect(v.enrollment_consents_expired).not.toContain('water_activities_off_premises_per_trip')
+  })
+
+  it('a child with multiple active per-occurrence rows → still not in pending/expired (event records, not enrollment state)', () => {
+    const v = pendingEnrollmentConsentsForChild({
+      activeAcks: [
+        { type: 'transportation_nonroutine_per_trip', acknowledged_via: 'in_person_paper' },
+        { type: 'transportation_nonroutine_per_trip', acknowledged_via: 'in_person_paper' },
+        { type: 'water_activities_off_premises_per_trip', acknowledged_via: 'in_person_paper' },
+      ],
+      expiredAcks: [],
+    })
+    expect(v.enrollment_consents_pending).not.toContain('transportation_nonroutine_per_trip')
+    expect(v.enrollment_consents_pending).not.toContain('water_activities_off_premises_per_trip')
+    expect(v.enrollment_consents_expired).not.toContain('transportation_nonroutine_per_trip')
+  })
+
+  it('a child with every durable consent captured AND per-occurrence rows → any_pending=false', () => {
+    // The any_pending verdict must NOT trip just because per-occurrence
+    // rows exist. The presence of trip consents is not a compliance gap.
+    const farFuture = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+    const rows = [
+      { type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
+      { type: 'transportation_routine_annual', acknowledged_via: 'in_person_paper', expires_at: farFuture },
+      { type: 'water_activities_on_premises_seasonal', acknowledged_via: 'in_person_paper', expires_at: farFuture },
+      { type: 'photo_sharing_consent', acknowledged_via: 'in_person_paper' },
+      // Per-occurrence rows — must NOT trigger any_pending.
+      { type: 'transportation_nonroutine_per_trip', acknowledged_via: 'in_person_paper' },
+      { type: 'water_activities_off_premises_per_trip', acknowledged_via: 'in_person_paper' },
+    ]
+    const { activeAcks, expiredAcks } = partitionAcksByExpiry({ rows, now: new Date() })
+    const v = pendingEnrollmentConsentsForChild({ activeAcks, expiredAcks })
+    expect(v.any_pending).toBe(false)
+  })
+
+  it('absent per-occurrence rows do NOT mark a child non-compliant (the perpetual-pending failure mode)', () => {
+    // This is the decision-5 failure-mode test: a child with every
+    // durable consent captured BUT no per-occurrence rows must read
+    // as any_pending=false. Phase C's exclusion is what prevents the
+    // perpetual-pending bug.
+    const farFuture = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+    const rows = [
+      { type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
+      { type: 'transportation_routine_annual', acknowledged_via: 'in_person_paper', expires_at: farFuture },
+      { type: 'water_activities_on_premises_seasonal', acknowledged_via: 'in_person_paper', expires_at: farFuture },
+      { type: 'photo_sharing_consent', acknowledged_via: 'in_person_paper' },
+      // NO per-occurrence rows — child has had no trips this year.
+    ]
+    const { activeAcks, expiredAcks } = partitionAcksByExpiry({ rows, now: new Date() })
+    const v = pendingEnrollmentConsentsForChild({ activeAcks, expiredAcks })
+    expect(v.any_pending).toBe(false)
+    expect(v.enrollment_consents_pending).toEqual([])
+    expect(v.enrollment_consents_expired).toEqual([])
+  })
+})
+
+describe('getChildFilesAuditState — Phase C per-occurrence rollup', () => {
+  it('empty acks → per_occurrence_consents_recorded zero for both types', async () => {
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = []
+    const out = await getChildFilesAuditState('u1')
+    expect(out.per_occurrence_consents_recorded).toEqual({
+      transportation_nonroutine_per_trip: 0,
+      water_activities_off_premises_per_trip: 0,
+    })
+  })
+
+  it('one child with two transport-trip rows → contributes 1 to the type (distinct children, not row count)', async () => {
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'transportation_nonroutine_per_trip', acknowledged_via: 'in_person_paper' },
+      { subject_id: 'k1', type: 'transportation_nonroutine_per_trip', acknowledged_via: 'in_person_paper' },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    // Distinct-child count: 1 (not 2). Multiple trips per child do
+    // not inflate the rollup.
+    expect(out.per_occurrence_consents_recorded.transportation_nonroutine_per_trip).toBe(1)
+    expect(out.per_occurrence_consents_recorded.water_activities_off_premises_per_trip).toBe(0)
+  })
+
+  it('two children with mixed per-occurrence rows → distinct-child counts per type', async () => {
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      { id: 'k2', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'transportation_nonroutine_per_trip', acknowledged_via: 'in_person_paper' },
+      { subject_id: 'k2', type: 'transportation_nonroutine_per_trip', acknowledged_via: 'in_person_paper' },
+      { subject_id: 'k2', type: 'water_activities_off_premises_per_trip', acknowledged_via: 'in_person_paper' },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    expect(out.per_occurrence_consents_recorded.transportation_nonroutine_per_trip).toBe(2)
+    expect(out.per_occurrence_consents_recorded.water_activities_off_premises_per_trip).toBe(1)
+  })
+
+  it('per-occurrence rows do NOT count toward children_with_pending_enrollment_consents_count', async () => {
+    // Even if a child has only per-occurrence rows (no durable
+    // enrollment consents), the child is NOT counted as "pending"
+    // for enrollment-consent purposes. The per-occurrence rollup is
+    // orthogonal to the pending/expired rollup.
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'transportation_nonroutine_per_trip', acknowledged_via: 'in_person_paper' },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    // The child IS counted as pending because field_trip_permission
+    // is missing (durable Phase A type, not satisfied).
+    expect(out.children_with_pending_enrollment_consents_count).toBe(1)
+    // But the per-occurrence type is NOT in the pending breakdown —
+    // not even as a zero-key.
+    expect(out.pending_enrollment_consents).not.toHaveProperty('transportation_nonroutine_per_trip')
+    expect(out.pending_enrollment_consents).not.toHaveProperty('water_activities_off_premises_per_trip')
+  })
+
+  it('per-occurrence breakdown shape is stable (both keys always present, initialized to 0)', async () => {
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = []
+    const out = await getChildFilesAuditState('u1')
+    expect(Object.keys(out.per_occurrence_consents_recorded).sort()).toEqual([
+      'transportation_nonroutine_per_trip',
+      'water_activities_off_premises_per_trip',
+    ])
+  })
+})
+
+describe('Phase C — backward compatibility', () => {
+  it('durable types remain in enrollment_consents_pending (Phase A + B unaffected by Phase C)', () => {
+    const v = pendingEnrollmentConsentsForChild({ activeAcks: [], expiredAcks: [] })
+    expect(v.enrollment_consents_pending).toEqual(
+      expect.arrayContaining([
+        'field_trip_permission',
+        'transportation_routine_annual',
+        'water_activities_on_premises_seasonal',
+      ])
+    )
+  })
+
+  it('rows with NULL occurrence_metadata are unaffected (Phase A/B rows untouched)', async () => {
+    // A pre-Phase-C row with NULL occurrence_metadata is the
+    // backward-compat scenario. The audit-state must read it
+    // identically to before Phase C.
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      // A typical Phase A row — no expires_at, no occurrence_metadata.
+      {
+        subject_id: 'k1',
+        type: 'field_trip_permission',
+        acknowledged_via: 'in_person_paper',
+        expires_at: null,
+        occurrence_metadata: null,
+      },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    expect(out.pending_enrollment_consents.field_trip_permission).toBe(0)
+    expect(out.pending_enrollment_consents_expired.field_trip_permission).toBe(0)
+    expect(out.per_occurrence_consents_recorded.transportation_nonroutine_per_trip).toBe(0)
   })
 })

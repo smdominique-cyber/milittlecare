@@ -1,0 +1,246 @@
+-- ============================================================
+-- MI Little Care — Consents Phase C: per-occurrence consents.
+--
+-- Authoritative scope: docs/pr-consents-C-scope.md (committed
+-- 2026-06-01, finalized). This migration ships the two schema
+-- changes Phase C needs:
+--   (a) The relaxation of the acknowledgments_active_unique partial
+--       index so the two per-occurrence types
+--       (`transportation_nonroutine_per_trip`,
+--       `water_activities_off_premises_per_trip`) can have MULTIPLE
+--       active rows per (provider, type, subject_type, subject_id) —
+--       one row per trip / outing. Every durable consent type keeps
+--       its one-active-row guarantee via the exclusion-clause WHERE.
+--   (b) The addition of a nullable `occurrence_metadata jsonb`
+--       column to carry per-occurrence detail (trip_date,
+--       destination, water_body_type, location, etc.). NULL for
+--       every existing row and every durable type.
+--
+-- DEPENDENCY: applies AFTER migration 026
+--   (acknowledgments_expires_at). Migration 026 must already be in
+--   place — if not, apply 026 first and verify before running this
+--   one.
+--
+-- ── DESIGN DECISIONS (locked in pr-consents-C-scope.md DECISIONS table) ──
+--
+--   1. Index relaxation — replace the existing partial unique index
+--      with one whose WHERE clause exempts the two per-occurrence
+--      `type` values. Atomic DROP + CREATE inside a single
+--      transaction so readers see either the OLD or the NEW index,
+--      never neither.
+--      Durable types (field_trip_permission, photo_sharing_consent,
+--      photo_sharing_consent_revoked, transportation_routine_annual,
+--      water_activities_on_premises_seasonal, every R 400.1907
+--      intake type) STILL get one-active-row enforcement — the
+--      negative test in the verification queries below proves this.
+--   2. occurrence_metadata jsonb, nullable. No CHECK constraint on
+--      shape — the application validates via helpers in
+--      `src/lib/childFiles.js` (buildTransportNonroutineOccurrence
+--      Metadata, buildWaterOffPremisesOccurrenceMetadata).
+--      Free-jsonb mirrors the free-text `type` and `subject_type`
+--      conventions.
+--   3. No new read-side index initially. The existing
+--      acknowledgments_provider_active and acknowledgments_subject_active
+--      partial indexes still narrow per-occurrence reads. A GIN
+--      index on occurrence_metadata is deferred until query volume
+--      justifies and is added in a future migration.
+--
+-- ── BACKWARD-COMPAT INVARIANT ────────────────────────────────────────
+-- Every existing row leaves occurrence_metadata NULL. The relaxed
+-- index has the same column set as the original; the only difference
+-- is the additional `type NOT IN (...)` exclusion in the WHERE
+-- clause. Existing rows of any durable type still match the new
+-- index's predicate and still get uniqueness enforcement.
+--
+-- The `acknowledgments_active_unique_no_subject` provider-level
+-- partial unique (subject_id IS NULL) is UNTOUCHED — per-occurrence
+-- consents always have subject_id = child uuid, so they never
+-- interact with it.
+--
+-- RLS policies, CHECK constraints (including
+-- acknowledgments_channel_shape), and every read-side index are
+-- UNTOUCHED. Phase A and Phase B types behave identically before
+-- and after this migration.
+--
+-- ── INDEX SWAP MECHANICS ─────────────────────────────────────────────
+-- Both DDL statements run inside a single transaction (BEGIN/
+-- COMMIT). Postgres DDL is transactional: other sessions see either
+-- the pre-transaction state (old index, no new column) or the
+-- post-commit state (new index, new column) — never a half-applied
+-- state with no uniqueness enforcement. The lock duration is brief
+-- because `acknowledgments` is small (per-provider, hundreds of
+-- rows in production today).
+--
+-- CREATE INDEX CONCURRENTLY is NOT used because (1) it cannot run
+-- inside a transaction, and (2) the table is small enough that the
+-- brief AccessExclusiveLock during the DROP + AccessShareLock
+-- during the CREATE is negligible. If the table grows to millions
+-- of rows in the future and this becomes a concern, a follow-up
+-- migration can rebuild the index concurrently (CREATE the new
+-- name, DROP the old, RENAME) — but that's not Phase C's problem.
+--
+-- ── EXPECTED VERIFICATION ────────────────────────────────────────────
+-- Per docs/tech_debt.md § "Verification gap discovered 2026-05-15":
+-- the user runs these in the Supabase web SQL Editor and
+-- screenshots the result BEFORE writing the runbook Migration
+-- History entry. The two negative-test queries (commented "do NOT
+-- run as a normal verification — these PROBE the constraint") are
+-- the most important: they prove the relaxation is surgical.
+--
+--   -- a) The occurrence_metadata column exists with the expected
+--   --    shape.
+--   select column_name, data_type, is_nullable
+--   from information_schema.columns
+--   where table_schema='public'
+--     and table_name='acknowledgments'
+--     and column_name='occurrence_metadata';
+--   -- expect: 1 row — occurrence_metadata | jsonb | YES
+--
+--   -- b) The relaxed unique index has the new exclusion clause.
+--   select indexname, indexdef
+--   from pg_indexes
+--   where schemaname='public' and tablename='acknowledgments'
+--     and indexname='acknowledgments_active_unique';
+--   -- expect: indexdef contains the substring
+--   --   "WHERE ((archived_at IS NULL) AND (subject_id IS NOT NULL)
+--   --     AND (type <> ALL (ARRAY['transportation_nonroutine_per_trip'::text,
+--   --                              'water_activities_off_premises_per_trip'::text])))"
+--   --   (Postgres normalizes the NOT IN to an array-comparison
+--   --   form in pg_indexes output; the semantic is identical.)
+--
+--   -- c) No existing row was mutated (occurrence_metadata is NULL
+--   --    for every pre-Phase-C row).
+--   select count(*) as total_rows,
+--          count(occurrence_metadata) as rows_with_occurrence_metadata
+--   from public.acknowledgments
+--   where archived_at is null;
+--   -- expect: rows_with_occurrence_metadata = 0 immediately after
+--   --         migration (no Phase C rows captured yet).
+--
+--   -- d) The provider-level partial unique was NOT touched.
+--   select indexname, indexdef
+--   from pg_indexes
+--   where schemaname='public' and tablename='acknowledgments'
+--     and indexname='acknowledgments_active_unique_no_subject';
+--   -- expect: WHERE clause unchanged from migration 024 —
+--   --   "WHERE ((archived_at IS NULL) AND (subject_id IS NULL))"
+--
+-- ── NEGATIVE TESTS ───────────────────────────────────────────────────
+-- DO NOT run these as ordinary verification — they probe the
+-- constraint by attempting inserts. Use a throwaway test child and
+-- archive the test rows afterward.
+--
+--   -- N1) Two active rows of a DURABLE type for the same child
+--   --     STILL violate the unique (uniqueness preserved).
+--   --     Replace <provider_id> and <child_id> with real test
+--   --     values; the second INSERT must raise a unique-violation
+--   --     error. If it succeeds, the relaxation is broken.
+--   --
+--   --   insert into public.acknowledgments (
+--   --     provider_id, type, subject_type, subject_id,
+--   --     acknowledged_via, acknowledged_by_label, snapshot_hash
+--   --   ) values
+--   --     ('<provider_id>', 'field_trip_permission', 'child', '<child_id>',
+--   --      'in_person_paper', 'Test Parent', 'phaseC-negtest-1'),
+--   --     ('<provider_id>', 'field_trip_permission', 'child', '<child_id>',
+--   --      'in_person_paper', 'Test Parent', 'phaseC-negtest-2');
+--   --   -- expect: second row raises
+--   --   --   ERROR: duplicate key value violates unique constraint
+--   --   --     "acknowledgments_active_unique"
+--   --
+--   --   -- Cleanup (whether the second succeeded or not):
+--   --   update public.acknowledgments
+--   --      set archived_at = now()
+--   --    where provider_id = '<provider_id>'
+--   --      and subject_id = '<child_id>'
+--   --      and snapshot_hash in ('phaseC-negtest-1','phaseC-negtest-2');
+--
+--   -- N2) Two active rows of a PER-OCCURRENCE type for the same
+--   --     child are ALLOWED (per-occurrence exemption works). Both
+--   --     INSERTs must succeed.
+--   --
+--   --   insert into public.acknowledgments (
+--   --     provider_id, type, subject_type, subject_id,
+--   --     acknowledged_via, acknowledged_by_label,
+--   --     occurrence_metadata, snapshot_hash
+--   --   ) values
+--   --     ('<provider_id>', 'transportation_nonroutine_per_trip',
+--   --      'child', '<child_id>',
+--   --      'in_person_paper', 'Test Parent',
+--   --      '{"trip_date": "2026-07-15", "destination": "Library"}'::jsonb,
+--   --      'phaseC-postest-1'),
+--   --     ('<provider_id>', 'transportation_nonroutine_per_trip',
+--   --      'child', '<child_id>',
+--   --      'in_person_paper', 'Test Parent',
+--   --      '{"trip_date": "2026-07-22", "destination": "Park"}'::jsonb,
+--   --      'phaseC-postest-2');
+--   --   -- expect: both rows insert successfully — no unique
+--   --   --         violation. If either is rejected, the relaxation
+--   --   --         WHERE clause is broken.
+--   --
+--   --   -- Cleanup:
+--   --   update public.acknowledgments
+--   --      set archived_at = now()
+--   --    where provider_id = '<provider_id>'
+--   --      and subject_id = '<child_id>'
+--   --      and snapshot_hash in ('phaseC-postest-1','phaseC-postest-2');
+-- ============================================================
+
+begin;
+
+-- -------------------------------------------------------
+-- 1. Relax the partial unique index — per-occurrence types exempted.
+-- -------------------------------------------------------
+-- Drop the existing index and create the new one with the exclusion
+-- clause. Inside the transaction, other readers see the OLD index
+-- until commit; from commit onward they see the NEW index. There is
+-- no window where uniqueness is unenforced.
+drop index if exists public.acknowledgments_active_unique;
+
+create unique index acknowledgments_active_unique
+  on public.acknowledgments (provider_id, type, subject_type, subject_id)
+  where archived_at is null
+    and subject_id is not null
+    and type not in (
+      'transportation_nonroutine_per_trip',
+      'water_activities_off_premises_per_trip'
+    );
+
+-- -------------------------------------------------------
+-- 2. Add the occurrence_metadata jsonb column.
+-- -------------------------------------------------------
+alter table public.acknowledgments
+  add column if not exists occurrence_metadata jsonb;
+
+commit;
+
+-- ============================================================
+-- DOWN MIGRATION (commented; uncomment + run if rollback is needed)
+-- ============================================================
+-- Non-destructive: every row keeps every other column intact. If
+-- Phase C per-occurrence rows have been captured by rollback time,
+-- their occurrence_metadata values are lost — but the rows
+-- themselves and every other field survive. The down-migration
+-- restores the original index with no exclusion clause; if any
+-- per-occurrence rows have been captured at that point, the
+-- original index's strict uniqueness will likely fail to recreate
+-- (because multiple active rows of the same type exist). In that
+-- case, archive the per-occurrence rows first via:
+--
+--   update public.acknowledgments
+--      set archived_at = now()
+--    where type in (
+--      'transportation_nonroutine_per_trip',
+--      'water_activities_off_premises_per_trip'
+--    ) and archived_at is null;
+--
+-- before running the down migration.
+--
+-- begin;
+--   alter table public.acknowledgments
+--     drop column if exists occurrence_metadata;
+--   drop index if exists public.acknowledgments_active_unique;
+--   create unique index acknowledgments_active_unique
+--     on public.acknowledgments (provider_id, type, subject_type, subject_id)
+--     where archived_at is null and subject_id is not null;
+-- commit;
