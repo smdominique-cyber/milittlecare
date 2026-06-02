@@ -11,19 +11,52 @@ sequence): PR #20 ships after C/D/E so the acknowledgments table
 M from L once those dependencies exist.
 
 **Rule citation:** **R 400.1931 (Rule 31) — Medication administration.**
-Requires:
-- Written parent permission per medication (one-time per
-  medication / dose plan).
-- Original container check before administering.
-- Per-dose log: date, time, dose, medication name, child name,
-  administering staff.
-- Records retained 2 years.
-- Topical-OTC exemption: sunscreen, insect repellent, diaper rash cream
-  do not require per-dose log entries (parent permission still expected
-  but at a less granular level).
-- Only the **licensee** or a **child care staff member** (per R 400.1920)
-  may administer prescription medication. **Assistants** (R 400.1921,
-  age 14–15) and **volunteers** may NOT administer.
+
+### Verbatim subsections this PR consumes (reconciled 2026-06-02)
+
+- **R 400.1931(1):** *"Medication, prescription or nonprescription, must
+  be given to a child in care by a licensee or a child care staff member
+  only. A child care assistant or supervised volunteer shall not give
+  medication to a child in care."* — **role-gate applies to ALL
+  medication (prescription AND nonprescription), with the narrow
+  exemption (8) carves out below.**
+- **R 400.1931(2):** *"Medication, prescription or nonprescription, must
+  be given or applied only with prior written permission from a parent."*
+  — per-medication parent consent. Applies to every medication including
+  topical OTC.
+- **R 400.1931(4):** *"Prescription medication must have the pharmacy
+  label indicating the physician's name, child's first and last name,
+  instructions, and name and strength of the medication."* — captured as
+  the `original_container_confirmed boolean` attestation on the
+  authorization (label-verification requirement, not structured-capture).
+- **R 400.1931(7):** *"A record of the date, time, and the amount of all
+  medication given or applied must be maintained."* — per-dose log
+  required fields.
+- **R 400.1931(8):** *"Topical nonprescription medication, including,
+  but not limited to, sunscreen, insect repellant, and diaper rash
+  ointment, is exempt from subrules (1) and (7)."* — topical OTC is
+  exempt from BOTH the role-gate (1) AND the dose log (7), but NOT
+  from parent permission (2).
+- **R 400.1931(9):** *"The records required in this rule must be
+  retained for a minimum of 2 years."*
+
+### Practical scope of the role-gate (corrected 2026-06-02)
+
+Combining (1) and (8):
+
+| Medication category | Role-gate (1) applies? | Dose log (7) required? | Parent consent (2) required? |
+|---|---|---|---|
+| Prescription | **YES** — licensee or staff_member only | YES | YES (per-prescription) |
+| **Non-topical** nonprescription (e.g., oral Tylenol) | **YES** — licensee or staff_member only | YES | YES |
+| **Topical** nonprescription (sunscreen, repellent, diaper rash cream — per (8)) | **NO** — any caregiver may apply | NO (log optional) | YES (OTC-blanket) |
+
+The original "prescription medication only" phrasing in pre-2026-06-02
+drafts of this scope was too narrow on the role-gate's scope and
+silently mishandled (8)'s exemption — a 2026-06-02 reconciliation
+against the rules PDF flagged both as conflicts before the build PR
+landed. The trigger function (see § A.2) implements both branches
+correctly: skip the role-check when the linked authorization's
+`is_topical_otc=true`; enforce it for everything else.
 
 ---
 
@@ -163,6 +196,11 @@ reference another table without a trigger. Recommend:
 1. App-code gates the dropdown (UI prevents picking an ineligible role).
 2. **A trigger function** validates the caregiver has a role in
    (`licensee`, `child_care_staff_member`) at insert; rejects otherwise.
+   **EXCEPT** when the linked authorization is `is_topical_otc=true` —
+   per R 400.1931(8), topical OTC is exempt from subrule (1)'s
+   role-gate, so any caregiver may apply sunscreen / insect repellent
+   / diaper rash ointment. The trigger reads the linked authorization
+   and skips the role-check for OTC events.
 
 ```sql
 create or replace function public.medication_event_caregiver_role_check()
@@ -170,13 +208,31 @@ returns trigger
 language plpgsql
 security definer set search_path = public
 as $$
+declare
+  v_is_topical_otc boolean;
 begin
+  -- R 400.1931(8): topical OTC is exempt from subrule (1). Resolve
+  -- is_topical_otc from the linked authorization (source of truth);
+  -- skip the role-gate for those events.
+  select is_topical_otc into v_is_topical_otc
+    from public.medication_authorizations
+   where id = new.authorization_id;
+
+  if coalesce(v_is_topical_otc, false) then
+    return new;
+  end if;
+
+  -- R 400.1931(1): for everything else (prescription OR non-topical
+  -- nonprescription) only licensee or child care staff member may
+  -- administer. Assistants and supervised volunteers are prohibited
+  -- by the rule's "only" clause; any role outside the whitelist is
+  -- rejected.
   if not exists (
     select 1 from public.caregiver_regulatory_roles
-    where caregiver_id = new.administered_by_caregiver_id
-      and regulatory_role in ('licensee', 'child_care_staff_member')
+     where caregiver_id = new.administered_by_caregiver_id
+       and regulatory_role in ('licensee', 'child_care_staff_member')
   ) then
-    raise exception 'Only licensee or child care staff member may administer medication (R 400.1931)';
+    raise exception 'Only licensee or child care staff member may administer medication (R 400.1931(1))';
   end if;
   return new;
 end;
@@ -188,7 +244,9 @@ create trigger trg_medication_event_caregiver_role_check
 ```
 
 This puts the rule in the DB so a future API endpoint or admin tool
-can't bypass it.
+can't bypass it. The OTC branch makes (8)'s exemption legible at the
+schema level — a future maintainer reading the trigger sees both
+the rule citation and the exact carve-out.
 
 #### A.3 No new types in `acknowledgments`
 
