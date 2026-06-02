@@ -187,114 +187,59 @@ export const PER_OCCURRENCE_CONSENT_TYPES = Object.freeze([
   'water_activities_off_premises_per_trip',   // R 400.1934(10)(a) — "before each outdoor water activity"
 ])
 
-// ─── Occurrence-metadata helpers (Consents Phase C, 2026-06-01) ──
+// ─── Occurrence-metadata helper (Consents Phase C, 2026-06-01) ──
 //
 // SINGLE SOURCE OF TRUTH for the per-occurrence jsonb payload shape.
 // Every write site that inserts a per-occurrence row MUST go through
-// one of these helpers — never construct the jsonb inline. If two
-// call sites build the shape independently, a field-name typo
-// (trip_date vs tripDate) creates silent data drift that no test
-// catches until an auditor reads the rows.
+// this helper — never construct the jsonb inline. If two call sites
+// build the shape independently, a field-name typo (event_date vs
+// eventDate) creates silent data drift that no test catches until
+// an auditor reads the rows.
+//
+// UNIFIED SHAPE (2026-06-01 refactor — was separate transport/water
+// helpers with type-specific fields):
+//
+//   { event_date: 'YYYY-MM-DD', description: 'free text' }
+//
+// Both fields REQUIRED. Both used by both per-occurrence types
+// (transportation_nonroutine_per_trip + water_activities_off_premises_per_trip).
+// The modal labels them per-type for clarity ("Trip date" vs "Outing
+// date", "Destination" vs "Location & activity") but the stored
+// jsonb keys are identical, so a single read path renders both.
 //
 // The DB stores free jsonb (no CHECK constraint on shape) — the app
-// is the validator. The helpers throw on missing required fields and
-// strip unknown keys (passive guard against typos in the calling
-// component's field bindings).
-//
-// Documented shape vocabulary:
-//   - `trip_date` / `outing_date` : ISO date string (YYYY-MM-DD).
-//   - `destination` / `location`  : free text venue / address.
-//   - `water_body_type`           : enum 'pool' | 'lake' | 'pond' |
-//                                    'river' | 'beach' | 'other'.
-//   - Other fields are optional free text or ISO datetime.
+// is the validator. The helper throws on missing/blank required
+// fields and strips unknown keys (passive guard against typos in
+// the calling component's field bindings).
 
-const TRANSPORT_OCCURRENCE_REQUIRED = ['trip_date', 'destination']
-const TRANSPORT_OCCURRENCE_OPTIONAL = ['purpose', 'vehicle_description', 'estimated_return']
-const WATER_OCCURRENCE_REQUIRED = ['outing_date', 'water_body_type', 'location']
-const WATER_OCCURRENCE_OPTIONAL = ['address', 'supervising_adult', 'estimated_return']
-const WATER_BODY_TYPES = Object.freeze([
-  'pool', 'lake', 'pond', 'river', 'beach', 'other',
-])
+const OCCURRENCE_REQUIRED_FIELDS = Object.freeze(['event_date', 'description'])
 
 /**
- * Build the canonical `occurrence_metadata` jsonb for a
- * `transportation_nonroutine_per_trip` row.
+ * Build the canonical `occurrence_metadata` jsonb. Same shape for
+ * both per-occurrence types — `transportation_nonroutine_per_trip`
+ * and `water_activities_off_premises_per_trip`.
  *
  * @param {object} input
- * @param {string} input.trip_date            REQUIRED — YYYY-MM-DD
- * @param {string} input.destination          REQUIRED — free text
- * @param {string} [input.purpose]            optional — free text
- * @param {string} [input.vehicle_description] optional — free text
- * @param {string} [input.estimated_return]   optional — ISO datetime
- * @returns {object} the validated metadata object (jsonb-ready)
- * @throws if required fields are missing or blank
+ * @param {string} input.event_date    REQUIRED — YYYY-MM-DD
+ * @param {string} input.description   REQUIRED — free text (e.g.
+ *                                      "Library trip" or
+ *                                      "Community pool — supervised swim")
+ * @returns {{ event_date: string, description: string }}  validated,
+ *          trimmed, with unknown keys stripped.
+ * @throws if either required field is missing or blank.
  */
-export function buildTransportNonroutineOccurrenceMetadata(input) {
-  return buildOccurrenceMetadata(input || {},
-    TRANSPORT_OCCURRENCE_REQUIRED,
-    TRANSPORT_OCCURRENCE_OPTIONAL,
-    'transportation_nonroutine_per_trip')
-}
-
-/**
- * Build the canonical `occurrence_metadata` jsonb for a
- * `water_activities_off_premises_per_trip` row.
- *
- * @param {object} input
- * @param {string} input.outing_date           REQUIRED — YYYY-MM-DD
- * @param {string} input.water_body_type       REQUIRED — pool|lake|pond|river|beach|other
- * @param {string} input.location              REQUIRED — free text
- * @param {string} [input.address]             optional — free text
- * @param {string} [input.supervising_adult]   optional — free text
- * @param {string} [input.estimated_return]    optional — ISO datetime
- * @returns {object} the validated metadata object (jsonb-ready)
- * @throws if required fields are missing or blank, or water_body_type
- *         is not in the enum
- */
-export function buildWaterOffPremisesOccurrenceMetadata(input) {
-  const out = buildOccurrenceMetadata(input || {},
-    WATER_OCCURRENCE_REQUIRED,
-    WATER_OCCURRENCE_OPTIONAL,
-    'water_activities_off_premises_per_trip')
-  if (!WATER_BODY_TYPES.includes(out.water_body_type)) {
-    throw new Error(
-      `water_activities_off_premises_per_trip: water_body_type must be one of ` +
-      `${WATER_BODY_TYPES.join(', ')} (got "${out.water_body_type}")`
-    )
-  }
-  return out
-}
-
-/**
- * Shared validation engine for the per-type helpers above. Throws
- * on missing/blank required fields. Strips keys outside the
- * union(required, optional) to defend against field-name typos in
- * the calling component.
- */
-function buildOccurrenceMetadata(input, required, optional, typeLabel) {
+export function buildOccurrenceMetadata(input) {
+  const src = input || {}
   const out = {}
-  for (const k of required) {
-    const v = input[k]
+  for (const k of OCCURRENCE_REQUIRED_FIELDS) {
+    const v = src[k]
     if (v == null || (typeof v === 'string' && v.trim() === '')) {
-      throw new Error(`${typeLabel}: required field "${k}" is missing or blank`)
+      throw new Error(`occurrence_metadata: required field "${k}" is missing or blank`)
     }
     out[k] = typeof v === 'string' ? v.trim() : v
   }
-  for (const k of optional) {
-    const v = input[k]
-    if (v == null) continue
-    if (typeof v === 'string' && v.trim() === '') continue
-    out[k] = typeof v === 'string' ? v.trim() : v
-  }
   return out
 }
-
-/**
- * Allowed values for `water_body_type` in the water-off-premises
- * occurrence metadata. Exported so the modal can render the
- * dropdown options from the single source of truth.
- */
-export const WATER_BODY_TYPE_OPTIONS = WATER_BODY_TYPES
 
 /**
  * Time-bound row write helper — returns the ISO timestamp that an

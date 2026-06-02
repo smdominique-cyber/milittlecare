@@ -1713,9 +1713,7 @@ describe('Phase B renewal protocol — archive-then-insert state transitions', (
 
 const {
   PER_OCCURRENCE_CONSENT_TYPES,
-  WATER_BODY_TYPE_OPTIONS,
-  buildTransportNonroutineOccurrenceMetadata,
-  buildWaterOffPremisesOccurrenceMetadata,
+  buildOccurrenceMetadata,
 } = await import('./childFiles')
 
 describe('Phase C constants — PER_OCCURRENCE_CONSENT_TYPES', () => {
@@ -1725,130 +1723,91 @@ describe('Phase C constants — PER_OCCURRENCE_CONSENT_TYPES', () => {
       'water_activities_off_premises_per_trip',
     ])
   })
-
-  it('water-body-type options match the helper enum', () => {
-    expect([...WATER_BODY_TYPE_OPTIONS]).toEqual([
-      'pool', 'lake', 'pond', 'river', 'beach', 'other',
-    ])
-  })
 })
 
-describe('Phase C metadata helpers — single source of truth', () => {
-  describe('buildTransportNonroutineOccurrenceMetadata', () => {
-    it('returns the validated shape for the happy path', () => {
-      const out = buildTransportNonroutineOccurrenceMetadata({
-        trip_date: '2026-07-15',
-        destination: 'Public library',
-        purpose: 'Story time',
-        vehicle_description: "Provider's minivan",
-        estimated_return: '2026-07-15T12:00:00Z',
-      })
-      expect(out).toEqual({
-        trip_date: '2026-07-15',
-        destination: 'Public library',
-        purpose: 'Story time',
-        vehicle_description: "Provider's minivan",
-        estimated_return: '2026-07-15T12:00:00Z',
-      })
+// 2026-06-01 refactor — the two type-specific helpers
+// (buildTransportNonroutineOccurrenceMetadata,
+//  buildWaterOffPremisesOccurrenceMetadata) collapsed to a single
+// `buildOccurrenceMetadata` taking `{ event_date, description }`.
+// Both per-occurrence types now share the uniform shape; the modal's
+// labels differ for clarity but the jsonb keys are identical.
+describe('Phase C metadata helper — buildOccurrenceMetadata (unified shape)', () => {
+  it('returns the validated shape for the happy path', () => {
+    const out = buildOccurrenceMetadata({
+      event_date: '2026-07-15',
+      description: 'Public library — story time',
     })
-
-    it('throws on missing required field (trip_date)', () => {
-      expect(() => buildTransportNonroutineOccurrenceMetadata({
-        destination: 'Library',
-      })).toThrow(/trip_date/)
-    })
-
-    it('throws on missing required field (destination)', () => {
-      expect(() => buildTransportNonroutineOccurrenceMetadata({
-        trip_date: '2026-07-15',
-      })).toThrow(/destination/)
-    })
-
-    it('throws on blank required field', () => {
-      expect(() => buildTransportNonroutineOccurrenceMetadata({
-        trip_date: '2026-07-15',
-        destination: '   ',
-      })).toThrow(/destination/)
-    })
-
-    it('omits empty optional fields rather than carrying them as blank strings', () => {
-      const out = buildTransportNonroutineOccurrenceMetadata({
-        trip_date: '2026-07-15',
-        destination: 'Library',
-        purpose: '',
-        vehicle_description: '   ',
-      })
-      expect(out).toEqual({
-        trip_date: '2026-07-15',
-        destination: 'Library',
-      })
-    })
-
-    it('strips unknown keys (defense against field-name typos at call sites)', () => {
-      const out = buildTransportNonroutineOccurrenceMetadata({
-        trip_date: '2026-07-15',
-        destination: 'Library',
-        tripDate: '2026-08-20',   // typo: camelCase, should be silently dropped
-        random: 'noise',
-      })
-      expect(out).not.toHaveProperty('tripDate')
-      expect(out).not.toHaveProperty('random')
-      expect(out.trip_date).toBe('2026-07-15')
-    })
-
-    it('trims string values', () => {
-      const out = buildTransportNonroutineOccurrenceMetadata({
-        trip_date: '  2026-07-15  ',
-        destination: '  Library  ',
-      })
-      expect(out.trip_date).toBe('2026-07-15')
-      expect(out.destination).toBe('Library')
+    expect(out).toEqual({
+      event_date: '2026-07-15',
+      description: 'Public library — story time',
     })
   })
 
-  describe('buildWaterOffPremisesOccurrenceMetadata', () => {
-    it('returns the validated shape for the happy path', () => {
-      const out = buildWaterOffPremisesOccurrenceMetadata({
-        outing_date: '2026-08-10',
-        water_body_type: 'pool',
-        location: 'Community Pool',
-        address: '123 Main St',
-        supervising_adult: 'Provider',
-      })
-      expect(out).toEqual({
-        outing_date: '2026-08-10',
-        water_body_type: 'pool',
-        location: 'Community Pool',
-        address: '123 Main St',
-        supervising_adult: 'Provider',
-      })
-    })
+  it('throws on missing event_date', () => {
+    expect(() => buildOccurrenceMetadata({
+      description: 'Library',
+    })).toThrow(/event_date/)
+  })
 
-    it('throws on missing required field (water_body_type)', () => {
-      expect(() => buildWaterOffPremisesOccurrenceMetadata({
-        outing_date: '2026-08-10',
-        location: 'Pool',
-      })).toThrow(/water_body_type/)
-    })
+  it('throws on missing description', () => {
+    expect(() => buildOccurrenceMetadata({
+      event_date: '2026-07-15',
+    })).toThrow(/description/)
+  })
 
-    it('throws on water_body_type outside the enum', () => {
-      expect(() => buildWaterOffPremisesOccurrenceMetadata({
-        outing_date: '2026-08-10',
-        water_body_type: 'aquifer',
-        location: 'Pool',
-      })).toThrow(/water_body_type must be one of/)
-    })
+  it('throws on blank required field', () => {
+    expect(() => buildOccurrenceMetadata({
+      event_date: '2026-07-15',
+      description: '   ',
+    })).toThrow(/description/)
+  })
 
-    it('accepts every enum value', () => {
-      for (const t of WATER_BODY_TYPE_OPTIONS) {
-        const out = buildWaterOffPremisesOccurrenceMetadata({
-          outing_date: '2026-08-10',
-          water_body_type: t,
-          location: 'X',
-        })
-        expect(out.water_body_type).toBe(t)
-      }
+  it('throws on null input (defensive)', () => {
+    expect(() => buildOccurrenceMetadata(null)).toThrow(/event_date/)
+  })
+
+  it('throws on undefined input (defensive)', () => {
+    expect(() => buildOccurrenceMetadata()).toThrow(/event_date/)
+  })
+
+  it('strips unknown keys (defense against field-name typos at call sites)', () => {
+    const out = buildOccurrenceMetadata({
+      event_date: '2026-07-15',
+      description: 'Library',
+      eventDate: '2026-08-20',           // typo: camelCase, dropped
+      trip_date: '2026-07-22',           // pre-refactor key name, dropped
+      water_body_type: 'pool',           // pre-refactor key name, dropped
+      destination: 'somewhere else',     // pre-refactor key name, dropped
+      random: 'noise',
     })
+    expect(out).toEqual({
+      event_date: '2026-07-15',
+      description: 'Library',
+    })
+    expect(out).not.toHaveProperty('eventDate')
+    expect(out).not.toHaveProperty('trip_date')
+    expect(out).not.toHaveProperty('water_body_type')
+    expect(out).not.toHaveProperty('destination')
+    expect(out).not.toHaveProperty('random')
+  })
+
+  it('trims string values', () => {
+    const out = buildOccurrenceMetadata({
+      event_date: '  2026-07-15  ',
+      description: '  Library — story time  ',
+    })
+    expect(out.event_date).toBe('2026-07-15')
+    expect(out.description).toBe('Library — story time')
+  })
+
+  it('produces the same shape for both per-occurrence types (uniformity invariant)', () => {
+    // The helper does not branch on consent type — the caller picks
+    // the type for the row INSERT, but the metadata shape is shared.
+    // This is the structural guarantee a single render path can rely
+    // on.
+    const a = buildOccurrenceMetadata({ event_date: '2026-07-15', description: 'Trip' })
+    const b = buildOccurrenceMetadata({ event_date: '2026-08-10', description: 'Outing' })
+    expect(Object.keys(a).sort()).toEqual(Object.keys(b).sort())
   })
 })
 

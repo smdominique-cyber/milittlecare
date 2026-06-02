@@ -43,9 +43,13 @@
 //   - No expires_at, no renewal concept. Each occurrence is one-and-
 //     done; corrections via archive-then-insert (same shape as any
 //     audit-trail correction).
-//   - The row carries `occurrence_metadata jsonb` (trip date,
-//     destination, water-body type, etc.) built through the helpers
-//     in `src/lib/childFiles.js` — NEVER constructed inline here.
+//   - The row carries `occurrence_metadata jsonb` with a uniform
+//     `{ event_date, description }` shape (refactored 2026-06-01)
+//     built through `buildOccurrenceMetadata` in
+//     `src/lib/childFiles.js` — NEVER constructed inline here. The
+//     two per-occurrence types share the same shape; the modal's
+//     labels ("Trip date" vs "Outing date", "Destination" vs
+//     "Location & activity") are per-type for clarity only.
 //   - The per-occurrence section renders below the durable
 //     consents: a "Record …" button per type opens a sub-form, and
 //     a recent-N list shows what's already on file.
@@ -65,9 +69,7 @@ import {
 import {
   TIME_BOUND_TYPES,
   PER_OCCURRENCE_CONSENT_TYPES,
-  WATER_BODY_TYPE_OPTIONS,
-  buildTransportNonroutineOccurrenceMetadata,
-  buildWaterOffPremisesOccurrenceMetadata,
+  buildOccurrenceMetadata,
   computePhaseBExpiresAt,
   partitionAcksByExpiry,
 } from '@/lib/childFiles'
@@ -354,10 +356,12 @@ export default function EnrollmentConsentsModal({
    *    (child, type) are EXPECTED for per-occurrence types and
    *    permitted by the relaxed `acknowledgments_active_unique`
    *    partial index (migration 027). A new trip is a NEW row.
-   *  - The `occurrence_metadata` jsonb is built through the per-type
-   *    helper exported from `src/lib/childFiles.js` — NEVER inline.
-   *    If the helper throws (missing required fields, invalid enum)
-   *    the error surfaces through the modal's standard error path.
+   *  - The `occurrence_metadata` jsonb is built through the
+   *    `buildOccurrenceMetadata` helper exported from
+   *    `src/lib/childFiles.js` — NEVER inline. Same uniform shape
+   *    (`{ event_date, description }`) for BOTH per-occurrence
+   *    types. The helper throws on missing/blank fields; the modal
+   *    surfaces the error.
    *  - No expires_at — per-occurrence consents are durable event
    *    records, not time-bound.
    */
@@ -366,16 +370,9 @@ export default function EnrollmentConsentsModal({
     setSaving(true)
     setError(null)
     try {
-      // Build the canonical jsonb shape via the helper. Throws on
-      // missing required fields; the modal surfaces the error.
-      let occurrence_metadata
-      if (type === ACK_TYPES.TRANSPORTATION_NONROUTINE_PER_TRIP) {
-        occurrence_metadata = buildTransportNonroutineOccurrenceMetadata(metadataInput)
-      } else if (type === ACK_TYPES.WATER_ACTIVITIES_OFF_PREMISES_PER_TRIP) {
-        occurrence_metadata = buildWaterOffPremisesOccurrenceMetadata(metadataInput)
-      } else {
-        throw new Error(`recordOccurrence: unknown per-occurrence type "${type}"`)
-      }
+      // Uniform shape for both per-occurrence types — the helper is
+      // the single source of truth.
+      const occurrence_metadata = buildOccurrenceMetadata(metadataInput)
 
       const payload = subTypePayload(type)
       const snapshot_hash = computeAckHash({ type, payload })
@@ -765,33 +762,35 @@ function PerOccurrenceSection({ type, list, help, saving, channelValid, onRecord
   const recent = (list || []).slice(0, recentLimit)
   const remainder = Math.max(0, (list?.length || 0) - recentLimit)
 
-  // Transport form state.
-  const [tripDate, setTripDate] = useState('')
-  const [destination, setDestination] = useState('')
-  const [purpose, setPurpose] = useState('')
-  const [vehicleDescription, setVehicleDescription] = useState('')
+  // Uniform shape for both types (2026-06-01 refactor): one date
+  // field + one description field. The labels differ per type for
+  // provider clarity, but both write the same jsonb keys
+  // (`event_date`, `description`) so a single read path renders both.
+  const [eventDate, setEventDate] = useState('')
+  const [description, setDescription] = useState('')
 
-  // Water form state.
-  const [outingDate, setOutingDate] = useState('')
-  const [waterBodyType, setWaterBodyType] = useState('pool')
-  const [location, setLocation] = useState('')
-  const [address, setAddress] = useState('')
-  const [supervisingAdult, setSupervisingAdult] = useState('')
+  // Per-type label/placeholder copy. Field VALUES are uniform — only
+  // the surface text changes so providers see context-appropriate
+  // wording without the data model branching.
+  const dateLabel = isTransport ? 'Trip date' : 'Outing date'
+  const descriptionLabel = isTransport ? 'Destination' : 'Location & activity'
+  const descriptionPlaceholder = isTransport
+    ? 'e.g., Public library — story time'
+    : 'e.g., Community pool — supervised swim'
+  const recordButtonLabel = isTransport ? 'Record a trip' : 'Record an outing'
 
   function resetForm() {
-    setTripDate(''); setDestination(''); setPurpose(''); setVehicleDescription('')
-    setOutingDate(''); setWaterBodyType('pool'); setLocation('')
-    setAddress(''); setSupervisingAdult('')
+    setEventDate('')
+    setDescription('')
     setFieldErrors(null)
   }
 
   async function handleSubmit() {
     setFieldErrors(null)
     try {
-      const metadata = isTransport
-        ? { trip_date: tripDate, destination, purpose, vehicle_description: vehicleDescription }
-        : { outing_date: outingDate, water_body_type: waterBodyType, location, address, supervising_adult: supervisingAdult }
-      await onRecord(metadata)
+      // Uniform metadata for both types — the helper is the single
+      // source of truth and throws on missing/blank fields.
+      await onRecord({ event_date: eventDate, description })
       resetForm()
       setOpen(false)
     } catch (err) {
@@ -864,107 +863,36 @@ function PerOccurrenceSection({ type, list, help, saving, channelValid, onRecord
             onClick={() => setOpen(true)}
             disabled={saving || !channelValid}
             type="button"
-          >Record {isTransport ? 'a trip' : 'an outing'}</button>
+          >{recordButtonLabel}</button>
         )}
       </div>
 
       {open && (
         <div style={{ marginTop: 12, padding: 10, border: '1px dashed var(--clr-warm-mid)', borderRadius: 'var(--radius-md)' }}>
-          {isTransport ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <label style={{ fontSize: '0.8125rem' }}>
-                Trip date <span style={{ color: 'var(--clr-danger)' }}>*</span>
-                <input
-                  type="date"
-                  value={tripDate}
-                  onChange={e => setTripDate(e.target.value)}
-                  style={{ width: '100%', padding: 6, boxSizing: 'border-box' }}
-                />
-              </label>
-              <label style={{ fontSize: '0.8125rem' }}>
-                Destination <span style={{ color: 'var(--clr-danger)' }}>*</span>
-                <input
-                  type="text"
-                  value={destination}
-                  onChange={e => setDestination(e.target.value)}
-                  placeholder="e.g., Public library"
-                  style={{ width: '100%', padding: 6, boxSizing: 'border-box' }}
-                />
-              </label>
-              <label style={{ fontSize: '0.8125rem' }}>
-                Purpose <span style={{ color: 'var(--clr-ink-soft)' }}>(optional)</span>
-                <input
-                  type="text"
-                  value={purpose}
-                  onChange={e => setPurpose(e.target.value)}
-                  placeholder="e.g., Story time"
-                  style={{ width: '100%', padding: 6, boxSizing: 'border-box' }}
-                />
-              </label>
-              <label style={{ fontSize: '0.8125rem' }}>
-                Vehicle description <span style={{ color: 'var(--clr-ink-soft)' }}>(optional)</span>
-                <input
-                  type="text"
-                  value={vehicleDescription}
-                  onChange={e => setVehicleDescription(e.target.value)}
-                  placeholder="e.g., Provider's minivan"
-                  style={{ width: '100%', padding: 6, boxSizing: 'border-box' }}
-                />
-              </label>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <label style={{ fontSize: '0.8125rem' }}>
-                Outing date <span style={{ color: 'var(--clr-danger)' }}>*</span>
-                <input
-                  type="date"
-                  value={outingDate}
-                  onChange={e => setOutingDate(e.target.value)}
-                  style={{ width: '100%', padding: 6, boxSizing: 'border-box' }}
-                />
-              </label>
-              <label style={{ fontSize: '0.8125rem' }}>
-                Water body type <span style={{ color: 'var(--clr-danger)' }}>*</span>
-                <select
-                  value={waterBodyType}
-                  onChange={e => setWaterBodyType(e.target.value)}
-                  style={{ width: '100%', padding: 6, boxSizing: 'border-box' }}
-                >
-                  {WATER_BODY_TYPE_OPTIONS.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ fontSize: '0.8125rem' }}>
-                Location / venue <span style={{ color: 'var(--clr-danger)' }}>*</span>
-                <input
-                  type="text"
-                  value={location}
-                  onChange={e => setLocation(e.target.value)}
-                  placeholder="e.g., Springfield Community Pool"
-                  style={{ width: '100%', padding: 6, boxSizing: 'border-box' }}
-                />
-              </label>
-              <label style={{ fontSize: '0.8125rem' }}>
-                Address <span style={{ color: 'var(--clr-ink-soft)' }}>(optional)</span>
-                <input
-                  type="text"
-                  value={address}
-                  onChange={e => setAddress(e.target.value)}
-                  style={{ width: '100%', padding: 6, boxSizing: 'border-box' }}
-                />
-              </label>
-              <label style={{ fontSize: '0.8125rem' }}>
-                Supervising adult <span style={{ color: 'var(--clr-ink-soft)' }}>(optional)</span>
-                <input
-                  type="text"
-                  value={supervisingAdult}
-                  onChange={e => setSupervisingAdult(e.target.value)}
-                  style={{ width: '100%', padding: 6, boxSizing: 'border-box' }}
-                />
-              </label>
-            </div>
-          )}
+          {/* Uniform two-field form for both per-occurrence types. Labels
+              are per-type for clarity; values write the same jsonb keys
+              (`event_date`, `description`). */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ fontSize: '0.8125rem' }}>
+              {dateLabel} <span style={{ color: 'var(--clr-danger)' }}>*</span>
+              <input
+                type="date"
+                value={eventDate}
+                onChange={e => setEventDate(e.target.value)}
+                style={{ width: '100%', padding: 6, boxSizing: 'border-box' }}
+              />
+            </label>
+            <label style={{ fontSize: '0.8125rem' }}>
+              {descriptionLabel} <span style={{ color: 'var(--clr-danger)' }}>*</span>
+              <input
+                type="text"
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                placeholder={descriptionPlaceholder}
+                style={{ width: '100%', padding: 6, boxSizing: 'border-box' }}
+              />
+            </label>
+          </div>
           {fieldErrors && (
             <div role="alert" style={{ marginTop: 8, color: 'var(--clr-danger)', fontSize: '0.8125rem' }}>
               <AlertCircle size={14} style={{ verticalAlign: '-2px', marginRight: 4 }} />
@@ -993,26 +921,20 @@ function PerOccurrenceSection({ type, list, help, saving, channelValid, onRecord
 
 /**
  * Render one occurrence as a single-line summary for the recent-N
- * list. Reads from `occurrence_metadata` per type; falls back to the
- * recording date if the metadata is missing (defensive — pre-Phase-C
- * rows have NULL metadata).
+ * list. Both per-occurrence types share the unified
+ * `{ event_date, description }` shape (2026-06-01 refactor) so a
+ * single render path covers both. Defensive fallbacks cover
+ * pre-Phase-C rows (NULL metadata) and any rows still on the old
+ * type-specific shape until they're migrated.
  */
 function formatOccurrenceLine(row) {
   const m = row.occurrence_metadata || {}
-  if (row.type === ACK_TYPES.TRANSPORTATION_NONROUTINE_PER_TRIP) {
-    const date = m.trip_date ? formatDate(m.trip_date) : '(date missing)'
-    const dest = m.destination || '(destination missing)'
-    const channelLabel = humanChannel(row.acknowledged_via)
-    return `${date} — ${dest} (${channelLabel})`
-  }
-  if (row.type === ACK_TYPES.WATER_ACTIVITIES_OFF_PREMISES_PER_TRIP) {
-    const date = m.outing_date ? formatDate(m.outing_date) : '(date missing)'
-    const body = m.water_body_type || '(water body type missing)'
-    const loc = m.location || '(location missing)'
-    const channelLabel = humanChannel(row.acknowledged_via)
-    return `${date} — ${body} at ${loc} (${channelLabel})`
-  }
-  return `Recorded ${formatDate(row.acknowledged_at)}`
+  const channelLabel = humanChannel(row.acknowledged_via)
+  const date = m.event_date
+    ? formatDate(m.event_date)
+    : (row.acknowledged_at ? formatDate(row.acknowledged_at) : '(date missing)')
+  const description = m.description || '(description missing)'
+  return `${date} — ${description} (${channelLabel})`
 }
 
 function ConsentRow({ icon: Icon, title, badge, badgeKind, help, footnote, actions }) {
