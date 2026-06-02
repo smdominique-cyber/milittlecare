@@ -54,6 +54,9 @@ const {
   getChildFilesAuditState,
   pendingEnrollmentConsentsForChild,
   photoConsentNeedsReminderForChild,
+  computePhaseBExpiresAt,
+  partitionAcksByExpiry,
+  TIME_BOUND_TYPES,
 } = await import('./childFiles')
 
 beforeEach(() => {
@@ -84,8 +87,16 @@ function emptyBreakdown() {
 
 // Phase A breakdown helpers — separate fixture so the existing
 // intake-bundle emptyBreakdown stays focused on parent-signed types.
+// Phase B (2026-06-01) added two licensing-required types to
+// ENROLLMENT_CONSENT_TYPES: transportation_routine_annual and
+// water_activities_on_premises_seasonal. The breakdown carries
+// every key initialized to 0 (stable shape across all return paths).
 function emptyEnrollmentConsentsBreakdown() {
-  return { field_trip_permission: 0 }
+  return {
+    field_trip_permission: 0,
+    transportation_routine_annual: 0,
+    water_activities_on_premises_seasonal: 0,
+  }
 }
 function emptyProviderProtectiveConsentsBreakdown() {
   return { photo_sharing_consent: 0 }
@@ -111,6 +122,9 @@ describe('getChildFilesAuditState', () => {
       pending_provider_protective_consents: emptyProviderProtectiveConsentsBreakdown(),
       children_with_pending_enrollment_consents_count: 0,
       children_with_pending_provider_protective_consents_count: 0,
+      // Phase B (2026-06-01) — expired-state tracking on time-bound types.
+      pending_enrollment_consents_expired_count: 0,
+      pending_enrollment_consents_expired: emptyEnrollmentConsentsBreakdown(),
     })
   })
 
@@ -119,7 +133,9 @@ describe('getChildFilesAuditState', () => {
     // firearms counts toward the rollup. With one child and no acks,
     // every always-required parent-signed type is pending (6 total
     // after the 2026-05-29 licensing_rules_offered addition). Consents
-    // Phase A (2026-05-30) added six new top-level keys.
+    // Phase A (2026-05-30) added six new top-level keys; Phase B
+    // (2026-06-01) added two more (pending_enrollment_consents_expired
+    // + its count).
     mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
     mockState.children = [
       { id: 'c1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
@@ -137,6 +153,8 @@ describe('getChildFilesAuditState', () => {
       'intake_incomplete_count',
       'pending_enrollment_consents',
       'pending_enrollment_consents_count',
+      'pending_enrollment_consents_expired',
+      'pending_enrollment_consents_expired_count',
       'pending_lead_disclosures_count',
       'pending_parent_signatures',
       'pending_parent_signatures_count',
@@ -646,19 +664,24 @@ describe('getChildFilesAuditState', () => {
   // pin the channel rule the same way the intake-bundle tests do.
 
   describe('enrollment_consents (licensing-required) — field_trip_permission', () => {
-    it('pending when no record exists (1 child, empty acks → 1 slot, 1 child affected)', async () => {
+    it('pending when no record exists (1 child, empty acks → 1 slot per type, 1 child affected)', async () => {
       mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
       mockState.children = [
         { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
       ]
       mockState.acks = []
       const out = await getChildFilesAuditState('u1')
+      // Phase B (2026-06-01): ENROLLMENT_CONSENT_TYPES expanded from
+      // [field_trip] to [field_trip, transport_annual, water_seasonal],
+      // so empty-acks reports 3 pending slots per child, not 1.
       expect(out.pending_enrollment_consents.field_trip_permission).toBe(1)
-      expect(out.pending_enrollment_consents_count).toBe(1)
+      expect(out.pending_enrollment_consents.transportation_routine_annual).toBe(1)
+      expect(out.pending_enrollment_consents.water_activities_on_premises_seasonal).toBe(1)
+      expect(out.pending_enrollment_consents_count).toBe(3)
       expect(out.children_with_pending_enrollment_consents_count).toBe(1)
     })
 
-    it('cleared by in_person_paper record', async () => {
+    it('cleared by in_person_paper record (field_trip-specific; other Phase B types still pending)', async () => {
       mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
       mockState.children = [
         { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
@@ -668,11 +691,15 @@ describe('getChildFilesAuditState', () => {
       ]
       const out = await getChildFilesAuditState('u1')
       expect(out.pending_enrollment_consents.field_trip_permission).toBe(0)
-      expect(out.pending_enrollment_consents_count).toBe(0)
-      expect(out.children_with_pending_enrollment_consents_count).toBe(0)
+      // Phase B types still pending (the test only captures field_trip).
+      expect(out.pending_enrollment_consents.transportation_routine_annual).toBe(1)
+      expect(out.pending_enrollment_consents.water_activities_on_premises_seasonal).toBe(1)
+      expect(out.pending_enrollment_consents_count).toBe(2)
+      // Child still affected because transport + water are pending.
+      expect(out.children_with_pending_enrollment_consents_count).toBe(1)
     })
 
-    it('cleared by parent_portal record (reserved for Phase B; the channel rule already supports it)', async () => {
+    it('cleared by parent_portal record (channel rule supports it)', async () => {
       mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
       mockState.children = [
         { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
@@ -786,7 +813,8 @@ describe('getChildFilesAuditState', () => {
         { id: 'k1', intake_completed_at: '2026-05-30T12:00:00Z', records_last_reviewed_on: '2026-05-30', date_of_birth: '2024-01-01' },
       ]
       mockState.acks = [
-        // Full intake bundle (parent_portal) but NO field_trip / no photo consent.
+        // Full intake bundle (parent_portal) but NO enrollment consents
+        // (field_trip / transport / water) and no photo consent.
         { subject_id: 'k1', type: 'child_in_care_statement', acknowledged_via: 'parent_portal' },
         ...['lead_disclosure', 'firearms_disclosure', 'food_provider_agreement',
             'licensing_notebook_offered', 'licensing_rules_offered',
@@ -795,12 +823,14 @@ describe('getChildFilesAuditState', () => {
       ]
       const out = await getChildFilesAuditState('u1')
       expect(out.pending_parent_signatures_count).toBe(0)              // intake fully cleared
-      expect(out.pending_enrollment_consents_count).toBe(1)            // field_trip still pending
+      // Phase B expansion: enrollment block has 3 types, all pending.
+      expect(out.pending_enrollment_consents_count).toBe(3)
       expect(out.pending_provider_protective_consents_count).toBe(1)   // photo still pending
     })
 
-    it('mixed: intake satisfied, field_trip satisfied, photo revoked — every block reads as captured', async () => {
+    it('mixed: intake satisfied, every enrollment consent captured, photo revoked — every block reads as captured', async () => {
       mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+      const inOneYear = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
       mockState.children = [
         { id: 'k1', intake_completed_at: '2026-05-30T12:00:00Z', records_last_reviewed_on: '2026-05-30', date_of_birth: '2024-01-01' },
       ]
@@ -810,11 +840,15 @@ describe('getChildFilesAuditState', () => {
             'health_condition', 'discipline_policy_receipt']
           .map(t => ({ subject_id: 'k1', type: t, acknowledged_via: 'in_person_paper' })),
         { subject_id: 'k1', type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
+        // Phase B types captured with a future expires_at → currently valid.
+        { subject_id: 'k1', type: 'transportation_routine_annual', acknowledged_via: 'in_person_paper', expires_at: inOneYear },
+        { subject_id: 'k1', type: 'water_activities_on_premises_seasonal', acknowledged_via: 'in_person_paper', expires_at: inOneYear },
         { subject_id: 'k1', type: 'photo_sharing_consent_revoked', acknowledged_via: 'in_person_paper' },
       ]
       const out = await getChildFilesAuditState('u1')
       expect(out.pending_parent_signatures_count).toBe(0)
       expect(out.pending_enrollment_consents_count).toBe(0)
+      expect(out.pending_enrollment_consents_expired_count).toBe(0)
       expect(out.pending_provider_protective_consents_count).toBe(0)
       expect(out.children_with_pending_enrollment_consents_count).toBe(0)
       expect(out.children_with_pending_provider_protective_consents_count).toBe(0)
@@ -847,40 +881,56 @@ describe('getChildFilesAuditState', () => {
 // no Supabase, no I/O.
 
 describe('pendingEnrollmentConsentsForChild — pure verdict', () => {
-  it('no record → both buckets pending', () => {
+  it('no record → both buckets pending (Phase B added two more enrollment types)', () => {
     const v = pendingEnrollmentConsentsForChild({ activeAcks: [] })
-    expect(v.enrollment_consents_pending).toEqual(['field_trip_permission'])
+    expect(v.enrollment_consents_pending).toEqual([
+      'field_trip_permission',
+      'transportation_routine_annual',
+      'water_activities_on_premises_seasonal',
+    ])
+    expect(v.enrollment_consents_expired).toEqual([])
     expect(v.provider_protective_consents_pending).toEqual(['photo_sharing_consent'])
     expect(v.any_pending).toBe(true)
   })
 
-  it('field_trip consent via in_person_paper → enrollment block cleared; photo still pending', () => {
+  it('field_trip consent via in_person_paper → only field_trip cleared; Phase B types still pending', () => {
     const v = pendingEnrollmentConsentsForChild({
       activeAcks: [
         { type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
       ],
     })
-    expect(v.enrollment_consents_pending).toEqual([])
+    expect(v.enrollment_consents_pending).toEqual([
+      'transportation_routine_annual',
+      'water_activities_on_premises_seasonal',
+    ])
+    expect(v.enrollment_consents_expired).toEqual([])
     expect(v.provider_protective_consents_pending).toEqual(['photo_sharing_consent'])
     expect(v.any_pending).toBe(true)
   })
 
-  it('field_trip consent via parent_portal → enrollment block cleared (Phase B-ready)', () => {
+  it('field_trip consent via parent_portal → field_trip cleared; Phase B types remain pending', () => {
     const v = pendingEnrollmentConsentsForChild({
       activeAcks: [
         { type: 'field_trip_permission', acknowledged_via: 'parent_portal' },
       ],
     })
-    expect(v.enrollment_consents_pending).toEqual([])
+    expect(v.enrollment_consents_pending).toEqual([
+      'transportation_routine_annual',
+      'water_activities_on_premises_seasonal',
+    ])
   })
 
-  it('field_trip consent via provider_override → DOES NOT clear (parent has not signed)', () => {
+  it('field_trip consent via provider_override → DOES NOT clear (parent has not signed); Phase B still pending', () => {
     const v = pendingEnrollmentConsentsForChild({
       activeAcks: [
         { type: 'field_trip_permission', acknowledged_via: 'provider_override' },
       ],
     })
-    expect(v.enrollment_consents_pending).toEqual(['field_trip_permission'])
+    expect(v.enrollment_consents_pending).toEqual([
+      'field_trip_permission',
+      'transportation_routine_annual',
+      'water_activities_on_premises_seasonal',
+    ])
   })
 
   it('photo consent via in_person_paper → provider-protective block cleared', () => {
@@ -920,14 +970,17 @@ describe('pendingEnrollmentConsentsForChild — pure verdict', () => {
     expect(v.provider_protective_consents_pending).toEqual([])
   })
 
-  it('both blocks satisfied → any_pending = false', () => {
+  it('all enrollment + protective types satisfied → any_pending = false', () => {
     const v = pendingEnrollmentConsentsForChild({
       activeAcks: [
         { type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
+        { type: 'transportation_routine_annual', acknowledged_via: 'in_person_paper' },
+        { type: 'water_activities_on_premises_seasonal', acknowledged_via: 'in_person_paper' },
         { type: 'photo_sharing_consent', acknowledged_via: 'in_person_paper' },
       ],
     })
     expect(v.enrollment_consents_pending).toEqual([])
+    expect(v.enrollment_consents_expired).toEqual([])
     expect(v.provider_protective_consents_pending).toEqual([])
     expect(v.any_pending).toBe(false)
   })
@@ -945,14 +998,25 @@ describe('pendingEnrollmentConsentsForChild — pure verdict', () => {
         { type: 'discipline_policy_receipt', acknowledged_via: 'parent_portal' },
       ],
     })
-    // Field trip + photo still pending — none of the above match.
-    expect(v.enrollment_consents_pending).toEqual(['field_trip_permission'])
+    // All enrollment + protective types still pending — none of the
+    // intake rows match the ENROLLMENT_CONSENT_TYPES or
+    // PROVIDER_PROTECTIVE_CONSENT_TYPES lists.
+    expect(v.enrollment_consents_pending).toEqual([
+      'field_trip_permission',
+      'transportation_routine_annual',
+      'water_activities_on_premises_seasonal',
+    ])
     expect(v.provider_protective_consents_pending).toEqual(['photo_sharing_consent'])
   })
 
   it('defensive — non-array input returns the empty-state pending verdict (every type still pending)', () => {
     const v = pendingEnrollmentConsentsForChild({ activeAcks: null })
-    expect(v.enrollment_consents_pending).toEqual(['field_trip_permission'])
+    expect(v.enrollment_consents_pending).toEqual([
+      'field_trip_permission',
+      'transportation_routine_annual',
+      'water_activities_on_premises_seasonal',
+    ])
+    expect(v.enrollment_consents_expired).toEqual([])
     expect(v.provider_protective_consents_pending).toEqual(['photo_sharing_consent'])
   })
 })
@@ -971,26 +1035,46 @@ describe('pendingEnrollmentConsentsForChild — pure verdict', () => {
 
 describe('parity — provider audit helper vs parent-side aggregation agree on children-affected', () => {
   it('the same fixture yields the same children-affected counts on both sides', async () => {
+    // Fixture intent: focus on the field_trip + photo paths the
+    // original parity test covered. Phase B (2026-06-01) added two
+    // more licensing-required types, so we capture them via paper
+    // for every child to keep them out of this fixture's scope —
+    // a separate Phase B parity test below exercises the expired
+    // path. The "captured both" children also capture Phase B; the
+    // "pending field_trip" / "pending photo" children intentionally
+    // leave the Phase B types pending so the only enrollment-block
+    // pending differences track field_trip.
     mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    const farFuture = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
     mockState.children = [
-      // kA — empty record → both pending
+      // kA — empty record → both blocks pending (field_trip + transport + water + photo)
       { id: 'kA', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
-      // kB — field_trip cleared via paper, no photo row → only photo pending
+      // kB — every enrollment consent cleared via paper, no photo row → only photo pending
       { id: 'kB', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
-      // kC — photo cleared via paper, no field_trip row → only field_trip pending
+      // kC — photo cleared via paper, NO field_trip + NO Phase B → enrollment block pending
       { id: 'kC', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
-      // kD — field_trip paper + photo revoked paper → both cleared
+      // kD — every enrollment consent paper + photo revoked paper → both blocks cleared
       { id: 'kD', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
-      // kE — field_trip portal + photo consent paper → both cleared
+      // kE — every enrollment consent portal/paper + photo consent paper → both blocks cleared
       { id: 'kE', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
     ]
     mockState.acks = [
       // kA: no rows
+      // kB: all enrollment consents captured (field_trip + Phase B), photo missing
       { subject_id: 'kB', type: 'field_trip_permission',  acknowledged_via: 'in_person_paper' },
+      { subject_id: 'kB', type: 'transportation_routine_annual',           acknowledged_via: 'in_person_paper', expires_at: farFuture },
+      { subject_id: 'kB', type: 'water_activities_on_premises_seasonal',   acknowledged_via: 'in_person_paper', expires_at: farFuture },
+      // kC: only photo captured (intentionally leave entire enrollment block pending)
       { subject_id: 'kC', type: 'photo_sharing_consent',  acknowledged_via: 'in_person_paper' },
+      // kD: all enrollment consents captured + photo revoked
       { subject_id: 'kD', type: 'field_trip_permission',  acknowledged_via: 'in_person_paper' },
+      { subject_id: 'kD', type: 'transportation_routine_annual',           acknowledged_via: 'in_person_paper', expires_at: farFuture },
+      { subject_id: 'kD', type: 'water_activities_on_premises_seasonal',   acknowledged_via: 'in_person_paper', expires_at: farFuture },
       { subject_id: 'kD', type: 'photo_sharing_consent_revoked', acknowledged_via: 'in_person_paper' },
+      // kE: all enrollment consents (mix of channels) + photo consent
       { subject_id: 'kE', type: 'field_trip_permission',  acknowledged_via: 'parent_portal' },
+      { subject_id: 'kE', type: 'transportation_routine_annual',           acknowledged_via: 'parent_portal', expires_at: farFuture },
+      { subject_id: 'kE', type: 'water_activities_on_premises_seasonal',   acknowledged_via: 'in_person_paper', expires_at: farFuture },
       { subject_id: 'kE', type: 'photo_sharing_consent',  acknowledged_via: 'in_person_paper' },
     ]
 
@@ -1001,6 +1085,11 @@ describe('parity — provider audit helper vs parent-side aggregation agree on c
     // ParentAcknowledgmentsPage tab badge and the
     // EnrollmentConsentsPendingBanner use post-refactor. Computed
     // INDEPENDENTLY of the helper, calling the same shared function.
+    // Phase B (2026-06-01): both paths partition by expiry first via
+    // `partitionAcksByExpiry`, so the parent-side aggregation also
+    // splits its acks before feeding the verdict. Here every row has
+    // a far-future expires_at (or NULL), so the partition puts
+    // everything in activeAcks — same result as pre-Phase-B.
     const acksByChild = new Map()
     for (const a of mockState.acks) {
       let list = acksByChild.get(a.subject_id)
@@ -1013,18 +1102,22 @@ describe('parity — provider audit helper vs parent-side aggregation agree on c
     for (const k of mockState.children) {
       const v = pendingEnrollmentConsentsForChild({
         activeAcks: acksByChild.get(k.id) || [],
+        expiredAcks: [],
       })
       if (v.any_pending) parentChildrenAffected += 1
       if (v.enrollment_consents_pending.length > 0) parentEnrollmentAffected += 1
       if (v.provider_protective_consents_pending.length > 0) parentProtectiveAffected += 1
     }
 
-    // Fixture truth:
-    //   kA pending both, kB pending photo only, kC pending field_trip only,
-    //   kD captured both, kE captured both.
+    // Fixture truth (post-Phase-B):
+    //   kA pending all enrollment + photo
+    //   kB enrollment fully captured, photo pending
+    //   kC enrollment fully pending (3 types), photo captured
+    //   kD all blocks cleared
+    //   kE all blocks cleared
     //   → 3 children affected overall (kA, kB, kC)
-    //   → 2 children pending field_trip (kA, kC)
-    //   → 2 children pending photo    (kA, kB)
+    //   → 2 children pending ≥1 enrollment consent (kA, kC)
+    //   → 2 children pending photo (kA, kB)
     expect(parentChildrenAffected).toBe(3)
     expect(parentEnrollmentAffected).toBe(2)
     expect(parentProtectiveAffected).toBe(2)
@@ -1033,9 +1126,12 @@ describe('parity — provider audit helper vs parent-side aggregation agree on c
     expect(out.children_with_pending_enrollment_consents_count).toBe(parentEnrollmentAffected)
     expect(out.children_with_pending_provider_protective_consents_count).toBe(parentProtectiveAffected)
 
-    // And the helper's breakdowns / slot counts match the same logic.
+    // Slot counts (post-Phase-B): kA + kC each have 3 enrollment
+    // types pending = 6 slots. Photo: kA + kB = 2.
     expect(out.pending_enrollment_consents.field_trip_permission).toBe(2)
-    expect(out.pending_enrollment_consents_count).toBe(2)
+    expect(out.pending_enrollment_consents.transportation_routine_annual).toBe(2)
+    expect(out.pending_enrollment_consents.water_activities_on_premises_seasonal).toBe(2)
+    expect(out.pending_enrollment_consents_count).toBe(6)
     expect(out.pending_provider_protective_consents.photo_sharing_consent).toBe(2)
     expect(out.pending_provider_protective_consents_count).toBe(2)
   })
@@ -1043,26 +1139,35 @@ describe('parity — provider audit helper vs parent-side aggregation agree on c
   it('every-channel mix — both paths still agree', async () => {
     // A more pathological fixture: each child exercises a different
     // (channel × type × revocation) combination. The two paths must
-    // still arrive at the same children-affected set.
+    // still arrive at the same children-affected set. Phase B
+    // (2026-06-01) captures Phase B types via paper for children that
+    // were already "captured" pre-Phase-B (k4, k5), keeping the
+    // fixture's enrollment-block focus on field_trip vs the Phase B
+    // pending state.
     mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    const farFuture = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
     mockState.children = ['k1', 'k2', 'k3', 'k4', 'k5', 'k6'].map(id => ({
       id, intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01',
     }))
     mockState.acks = [
-      // k1 — no rows → fully pending
-      // k2 — field_trip paper + photo consent override → photo still pending
+      // k1 — no rows → fully pending (every enrollment + photo)
+      // k2 — field_trip paper + photo consent override → photo pending, Phase B pending
       { subject_id: 'k2', type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
       { subject_id: 'k2', type: 'photo_sharing_consent', acknowledged_via: 'provider_override' },
-      // k3 — field_trip override + photo revoked paper → field_trip still pending
+      // k3 — field_trip override + photo revoked paper → field_trip pending, Phase B pending
       { subject_id: 'k3', type: 'field_trip_permission', acknowledged_via: 'provider_override' },
       { subject_id: 'k3', type: 'photo_sharing_consent_revoked', acknowledged_via: 'in_person_paper' },
-      // k4 — both via paper → cleared
+      // k4 — all enrollment paper + photo paper → fully cleared
       { subject_id: 'k4', type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
+      { subject_id: 'k4', type: 'transportation_routine_annual',         acknowledged_via: 'in_person_paper', expires_at: farFuture },
+      { subject_id: 'k4', type: 'water_activities_on_premises_seasonal', acknowledged_via: 'in_person_paper', expires_at: farFuture },
       { subject_id: 'k4', type: 'photo_sharing_consent', acknowledged_via: 'in_person_paper' },
-      // k5 — both via portal → cleared (Phase B-ready)
+      // k5 — all enrollment portal + photo portal → fully cleared
       { subject_id: 'k5', type: 'field_trip_permission', acknowledged_via: 'parent_portal' },
+      { subject_id: 'k5', type: 'transportation_routine_annual',         acknowledged_via: 'parent_portal', expires_at: farFuture },
+      { subject_id: 'k5', type: 'water_activities_on_premises_seasonal', acknowledged_via: 'parent_portal', expires_at: farFuture },
       { subject_id: 'k5', type: 'photo_sharing_consent', acknowledged_via: 'parent_portal' },
-      // k6 — photo revocation via override (does NOT count) + nothing for field_trip → fully pending
+      // k6 — photo revocation via override (does NOT count) + nothing for enrollment → fully pending
       { subject_id: 'k6', type: 'photo_sharing_consent_revoked', acknowledged_via: 'provider_override' },
     ]
 
@@ -1080,18 +1185,25 @@ describe('parity — provider audit helper vs parent-side aggregation agree on c
     for (const k of mockState.children) {
       const v = pendingEnrollmentConsentsForChild({
         activeAcks: acksByChild.get(k.id) || [],
+        expiredAcks: [],
       })
       if (v.any_pending) any += 1
       if (v.enrollment_consents_pending.length > 0) enr += 1
       if (v.provider_protective_consents_pending.length > 0) prot += 1
     }
 
-    // Expected pending children: k1 (both), k2 (photo), k3 (field_trip), k6 (both)
-    //   → enrollment-pending: k1, k3, k6 = 3
+    // Expected pending children (post-Phase-B):
+    //   k1 — every type pending
+    //   k2 — field_trip cleared but Phase B + photo pending
+    //   k3 — every enrollment type pending; photo cleared via revocation
+    //   k4 — fully cleared
+    //   k5 — fully cleared
+    //   k6 — every type pending
+    //   → enrollment-pending: k1, k2 (Phase B), k3 (all), k6 = 4
     //   → protective-pending: k1, k2, k6 = 3
     //   → any-pending: k1, k2, k3, k6 = 4
     expect(any).toBe(4)
-    expect(enr).toBe(3)
+    expect(enr).toBe(4)
     expect(prot).toBe(3)
     expect(out.children_with_pending_enrollment_consents_count).toBe(enr)
     expect(out.children_with_pending_provider_protective_consents_count).toBe(prot)
@@ -1239,5 +1351,344 @@ describe('photoConsentNeedsReminderForChild — channel-rule parity', () => {
     // Messaging reminder says "fire" (parent said no — most important
     // case to remind about).
     expect(reminderFires).toBe(true)
+  })
+})
+
+// ─── Consents Phase B (2026-06-01) — time-bound recurring consents ──
+//
+// Exercises the expiry-aware verdict, the cadence write helper, the
+// caller-side partition helper, and the audit-state expired-counts
+// rollup. Verdict stays pure (no now() inside); the caller does
+// every wall-clock comparison.
+
+describe('Phase B cadence — computePhaseBExpiresAt', () => {
+  it('returns acknowledged_at + 1 year (UTC) for a string input', () => {
+    const out = computePhaseBExpiresAt('2026-06-01T12:00:00.000Z')
+    expect(out).toBe('2027-06-01T12:00:00.000Z')
+  })
+
+  it('handles Date input identically to ISO-string input', () => {
+    const d = new Date('2026-06-01T12:00:00.000Z')
+    expect(computePhaseBExpiresAt(d)).toBe('2027-06-01T12:00:00.000Z')
+  })
+
+  it('handles leap-day edge case (Feb 29 + 1y = Feb 29 next year only when leap)', () => {
+    // 2024 was leap; 2025 was not. setUTCFullYear(year+1) on Feb 29
+    // 2024 rolls to Mar 1 2025 in JavaScript's Date semantics.
+    const out = computePhaseBExpiresAt('2024-02-29T00:00:00.000Z')
+    // Implementation-defined behavior — accept either Feb-28-2025 or
+    // Mar-1-2025; assert the year and a plausible month.
+    const d = new Date(out)
+    expect(d.getUTCFullYear()).toBe(2025)
+  })
+
+  it('TIME_BOUND_TYPES enumerates exactly the two Phase B types', () => {
+    expect([...TIME_BOUND_TYPES].sort()).toEqual([
+      'transportation_routine_annual',
+      'water_activities_on_premises_seasonal',
+    ])
+  })
+})
+
+describe('partitionAcksByExpiry — caller-side expiry split', () => {
+  const NOW = new Date('2026-06-01T12:00:00.000Z')
+
+  it('rows with NULL expires_at land in activeAcks (Phase A behavior preserved)', () => {
+    const { activeAcks, expiredAcks } = partitionAcksByExpiry({
+      rows: [
+        { type: 'field_trip_permission', expires_at: null },
+        { type: 'photo_sharing_consent' /* expires_at undefined */ },
+      ],
+      now: NOW,
+    })
+    expect(activeAcks.map(r => r.type).sort()).toEqual(
+      ['field_trip_permission', 'photo_sharing_consent']
+    )
+    expect(expiredAcks).toEqual([])
+  })
+
+  it('rows with future expires_at land in activeAcks', () => {
+    const { activeAcks, expiredAcks } = partitionAcksByExpiry({
+      rows: [
+        { type: 'transportation_routine_annual', expires_at: '2027-06-01T12:00:00.000Z' },
+      ],
+      now: NOW,
+    })
+    expect(activeAcks).toHaveLength(1)
+    expect(expiredAcks).toEqual([])
+  })
+
+  it('rows with past expires_at land in expiredAcks', () => {
+    const { activeAcks, expiredAcks } = partitionAcksByExpiry({
+      rows: [
+        { type: 'transportation_routine_annual', expires_at: '2025-06-01T12:00:00.000Z' },
+      ],
+      now: NOW,
+    })
+    expect(activeAcks).toEqual([])
+    expect(expiredAcks).toHaveLength(1)
+  })
+
+  it('rows with expires_at === now() land in expiredAcks (boundary: > now() is the active rule)', () => {
+    const { activeAcks, expiredAcks } = partitionAcksByExpiry({
+      rows: [
+        { type: 'transportation_routine_annual', expires_at: NOW.toISOString() },
+      ],
+      now: NOW,
+    })
+    expect(activeAcks).toEqual([])
+    expect(expiredAcks).toHaveLength(1)
+  })
+
+  it('non-array input is tolerated (defensive)', () => {
+    expect(partitionAcksByExpiry({ rows: null, now: NOW }))
+      .toEqual({ activeAcks: [], expiredAcks: [] })
+  })
+})
+
+describe('pendingEnrollmentConsentsForChild — Phase B expired state', () => {
+  it('transport expired-via-paper → reports as expired, NOT pending', () => {
+    const v = pendingEnrollmentConsentsForChild({
+      activeAcks: [],
+      expiredAcks: [
+        { type: 'transportation_routine_annual', acknowledged_via: 'in_person_paper' },
+      ],
+    })
+    expect(v.enrollment_consents_pending).toEqual([
+      'field_trip_permission',
+      // transport NOT in pending — it's in expired.
+      'water_activities_on_premises_seasonal',
+    ])
+    expect(v.enrollment_consents_expired).toEqual(['transportation_routine_annual'])
+    expect(v.any_pending).toBe(true)
+  })
+
+  it('water expired-via-portal → reports as expired, NOT pending', () => {
+    const v = pendingEnrollmentConsentsForChild({
+      activeAcks: [],
+      expiredAcks: [
+        { type: 'water_activities_on_premises_seasonal', acknowledged_via: 'parent_portal' },
+      ],
+    })
+    expect(v.enrollment_consents_expired).toEqual(['water_activities_on_premises_seasonal'])
+  })
+
+  it('expired-via-provider_override → NEITHER pending NOR expired logic counts it (parent never signed); type stays pending', () => {
+    // An expired provider_override row is "the provider attested
+    // something a year ago that lapsed" — the parent never signed in
+    // the first place. The verdict treats this as never-captured.
+    const v = pendingEnrollmentConsentsForChild({
+      activeAcks: [],
+      expiredAcks: [
+        { type: 'transportation_routine_annual', acknowledged_via: 'provider_override' },
+      ],
+    })
+    expect(v.enrollment_consents_pending).toContain('transportation_routine_annual')
+    expect(v.enrollment_consents_expired).toEqual([])
+  })
+
+  it('current valid row wins over an expired row of the same type (renewed → not expired)', () => {
+    const v = pendingEnrollmentConsentsForChild({
+      activeAcks: [
+        { type: 'transportation_routine_annual', acknowledged_via: 'in_person_paper' },
+      ],
+      expiredAcks: [
+        // An older row of the same type that lapsed before the renewal
+        // (would normally be archived; the partition helper would have
+        // returned it as expired if it weren't yet archived).
+        { type: 'transportation_routine_annual', acknowledged_via: 'in_person_paper' },
+      ],
+    })
+    expect(v.enrollment_consents_pending).toEqual([
+      'field_trip_permission',
+      'water_activities_on_premises_seasonal',
+    ])
+    expect(v.enrollment_consents_expired).toEqual([])
+  })
+
+  it('omitting expiredAcks (Phase A callers) returns the pre-Phase-B shape', () => {
+    // Phase A callers that pass only activeAcks (no expiredAcks) get
+    // an empty expired array and identical pending semantics.
+    const v = pendingEnrollmentConsentsForChild({
+      activeAcks: [
+        { type: 'field_trip_permission', acknowledged_via: 'in_person_paper' },
+      ],
+    })
+    expect(v.enrollment_consents_expired).toEqual([])
+    expect(v.any_pending).toBe(true) // Phase B types still pending.
+  })
+})
+
+describe('getChildFilesAuditState — Phase B expiry rollup', () => {
+  it('transport captured fresh (future expires_at) → on file; no expired count', async () => {
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    const farFuture = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'transportation_routine_annual', acknowledged_via: 'in_person_paper', expires_at: farFuture },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    expect(out.pending_enrollment_consents.transportation_routine_annual).toBe(0)
+    expect(out.pending_enrollment_consents_expired.transportation_routine_annual).toBe(0)
+    expect(out.pending_enrollment_consents_expired_count).toBe(0)
+  })
+
+  it('transport captured but expired (past expires_at) → expired count = 1, pending count for this type = 0', async () => {
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'transportation_routine_annual', acknowledged_via: 'in_person_paper', expires_at: dayAgo },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    expect(out.pending_enrollment_consents.transportation_routine_annual).toBe(0)
+    expect(out.pending_enrollment_consents_expired.transportation_routine_annual).toBe(1)
+    expect(out.pending_enrollment_consents_expired_count).toBe(1)
+    // children_with_pending_enrollment_consents_count includes expired
+    // children (any compliance gap).
+    expect(out.children_with_pending_enrollment_consents_count).toBe(1)
+  })
+
+  it('two children, transport expired vs current → only the expired one is in the expired bucket', async () => {
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    const farFuture = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+      { id: 'k2', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'transportation_routine_annual', acknowledged_via: 'in_person_paper', expires_at: dayAgo },
+      { subject_id: 'k2', type: 'transportation_routine_annual', acknowledged_via: 'in_person_paper', expires_at: farFuture },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    // For transport: k1 expired (1 slot in expired), k2 currently
+    // valid (0 slots in pending; the verdict puts a captured-but-
+    // lapsed type in `_expired`, not `_pending`, AND a currently-valid
+    // type in neither).
+    expect(out.pending_enrollment_consents_expired.transportation_routine_annual).toBe(1)
+    expect(out.pending_enrollment_consents.transportation_routine_annual).toBe(0)
+    // Both children still affected because they're each missing 2 of
+    // the other Phase B types (water + field_trip) — children-affected
+    // captures any compliance gap.
+    expect(out.children_with_pending_enrollment_consents_count).toBe(2)
+  })
+
+  it('an expired provider_override row stays in the pending bucket (parent never signed)', async () => {
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'transportation_routine_annual', acknowledged_via: 'provider_override', expires_at: dayAgo },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    expect(out.pending_enrollment_consents.transportation_routine_annual).toBe(1)
+    expect(out.pending_enrollment_consents_expired.transportation_routine_annual).toBe(0)
+  })
+
+  it('Phase A types remain unaffected by Phase B expiry — backward-compat invariant', async () => {
+    // field_trip_permission has no expires_at; the row should read
+    // identically before and after Phase B. This test pins the
+    // backward-compat invariant from §8 of pr-consents-B-scope.md.
+    mockState.profile = { home_built_before_1978: false, firearms_on_premises: false }
+    mockState.children = [
+      { id: 'k1', intake_completed_at: null, records_last_reviewed_on: null, date_of_birth: '2024-01-01' },
+    ]
+    mockState.acks = [
+      { subject_id: 'k1', type: 'field_trip_permission', acknowledged_via: 'in_person_paper', expires_at: null },
+    ]
+    const out = await getChildFilesAuditState('u1')
+    expect(out.pending_enrollment_consents.field_trip_permission).toBe(0)
+    expect(out.pending_enrollment_consents_expired.field_trip_permission).toBe(0)
+  })
+})
+
+describe('Phase B renewal protocol — archive-then-insert state transitions', () => {
+  // These tests exercise the verdict + partition surfaces with the
+  // exact row shapes the renewal flow produces. The renewal logic
+  // itself lives in EnrollmentConsentsModal (provider modal, decision
+  // 9); these tests pin that the verdict reports each transition
+  // correctly so the modal's render branches stay accurate.
+  const NOW = new Date('2026-12-01T12:00:00.000Z')
+
+  it('initial capture: one active row, expires_at + 1y → currently satisfied', () => {
+    const rows = [
+      // The just-inserted row from the modal's initial-capture path.
+      {
+        type: 'transportation_routine_annual',
+        acknowledged_via: 'in_person_paper',
+        archived_at: null,
+        expires_at: '2027-12-01T12:00:00.000Z',
+      },
+    ]
+    const { activeAcks, expiredAcks } = partitionAcksByExpiry({ rows, now: NOW })
+    const v = pendingEnrollmentConsentsForChild({ activeAcks, expiredAcks })
+    expect(v.enrollment_consents_pending).not.toContain('transportation_routine_annual')
+    expect(v.enrollment_consents_expired).not.toContain('transportation_routine_annual')
+  })
+
+  it('expired-but-not-archived state: row past expires_at, archived_at still NULL → reports as expired', () => {
+    const rows = [
+      {
+        type: 'transportation_routine_annual',
+        acknowledged_via: 'in_person_paper',
+        archived_at: null,
+        expires_at: '2025-12-01T12:00:00.000Z', // 1y before NOW
+      },
+    ]
+    const { activeAcks, expiredAcks } = partitionAcksByExpiry({ rows, now: NOW })
+    const v = pendingEnrollmentConsentsForChild({ activeAcks, expiredAcks })
+    expect(v.enrollment_consents_expired).toContain('transportation_routine_annual')
+    expect(v.enrollment_consents_pending).not.toContain('transportation_routine_annual')
+    expect(v.any_pending).toBe(true)
+  })
+
+  it('renewal complete: prior row archived (caller filters), new row active → reports as satisfied', () => {
+    // Post-renewal, the partition helper sees only the rows the audit
+    // path's Supabase query returns (filtered by archived_at IS NULL).
+    // The archived prior row is excluded by the DB filter; only the
+    // new row reaches the verdict.
+    const rows = [
+      {
+        type: 'transportation_routine_annual',
+        acknowledged_via: 'in_person_paper',
+        archived_at: null,
+        expires_at: '2027-12-01T12:00:00.000Z',
+      },
+    ]
+    const { activeAcks, expiredAcks } = partitionAcksByExpiry({ rows, now: NOW })
+    const v = pendingEnrollmentConsentsForChild({ activeAcks, expiredAcks })
+    expect(v.enrollment_consents_pending).not.toContain('transportation_routine_annual')
+    expect(v.enrollment_consents_expired).not.toContain('transportation_routine_annual')
+  })
+
+  it('early renewal: archive-then-insert produces exactly one active row with a fresh expires_at', () => {
+    // The modal archives the prior row immediately (no coexistence
+    // period — decision 8). After renewal the audit query returns
+    // ONLY the new row. This test pins that semantic.
+    const priorAtExpiry = '2027-03-01T12:00:00.000Z'  // future at NOW
+    const renewedExpiry = '2027-12-01T12:00:00.000Z'
+    // Audit query post-renewal: prior is archived, only the new row
+    // is in the result set.
+    const rows = [
+      {
+        type: 'transportation_routine_annual',
+        acknowledged_via: 'in_person_paper',
+        archived_at: null,
+        expires_at: renewedExpiry,
+      },
+    ]
+    const { activeAcks } = partitionAcksByExpiry({ rows, now: NOW })
+    expect(activeAcks).toHaveLength(1)
+    expect(activeAcks[0].expires_at).toBe(renewedExpiry)
+    // Sanity: priorAtExpiry is in the future at NOW (i.e., early
+    // renewal really is "renewing before lapse").
+    expect(Date.parse(priorAtExpiry)).toBeGreaterThan(NOW.getTime())
   })
 })

@@ -1,0 +1,116 @@
+-- ============================================================
+-- MI Little Care — Consents Phase B: time-bound recurring consents.
+--
+-- Authoritative scope: docs/pr-consents-B-scope.md (committed
+-- 2026-06-01 in commit 66b7675, finalized). This migration adds the
+-- expiry dimension the acknowledgments engine lacks today. The two
+-- Phase B types — transportation_routine_annual and
+-- water_activities_on_premises_seasonal — set
+-- expires_at = acknowledged_at + interval '1 year' on every captured
+-- row. Phase A types (field_trip_permission, photo_sharing_consent,
+-- photo_sharing_consent_revoked, every R 400.1907(1)(b) intake item)
+-- leave expires_at NULL and are UNAFFECTED by this migration.
+--
+-- DEPENDENCY: applies AFTER migration 025
+--   (intake_confirm_for_parent_rpc).
+--
+-- ── DESIGN DECISIONS (locked in pr-consents-B-scope.md DECISIONS table) ──
+--
+--   1. expires_at timestamptz, nullable. Matches the existing `_at`
+--      suffix convention (acknowledged_at, archived_at, created_at,
+--      updated_at). NULL means "no expiry" — the existing Phase A
+--      behavior, unchanged.
+--   2/3. Both Phase B types use the SAME cadence:
+--        expires_at = acknowledged_at + interval '1 year', rolling.
+--        Bases: R 400.1952(1)(a) "at least annually" for routine
+--        transportation (parallel center rule R 400.8149(1)).
+--        R 400.1934(10)(b) "once per season" for on-premises water
+--        — "season" is undefined anywhere in the Michigan child-care
+--        rules; the provider-adopted operating interpretation maps
+--        it to once annually, renewed each spring ahead of the
+--        water-activity months. This is the single knob that changes
+--        if a licensing consultant later defines "season" otherwise.
+--        Cadence enforcement lives in the application (no CHECK), so
+--        a reinterpretation does not require schema change.
+--   10. No new index. The audit predicate is
+--       `archived_at IS NULL AND (expires_at IS NULL OR expires_at >
+--       now())`. now() is volatile and cannot appear in a partial
+--       index's WHERE. Rely on existing `acknowledgments_provider_active`
+--       partial index (which filters on `archived_at IS NULL`) to
+--       narrow rows; the post-index timestamp filter for
+--       `expires_at > now()` is cheap on the already-narrow set. A
+--       helper partial index like
+--       `(provider_id, type, expires_at) WHERE archived_at IS NULL
+--       AND expires_at IS NOT NULL` is deferred until query volume
+--       justifies and revisited in a future migration.
+--
+-- ── BACKWARD-COMPAT INVARIANT ────────────────────────────────────────
+-- Every existing row leaves expires_at NULL. The audit predicate is
+-- NULL-safe (`expires_at IS NULL OR expires_at > now()` evaluates
+-- TRUE for NULL). Existing read paths that only filter on
+-- archived_at IS NULL continue to work — no row in production today
+-- has a non-NULL expires_at to filter. RLS policies, partial unique
+-- indexes (acknowledgments_active_unique included), and CHECK
+-- constraints are UNTOUCHED.
+--
+-- ── PHASE C NON-FORECLOSURE ──────────────────────────────────────────
+-- Adding expires_at does not foreclose any of Phase C's three
+-- candidate per-occurrence models (new trips/events table referenced
+-- by subject_type='trip', trip metadata in payload with
+-- subject_type='child', or a separate table outside acknowledgments).
+-- The column is type-agnostic; a per-trip consent with no expiry
+-- leaves it NULL.
+--
+-- ── IDEMPOTENCY ──────────────────────────────────────────────────────
+-- ADD COLUMN IF NOT EXISTS. Safe to re-run.
+--
+-- ── EXPECTED VERIFICATION ────────────────────────────────────────────
+-- Per docs/tech_debt.md § "Verification gap discovered 2026-05-15":
+-- the user runs these in the Supabase web SQL Editor and screenshots
+-- the result BEFORE writing the runbook Migration History entry.
+--
+--   -- a) The expires_at column exists with the expected shape:
+--   select column_name, data_type, is_nullable
+--   from information_schema.columns
+--   where table_schema='public'
+--     and table_name='acknowledgments'
+--     and column_name='expires_at';
+--   -- expect: 1 row — expires_at | timestamp with time zone | YES
+--
+--   -- b) No existing row was mutated (every pre-Phase-B row has
+--   --    expires_at NULL):
+--   select count(*) as total_rows,
+--          count(expires_at) as rows_with_expires_at
+--   from public.acknowledgments
+--   where archived_at is null;
+--   -- expect: rows_with_expires_at = 0 immediately after migration
+--   --         (zero rows have been re-acked under Phase B yet).
+--
+--   -- c) Constraints unchanged (the partial unique still gates on
+--   --    archived_at IS NULL AND subject_id IS NOT NULL, with no
+--   --    reference to expires_at):
+--   select indexname, indexdef
+--   from pg_indexes
+--   where schemaname='public' and tablename='acknowledgments'
+--     and indexname='acknowledgments_active_unique';
+--   -- expect: the existing index definition from migration 024 —
+--   --         WHERE archived_at IS NULL AND subject_id IS NOT NULL.
+-- ============================================================
+
+-- -------------------------------------------------------
+-- The single schema change. That's it.
+-- -------------------------------------------------------
+alter table public.acknowledgments
+  add column if not exists expires_at timestamptz;
+
+-- ============================================================
+-- DOWN MIGRATION (commented; uncomment + run if rollback is needed)
+-- ============================================================
+-- Non-destructive: every row keeps every other column intact; only
+-- the new column is dropped. If Phase B rows have been captured
+-- before rollback, their expires_at values are lost — but the rows
+-- themselves and every other field (including the renewed-vs-archived
+-- audit trail) survive.
+--
+-- alter table public.acknowledgments
+--   drop column if exists expires_at;

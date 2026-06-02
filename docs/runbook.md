@@ -43,6 +43,63 @@ assuming a complex migration will land. The `Success. No rows returned`
 message can fire on a fragment that did nothing — verification queries
 against the actual table state are the only reliable confirmation.
 
+## Pending Application
+
+### Migration 026 — `expires_at` column on `acknowledgments` (Consents Phase B)
+
+**Status:** PENDING — written 2026-06-01, not yet applied to production. Awaits Seth's manual application via the Supabase web SQL editor and verification screenshots before promotion to Migration History below.
+
+**File:** `supabase/migrations/026_acknowledgments_expires_at.sql`
+
+**What it does:** adds a single nullable `expires_at timestamptz` column to `public.acknowledgments`. Forward-only, purely additive. No constraint changes, no policy changes, no index changes, no row mutations. Existing rows leave `expires_at = NULL` and behave identically to today.
+
+**Dependency:** migration 025 (`intake_confirm_for_parent_rpc`) must already be applied.
+
+**Why it's needed:** Consents Phase B introduces two time-bound recurring consent types (`transportation_routine_annual`, `water_activities_on_premises_seasonal`). Each captured row sets `expires_at = acknowledged_at + interval '1 year'`. The application's read paths apply the predicate `archived_at IS NULL AND (expires_at IS NULL OR expires_at > now())` to distinguish currently-satisfied from captured-but-lapsed.
+
+**Apply procedure:** open the file on the feature branch, copy the entire contents, paste into the Supabase web SQL editor for the production project, run. The file is short (one `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) so the long-statement caveat above does not apply.
+
+**Verification (paste each query into the SQL editor and screenshot):**
+
+```sql
+-- (a) expires_at column exists with expected shape.
+select column_name, data_type, is_nullable
+from information_schema.columns
+where table_schema='public'
+  and table_name='acknowledgments'
+  and column_name='expires_at';
+-- expect 1 row: expires_at | timestamp with time zone | YES
+```
+
+```sql
+-- (b) No existing row was mutated (expires_at NULL for every
+--     pre-Phase-B row).
+select count(*) as total_rows,
+       count(expires_at) as rows_with_expires_at
+from public.acknowledgments
+where archived_at is null;
+-- expect: rows_with_expires_at = 0 immediately after migration.
+```
+
+```sql
+-- (c) acknowledgments_active_unique partial-unique index unchanged.
+select indexname, indexdef
+from pg_indexes
+where schemaname='public' and tablename='acknowledgments'
+  and indexname='acknowledgments_active_unique';
+-- expect: WHERE archived_at IS NULL AND subject_id IS NOT NULL
+--         (no expires_at reference).
+```
+
+**Rollback (if needed):**
+
+```sql
+alter table public.acknowledgments
+  drop column if exists expires_at;
+```
+
+Non-destructive — every row keeps every other column intact. Captured Phase B rows (if any exist by rollback time) lose their `expires_at` values, but the rows themselves and the archived audit trail survive.
+
 ## Migration History
 
 ### 2026-05-13 — Migrations 003-006: funding-source scaffolding

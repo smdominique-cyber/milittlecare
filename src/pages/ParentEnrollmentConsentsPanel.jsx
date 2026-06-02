@@ -12,16 +12,58 @@
 // stopped. Word it as "preference is recorded," not "photos will no
 // longer be shared." Photo-attachment send paths in the messaging code
 // do not yet consult this consent state — that's the next PR.
+//
+// Consents Phase B (2026-06-01) — resolver consolidation per decision 6:
+//   - The inline pickActive + per-type render logic that this panel
+//     used to implement is REMOVED. Status determination flows through
+//     the shared `pendingEnrollmentConsentsForChild` verdict — same
+//     function the provider audit helper and the parent dashboard
+//     banner call.
+//   - The panel now surfaces FOUR states per row:
+//        on-file, revoked (photo only), expired, not-on-file.
+//   - The expired state is the Phase B addition — a time-bound consent
+//     (transportation_routine_annual / water_activities_on_premises_seasonal)
+//     whose row is active in the DB sense but past expires_at. The
+//     status copy reads "expired on YYYY-MM-DD — needs renewal" and
+//     reuses the not-on-file "needs action" treatment.
+//   - Phase A's photo-sharing tri-state (consented / revoked / not on
+//     file) is preserved unchanged. Photo consent has no expires_at,
+//     so it never lands in the expired bucket.
 
 import { useEffect, useState } from 'react'
 import { CheckCircle2, ShieldAlert, Info } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { ACK_TYPES } from '@/lib/acknowledgments'
+import {
+  ENROLLMENT_CONSENT_TYPES,
+  TIME_BOUND_TYPES,
+  REVOCATION_PAIRS,
+  PARENT_SIGNED_SATISFYING_CHANNELS,
+  partitionAcksByExpiry,
+  pendingEnrollmentConsentsForChild,
+} from '@/lib/childFiles'
 
 // Display names for the per-child status rows.
 const TYPE_LABEL = Object.freeze({
   [ACK_TYPES.FIELD_TRIP_PERMISSION]: 'Field trip permission',
   [ACK_TYPES.PHOTO_SHARING_CONSENT]: 'Photo sharing',
+  // Phase B (2026-06-01).
+  [ACK_TYPES.TRANSPORTATION_ROUTINE_ANNUAL]:         'Routine transportation (annual)',
+  [ACK_TYPES.WATER_ACTIVITIES_ON_PREMISES_SEASONAL]: 'On-premises water activities (annual)',
+})
+
+const TYPE_MISSING_COPY = Object.freeze({
+  [ACK_TYPES.FIELD_TRIP_PERMISSION]:
+    'Not on file yet. Your provider should record this at enrollment ' +
+    '(R 400.1952(2) requires written permission for non-vehicle field trips).',
+  [ACK_TYPES.TRANSPORTATION_ROUTINE_ANNUAL]:
+    'Not on file yet. Your provider should record this if they routinely ' +
+    'transport your child (R 400.1952(1) requires written permission for ' +
+    'routine transportation, renewed at least annually).',
+  [ACK_TYPES.WATER_ACTIVITIES_ON_PREMISES_SEASONAL]:
+    'Not on file yet. Your provider should record this before the ' +
+    'water-activity season if they offer on-premises water activities ' +
+    '(R 400.1934(10) requires written permission, renewed seasonally).',
 })
 
 const HUMAN_CHANNEL = Object.freeze({
@@ -34,7 +76,8 @@ export default function ParentEnrollmentConsentsPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [children, setChildren] = useState([])
-  const [acksByChild, setAcksByChild] = useState({})
+  const [activeByChild, setActiveByChild] = useState({})
+  const [expiredByChild, setExpiredByChild] = useState({})
 
   useEffect(() => {
     let cancelled = false
@@ -76,23 +119,30 @@ export default function ParentEnrollmentConsentsPanel() {
         // Parent-side SELECT on acknowledgments is permitted by the
         // migration 024 RLS policy "Parents can view acks on their
         // children" (subject scoped by parent_family_links). We pull
-        // both the consent and revocation-pair types to render status.
+        // every active (archived_at IS NULL) row including expires_at
+        // (Phase B, 2026-06-01) so the panel can render the four
+        // states the shared resolver distinguishes.
         const ackResp = await supabase
           .from('acknowledgments')
-          .select('id, type, subject_id, acknowledged_via, acknowledged_at, archived_at')
+          .select('id, type, subject_id, acknowledged_via, acknowledged_at, expires_at, archived_at')
           .eq('subject_type', 'child')
           .in('subject_id', kids.map(k => k.id))
           .is('archived_at', null)
         if (ackResp.error) throw ackResp.error
 
-        const byChild = {}
-        for (const a of ackResp.data || []) {
-          (byChild[a.subject_id] = byChild[a.subject_id] || []).push(a)
+        const active = {}
+        const expired = {}
+        for (const k of kids) {
+          const childRows = (ackResp.data || []).filter(a => a.subject_id === k.id)
+          const { activeAcks, expiredAcks } = partitionAcksByExpiry({ rows: childRows })
+          active[k.id] = activeAcks
+          expired[k.id] = expiredAcks
         }
 
         if (!cancelled) {
           setChildren(kids)
-          setAcksByChild(byChild)
+          setActiveByChild(active)
+          setExpiredByChild(expired)
           setLoading(false)
         }
       } catch (err) {
@@ -144,10 +194,11 @@ export default function ParentEnrollmentConsentsPanel() {
       </p>
 
       {children.map(child => {
-        const acks = acksByChild[child.id] || []
-        const fieldTrip = pickActive(acks, ACK_TYPES.FIELD_TRIP_PERMISSION)
-        const photoConsent = pickActive(acks, ACK_TYPES.PHOTO_SHARING_CONSENT)
-        const photoRevoked = pickActive(acks, ACK_TYPES.PHOTO_SHARING_CONSENT_REVOKED)
+        const activeAcks = activeByChild[child.id] || []
+        const expiredAcks = expiredByChild[child.id] || []
+        const verdict = pendingEnrollmentConsentsForChild({ activeAcks, expiredAcks })
+        const pendingSet = new Set(verdict.enrollment_consents_pending)
+        const expiredSet = new Set(verdict.enrollment_consents_expired)
 
         return (
           <section key={child.id} style={{
@@ -161,18 +212,25 @@ export default function ParentEnrollmentConsentsPanel() {
               {child.first_name} {child.last_name}
             </h2>
 
-            <StatusRow
-              label={TYPE_LABEL[ACK_TYPES.FIELD_TRIP_PERMISSION]}
-              ackRow={fieldTrip}
-              ifMissingCopy={
-                'Not on file yet. Your provider should record this at enrollment ' +
-                '(R 400.1952(2) requires written permission for non-vehicle field trips).'
-              }
-            />
+            {/* Licensing-required enrollment consents: one row per
+                ENROLLMENT_CONSENT_TYPES entry. The shared verdict
+                tells us which state to render. */}
+            {ENROLLMENT_CONSENT_TYPES.map(type => (
+              <EnrollmentConsentRow
+                key={type}
+                type={type}
+                pending={pendingSet.has(type)}
+                expired={expiredSet.has(type)}
+                activeAcks={activeAcks}
+                expiredAcks={expiredAcks}
+              />
+            ))}
 
+            {/* Photo sharing — tri-state (consented / revoked /
+                not-on-file). Photo consent has no expires_at so the
+                expired bucket can't apply. */}
             <PhotoStatusRow
-              consent={photoConsent}
-              revoked={photoRevoked}
+              activeAcks={activeAcks}
             />
           </section>
         )
@@ -181,48 +239,115 @@ export default function ParentEnrollmentConsentsPanel() {
   )
 }
 
-function pickActive(acks, type) {
-  for (const a of acks) {
-    if (a.archived_at) continue
-    if (a.type === type) return a
+function pickFirstByType(rows, type) {
+  for (const a of rows || []) {
+    if (a && a.type === type) return a
   }
   return null
 }
 
-function StatusRow({ label, ackRow, ifMissingCopy }) {
-  if (ackRow) {
+/**
+ * Renders one of three states for a licensing-required enrollment
+ * consent (field_trip_permission or one of the Phase B time-bound
+ * types): on-file (with channel + date, plus expires_at when set),
+ * expired (with capture date and the past expires_at), or not-on-file
+ * (with type-specific missing copy).
+ */
+function EnrollmentConsentRow({ type, pending, expired, activeAcks, expiredAcks }) {
+  const label = TYPE_LABEL[type] || type
+
+  if (expired) {
+    // Captured-but-lapsed — find the expired row to show its dates.
+    const row = pickFirstByType(expiredAcks, type)
     return (
       <Row
-        icon={CheckCircle2}
-        iconColor="var(--clr-sage-dark)"
+        icon={ShieldAlert}
+        iconColor="var(--clr-amber, #8a6a1a)"
         label={label}
-        badge="On file"
-        badgeKind="ok"
+        badge={`Expired ${formatDate(row?.expires_at)}`}
+        badgeKind="pending"
         detail={
-          'Recorded ' +
-          (HUMAN_CHANNEL[ackRow.acknowledged_via] || ackRow.acknowledged_via) +
-          (ackRow.acknowledged_at ? ` on ${formatDate(ackRow.acknowledged_at)}` : '') +
-          '.'
+          'On file ' +
+          (row ? (HUMAN_CHANNEL[row.acknowledged_via] || row.acknowledged_via) : '') +
+          (row?.acknowledged_at ? ` on ${formatDate(row.acknowledged_at)}` : '') +
+          '. Renewal is overdue — talk to your provider so they can record a fresh signature.'
         }
       />
     )
   }
+
+  if (pending) {
+    return (
+      <Row
+        icon={ShieldAlert}
+        iconColor="var(--clr-amber, #8a6a1a)"
+        label={label}
+        badge="Not on file"
+        badgeKind="pending"
+        detail={TYPE_MISSING_COPY[type] ||
+          'Not on file yet. Your provider should record this on your behalf.'}
+      />
+    )
+  }
+
+  // On file — the verdict said the type is satisfied by a parent-signed
+  // row in the currently-valid set. Surface the channel + date and, for
+  // time-bound types, the upcoming expires_at.
+  const row = pickFirstByType(activeAcks, type)
+  const isTimeBound = TIME_BOUND_TYPES.includes(type)
   return (
     <Row
-      icon={ShieldAlert}
-      iconColor="var(--clr-amber, #8a6a1a)"
+      icon={CheckCircle2}
+      iconColor="var(--clr-sage-dark)"
       label={label}
-      badge="Not on file"
-      badgeKind="pending"
-      detail={ifMissingCopy}
+      badge={isTimeBound && row?.expires_at
+        ? `On file — renews ${formatDate(row.expires_at)}`
+        : 'On file'}
+      badgeKind="ok"
+      detail={
+        'Recorded ' +
+        (row ? (HUMAN_CHANNEL[row.acknowledged_via] || row.acknowledged_via) : '') +
+        (row?.acknowledged_at ? ` on ${formatDate(row.acknowledged_at)}` : '') +
+        '.'
+      }
     />
   )
 }
 
-function PhotoStatusRow({ consent, revoked }) {
+function PhotoStatusRow({ activeAcks }) {
   const label = TYPE_LABEL[ACK_TYPES.PHOTO_SHARING_CONSENT]
+  // Photo sharing has its own revocation-pair semantic; we resolve
+  // tri-state from the activeAcks set against PARENT_SIGNED_SATISFYING_CHANNELS,
+  // mirroring the audit verdict's channel-aware rule. We look at the
+  // active set only — photo consent has no expires_at, so an "expired"
+  // photo row would only ever appear if a future feature adds it.
+  let consent = null
+  let revoked = null
+  for (const a of activeAcks) {
+    if (!a) continue
+    if (!PARENT_SIGNED_SATISFYING_CHANNELS.includes(a.acknowledged_via)) continue
+    if (a.type === ACK_TYPES.PHOTO_SHARING_CONSENT) consent = a
+    else if (a.type === REVOCATION_PAIRS[ACK_TYPES.PHOTO_SHARING_CONSENT]) revoked = a
+  }
+  // Also surface non-parent-signed rows (provider_override) as "on file
+  // but not parent-signed" — Phase A's render path showed them as if
+  // they were on file. The shared verdict counts them as pending, but
+  // the panel renders them so the parent can see the provider's
+  // attestation exists.
+  let consentAnyChannel = consent
+  let revokedAnyChannel = revoked
+  if (!consent) {
+    for (const a of activeAcks) {
+      if (a && a.type === ACK_TYPES.PHOTO_SHARING_CONSENT) { consentAnyChannel = a; break }
+    }
+  }
+  if (!revoked) {
+    for (const a of activeAcks) {
+      if (a && a.type === REVOCATION_PAIRS[ACK_TYPES.PHOTO_SHARING_CONSENT]) { revokedAnyChannel = a; break }
+    }
+  }
 
-  if (revoked) {
+  if (revokedAnyChannel) {
     // Honest-copy rule: do NOT say "photos will no longer be shared."
     // The messaging attachment path does not yet consult this consent
     // state — enforcement is the next PR.
@@ -235,8 +360,8 @@ function PhotoStatusRow({ consent, revoked }) {
         badgeKind="info"
         detail={
           'Your withdrawal of photo-sharing consent is on file (' +
-          (HUMAN_CHANNEL[revoked.acknowledged_via] || revoked.acknowledged_via) +
-          (revoked.acknowledged_at ? ` on ${formatDate(revoked.acknowledged_at)}` : '') +
+          (HUMAN_CHANNEL[revokedAnyChannel.acknowledged_via] || revokedAnyChannel.acknowledged_via) +
+          (revokedAnyChannel.acknowledged_at ? ` on ${formatDate(revokedAnyChannel.acknowledged_at)}` : '') +
           '). Note: the messaging system does not yet automatically block ' +
           'photo attachments — your provider is handling photo decisions ' +
           'manually until the enforcement update ships.'
@@ -244,7 +369,7 @@ function PhotoStatusRow({ consent, revoked }) {
       />
     )
   }
-  if (consent) {
+  if (consentAnyChannel) {
     return (
       <Row
         icon={CheckCircle2}
@@ -254,8 +379,8 @@ function PhotoStatusRow({ consent, revoked }) {
         badgeKind="ok"
         detail={
           'Recorded ' +
-          (HUMAN_CHANNEL[consent.acknowledged_via] || consent.acknowledged_via) +
-          (consent.acknowledged_at ? ` on ${formatDate(consent.acknowledged_at)}` : '') +
+          (HUMAN_CHANNEL[consentAnyChannel.acknowledged_via] || consentAnyChannel.acknowledged_via) +
+          (consentAnyChannel.acknowledged_at ? ` on ${formatDate(consentAnyChannel.acknowledged_at)}` : '') +
           '. To withdraw consent, tell your provider — they\'ll record it on file.'
         }
       />
