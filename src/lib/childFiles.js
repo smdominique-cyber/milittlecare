@@ -151,6 +151,97 @@ export const TIME_BOUND_TYPES = Object.freeze([
 ])
 
 /**
+ * Per-occurrence consent types (Consents Phase C, 2026-06-01).
+ *
+ * Structurally separate from ENROLLMENT_CONSENT_TYPES (per the
+ * Phase C scope doc decision-table interpretation finalized at
+ * build time): these are EVENT RECORDS, not enrollment-state.
+ * Keeping them out of `ENROLLMENT_CONSENT_TYPES` means the verdict
+ * function's pending/expired loops NATURALLY don't see them —
+ * there's no filter to maintain, no risk of a future code change
+ * forgetting to skip them. The structural separation mirrors how
+ * `PROVIDER_PROTECTIVE_CONSENT_TYPES` is already a sibling const,
+ * not folded into the licensing-required list.
+ *
+ * The verdict function STILL applies a defense-in-depth skip
+ * filter (`if (PER_OCCURRENCE_CONSENT_TYPES.includes(t)) continue`)
+ * inside the ENROLLMENT_CONSENT_TYPES loop — harmless no-op today
+ * because the types aren't in that list, but catches the
+ * accident-class where a future maintainer adds them to the
+ * licensing-required list without thinking through the audit
+ * implications.
+ *
+ * The relaxed `acknowledgments_active_unique` partial index
+ * (migration 027) exempts exactly these two `type` values from the
+ * one-active-row-per-(provider, type, subject_type, subject_id)
+ * uniqueness — multiple active rows for the same child are
+ * EXPECTED for per-occurrence types (one per trip / outing).
+ *
+ * Both types are PARENT-SIGNED — only parent_portal /
+ * in_person_paper satisfy. Same rule as every other parent-signed
+ * consent. provider_override is recorded in the audit trail but
+ * does not satisfy the rule.
+ */
+export const PER_OCCURRENCE_CONSENT_TYPES = Object.freeze([
+  'transportation_nonroutine_per_trip',       // R 400.1952(1)(b) — "before each trip"
+  'water_activities_off_premises_per_trip',   // R 400.1934(10)(a) — "before each outdoor water activity"
+])
+
+// ─── Occurrence-metadata helper (Consents Phase C, 2026-06-01) ──
+//
+// SINGLE SOURCE OF TRUTH for the per-occurrence jsonb payload shape.
+// Every write site that inserts a per-occurrence row MUST go through
+// this helper — never construct the jsonb inline. If two call sites
+// build the shape independently, a field-name typo (event_date vs
+// eventDate) creates silent data drift that no test catches until
+// an auditor reads the rows.
+//
+// UNIFIED SHAPE (2026-06-01 refactor — was separate transport/water
+// helpers with type-specific fields):
+//
+//   { event_date: 'YYYY-MM-DD', description: 'free text' }
+//
+// Both fields REQUIRED. Both used by both per-occurrence types
+// (transportation_nonroutine_per_trip + water_activities_off_premises_per_trip).
+// The modal labels them per-type for clarity ("Trip date" vs "Outing
+// date", "Destination" vs "Location & activity") but the stored
+// jsonb keys are identical, so a single read path renders both.
+//
+// The DB stores free jsonb (no CHECK constraint on shape) — the app
+// is the validator. The helper throws on missing/blank required
+// fields and strips unknown keys (passive guard against typos in
+// the calling component's field bindings).
+
+const OCCURRENCE_REQUIRED_FIELDS = Object.freeze(['event_date', 'description'])
+
+/**
+ * Build the canonical `occurrence_metadata` jsonb. Same shape for
+ * both per-occurrence types — `transportation_nonroutine_per_trip`
+ * and `water_activities_off_premises_per_trip`.
+ *
+ * @param {object} input
+ * @param {string} input.event_date    REQUIRED — YYYY-MM-DD
+ * @param {string} input.description   REQUIRED — free text (e.g.
+ *                                      "Library trip" or
+ *                                      "Community pool — supervised swim")
+ * @returns {{ event_date: string, description: string }}  validated,
+ *          trimmed, with unknown keys stripped.
+ * @throws if either required field is missing or blank.
+ */
+export function buildOccurrenceMetadata(input) {
+  const src = input || {}
+  const out = {}
+  for (const k of OCCURRENCE_REQUIRED_FIELDS) {
+    const v = src[k]
+    if (v == null || (typeof v === 'string' && v.trim() === '')) {
+      throw new Error(`occurrence_metadata: required field "${k}" is missing or blank`)
+    }
+    out[k] = typeof v === 'string' ? v.trim() : v
+  }
+  return out
+}
+
+/**
  * Time-bound row write helper — returns the ISO timestamp that an
  * insert / renewal should use for `expires_at`. Pure: takes the
  * acknowledged_at value the caller is about to write, returns
@@ -331,9 +422,19 @@ export function pendingEnrollmentConsentsForChild({ activeAcks, expiredAcks } = 
   // Licensing-required: split into pending (never captured) vs.
   // expired (captured-but-lapsed). A currently-valid satisfying row
   // wins over an expired one (a renewed type isn't expired).
+  //
+  // Phase C (2026-06-01) defense-in-depth: skip any type in
+  // PER_OCCURRENCE_CONSENT_TYPES. Per-occurrence consents are event
+  // records — a child with no scheduled trips is NOT pending. They
+  // are structurally kept OUT of ENROLLMENT_CONSENT_TYPES so this
+  // filter is a no-op today; the filter exists to catch the
+  // accident-class where a future maintainer adds them to the list
+  // without thinking through the audit implications.
+  const perOccurrenceSet = new Set(PER_OCCURRENCE_CONSENT_TYPES)
   const enrollment_consents_pending = []
   const enrollment_consents_expired = []
   for (const t of ENROLLMENT_CONSENT_TYPES) {
+    if (perOccurrenceSet.has(t)) continue
     if (satisfyingTypes.has(t)) continue
     if (expiredSatisfyingTypes.has(t)) {
       enrollment_consents_expired.push(t)
@@ -584,6 +685,15 @@ export async function getChildFilesAuditState(licenseeId) {
     // § Classification.
     pending_enrollment_consents_expired_count: 0,
     pending_enrollment_consents_expired: emptyEnrollmentConsentsBreakdown(),
+    // Consents Phase C (2026-06-01) — per-occurrence event records.
+    // Informational ONLY — NOT a compliance signal. Counts distinct
+    // children with at least one active row of each per-occurrence
+    // type. A child with no recorded trips contributes 0 to every
+    // key; this field never indicates a compliance gap. PR #22 may
+    // weigh it as a recency signal once a trips entity exists to
+    // cross-reference against — Phase C only provides the capture
+    // counts.
+    per_occurrence_consents_recorded: emptyPerOccurrenceBreakdown(),
   }
 
   if (!licenseeId) return empty
@@ -791,6 +901,16 @@ export async function getChildFilesAuditState(licenseeId) {
   let pending_provider_protective_consents_count = 0
   let children_with_pending_provider_protective_consents_count = 0
 
+  // Phase C (2026-06-01) — per-occurrence event-record rollup. NOT
+  // a compliance signal: counts distinct children with ≥1 active
+  // per-occurrence row of each type. The verdict NEVER folds these
+  // into pending/expired (PER_OCCURRENCE_CONSENT_TYPES is separate
+  // from ENROLLMENT_CONSENT_TYPES), so the rollup is computed here
+  // from the raw activeAcksByChild map. Surfaced for PR #22 /
+  // future audit-recency widgets.
+  const per_occurrence_consents_recorded = emptyPerOccurrenceBreakdown()
+  const perOccurrenceSet = new Set(PER_OCCURRENCE_CONSENT_TYPES)
+
   for (const c of children) {
     const activeAcks = activeAcksByChild.get(c.id) || []
     const expiredAcks = expiredAcksByChild.get(c.id) || []
@@ -820,6 +940,21 @@ export async function getChildFilesAuditState(licenseeId) {
     if (verdict.provider_protective_consents_pending.length > 0) {
       children_with_pending_provider_protective_consents_count += 1
     }
+
+    // Per-occurrence rollup: distinct child × per-occurrence-type
+    // count. A child with multiple active rows of the same type
+    // contributes 1 to that type's count (we want distinct children,
+    // not row count — multiple trips for one child shouldn't inflate
+    // the rollup).
+    const perOccurrenceTypesPresentForChild = new Set()
+    for (const a of activeAcks) {
+      if (!a || !a.type) continue
+      if (!perOccurrenceSet.has(a.type)) continue
+      perOccurrenceTypesPresentForChild.add(a.type)
+    }
+    for (const t of perOccurrenceTypesPresentForChild) {
+      per_occurrence_consents_recorded[t] += 1
+    }
   }
 
   return {
@@ -841,6 +976,7 @@ export async function getChildFilesAuditState(licenseeId) {
     children_with_pending_provider_protective_consents_count,
     pending_enrollment_consents_expired_count,
     pending_enrollment_consents_expired,
+    per_occurrence_consents_recorded,
   }
 }
 
@@ -862,12 +998,25 @@ function emptyParentSignaturesBreakdown() {
 
 /**
  * Build the `pending_enrollment_consents` breakdown object with every
- * ENROLLMENT_CONSENT_TYPES key initialized to 0. Same stable-shape
- * pattern as the parent-signatures breakdown.
+ * ENROLLMENT_CONSENT_TYPES key initialized to 0 — EXCLUDING any type
+ * in PER_OCCURRENCE_CONSENT_TYPES (Phase C, 2026-06-01). The
+ * per-occurrence types live in a separate const and have their own
+ * informational rollup (`per_occurrence_consents_recorded`); they
+ * must never appear as zero-keys in the pending/expired breakdowns
+ * or PR #22's consumer would mis-read them as enrollment-state gaps.
+ *
+ * Today PER_OCCURRENCE_CONSENT_TYPES is structurally separate from
+ * ENROLLMENT_CONSENT_TYPES, so the filter is a no-op — but it's
+ * applied as defense-in-depth, identical to the verdict function's
+ * filter.
  */
 function emptyEnrollmentConsentsBreakdown() {
   const out = {}
-  for (const t of ENROLLMENT_CONSENT_TYPES) out[t] = 0
+  const perOccurrenceSet = new Set(PER_OCCURRENCE_CONSENT_TYPES)
+  for (const t of ENROLLMENT_CONSENT_TYPES) {
+    if (perOccurrenceSet.has(t)) continue
+    out[t] = 0
+  }
   return out
 }
 
@@ -878,6 +1027,19 @@ function emptyEnrollmentConsentsBreakdown() {
 function emptyProviderProtectiveConsentsBreakdown() {
   const out = {}
   for (const t of PROVIDER_PROTECTIVE_CONSENT_TYPES) out[t] = 0
+  return out
+}
+
+/**
+ * Build the `per_occurrence_consents_recorded` breakdown object
+ * (Phase C, 2026-06-01) with every PER_OCCURRENCE_CONSENT_TYPES key
+ * initialized to 0. NOT a compliance signal — counts distinct
+ * children with ≥1 active per-occurrence row of each type, surfaced
+ * for PR #22 / future audit-recency views.
+ */
+function emptyPerOccurrenceBreakdown() {
+  const out = {}
+  for (const t of PER_OCCURRENCE_CONSENT_TYPES) out[t] = 0
   return out
 }
 
