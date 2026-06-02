@@ -45,6 +45,233 @@ against the actual table state are the only reliable confirmation.
 
 ## Pending Application
 
+### Migration 028 — medication authorizations + administration events + role-gate trigger (PR #20 Part 1)
+
+**Status:** PENDING — written 2026-06-02, not yet applied to production. Awaits Seth's manual application via the Supabase web SQL editor and verification screenshots **including the three trigger tests (Pair A negative + positive, Pair B positive)** before promotion to Migration History below.
+
+**File:** `supabase/migrations/028_medication.sql`
+
+**What it does:**
+- Creates `public.medication_authorizations` (one row per child × medication; provider's record of the active plan + original-container attestation + OTC vs prescription split).
+- Creates `public.medication_administration_events` (one row per dose; date/time/amount + administering caregiver; FK `on delete restrict` so dose records survive authorization archival).
+- Creates the `medication_event_caregiver_role_check()` trigger function and binds it BEFORE INSERT on `medication_administration_events`. The trigger enforces R 400.1931(1) — only `licensee` or `child_care_staff_member` may administer — EXCEPT for `is_topical_otc=true` events per R 400.1931(8)'s exemption.
+- RLS policies: provider-scoped via `provider_id`; parents see their own children's records via `parent_family_links → children` (same shape as migration 024's parent SELECT policy on `acknowledgments`).
+- Indexes: per-child active-authorization unique (`(child_id, lower(medication_name)) WHERE archived_at IS NULL`); event read-paths by child / provider / authorization.
+
+**Dependency:** migration 027 (`acknowledgments_per_occurrence`) must already be applied. PR #20 also relies on PR #8's `public.caregivers` + `public.caregiver_regulatory_roles` (migration 012) for the role-gate trigger's lookup.
+
+**Apply procedure:** open the file on the feature branch, copy the entire contents, paste into the Supabase web SQL editor (production project), run. The migration is short and uses no transaction wrapping (the per-statement DDL is independent — table create, function create, trigger drop+create, policies). If a partial-apply happens mid-script, re-running is safe (IF NOT EXISTS / OR REPLACE / DROP-then-CREATE patterns).
+
+**Verification (paste each into the SQL editor and screenshot):**
+
+```sql
+-- (a) Both tables exist with the expected columns.
+select table_name, column_name, data_type, is_nullable
+from information_schema.columns
+where table_schema='public'
+  and table_name in ('medication_authorizations',
+                     'medication_administration_events')
+order by table_name, ordinal_position;
+```
+
+```sql
+-- (b) The role-gate trigger exists on the events table.
+select tgname, tgenabled, tgrelid::regclass
+from pg_trigger
+where tgname = 'trg_medication_event_caregiver_role_check';
+-- expect 1 row; tgenabled='O' (enabled);
+--   tgrelid = public.medication_administration_events.
+```
+
+```sql
+-- (c) Authorization partial-unique index exists.
+select indexname, indexdef
+from pg_indexes
+where schemaname='public'
+  and tablename='medication_authorizations'
+  and indexname='idx_med_auth_active_per_child_med';
+```
+
+```sql
+-- (d) No existing data affected (the tables are new).
+select count(*) as auths from public.medication_authorizations;
+select count(*) as events from public.medication_administration_events;
+-- expect both 0.
+```
+
+### ⚠️ Trigger tests — the legally-consequential verification (must run on real rows)
+
+The vitest suite cannot reach a DB trigger. These three SQL tests prove R 400.1931(1) is enforced AND R 400.1931(8) is honored. Run on a throwaway test child + caregivers.
+
+**Setup queries — find or create caregivers of each role:**
+
+```sql
+-- Find an existing caregiver of each role (the schema's regulatory_role
+-- values are: licensee, child_care_staff_member, child_care_assistant,
+-- unsupervised_volunteer, supervised_volunteer, driver).
+select c.id, c.first_name, c.last_name, crr.regulatory_role
+  from public.caregivers c
+  join public.caregiver_regulatory_roles crr on crr.caregiver_id = c.id
+ where c.licensee_id = '<your provider auth.uid()>'
+   and c.archived_at is null
+ order by crr.regulatory_role, c.first_name;
+```
+
+If you don't have a caregiver of a given role on the test provider's roster, set one up via the existing PR #8 caregivers UI (or insert via SQL — but the UI flow is safer because it respects the migration-12 enums).
+
+Once you have the IDs, set up a test authorization for each branch (non-OTC + OTC):
+
+```sql
+-- Pick an existing test child:
+select id, first_name, last_name from public.children
+ where user_id = '<your provider auth.uid()>'
+   and archived_at is null
+ order by created_at desc limit 5;
+
+-- Create one non-OTC authorization (subject to (1) role-gate):
+insert into public.medication_authorizations (
+  provider_id, child_id, medication_name, is_topical_otc,
+  original_container_confirmed
+) values (
+  '<provider_id>', '<child_id>', 'Pr20-test-Tylenol', false, true
+) returning id;
+-- record the returned id as <auth_non_otc>.
+
+-- Create one TOPICAL-OTC authorization (R 400.1931(8) exempt):
+insert into public.medication_authorizations (
+  provider_id, child_id, medication_name, is_topical_otc,
+  original_container_confirmed
+) values (
+  '<provider_id>', '<child_id>', 'Pr20-test-Sunscreen', true, true
+) returning id;
+-- record the returned id as <auth_topical_otc>.
+```
+
+#### Pair A — Non-OTC authorization, role-gate applies (R 400.1931(1))
+
+**N-A (NEGATIVE — must ERROR):** an assistant CANNOT administer Tylenol.
+
+```sql
+insert into public.medication_administration_events (
+  provider_id, authorization_id, child_id,
+  administered_by_caregiver_id, administered_at, dose_administered_text
+) values (
+  '<provider_id>',
+  '<auth_non_otc>',
+  '<child_id>',
+  '<caregiver_id_assistant>',
+  now(),
+  '5 mL'
+);
+-- expect: ERROR — "Only licensee or child care staff member may
+--         administer medication (R 400.1931(1))"
+--         The ERROR IS THE PASS. The trigger is doing its job.
+```
+
+If the row inserts instead of erroring, the trigger is broken. Halt and investigate before claiming the role-gate works.
+
+**P-A (POSITIVE — must SUCCEED):** a licensee or staff member CAN administer Tylenol.
+
+```sql
+insert into public.medication_administration_events (
+  provider_id, authorization_id, child_id,
+  administered_by_caregiver_id, administered_at, dose_administered_text
+) values (
+  '<provider_id>',
+  '<auth_non_otc>',
+  '<child_id>',
+  '<caregiver_id_licensee_or_staff>',
+  now(),
+  '5 mL'
+);
+-- expect: 1 row inserted, no error.
+```
+
+Also try a `supervised_volunteer` caregiver against the same non-OTC authorization — it MUST also error (R 400.1931(1) explicitly prohibits both `child_care_assistant` and `supervised_volunteer`).
+
+#### Pair B — Topical OTC authorization, role-gate EXEMPT (R 400.1931(8))
+
+**P-B (POSITIVE — must SUCCEED):** an assistant CAN apply sunscreen.
+
+```sql
+insert into public.medication_administration_events (
+  provider_id, authorization_id, child_id,
+  administered_by_caregiver_id, administered_at, dose_administered_text
+) values (
+  '<provider_id>',
+  '<auth_topical_otc>',
+  '<child_id>',
+  '<caregiver_id_assistant>',     -- the SAME assistant N-A rejected
+  now(),
+  'Applied to face and arms'
+);
+-- expect: 1 row inserted, no error. The trigger detected
+--         is_topical_otc=true on the linked authorization and skipped
+--         the role-check per R 400.1931(8).
+```
+
+**If P-B errors with the (1) message, the trigger is NOT honoring (8).** That is a rule violation. Halt and investigate.
+
+**Together, the three tests prove the trigger:**
+- Pair A: enforces (1) — assistants/volunteers cannot record having administered prescription or oral OTC.
+- Pair B: honors (8) — assistants/volunteers CAN record having applied topical OTC.
+
+This is the legally-consequential invariant. Tests passing in vitest do NOT prove it; only these three SQL tests do.
+
+#### OTC-exemption sanity check (optional)
+
+```sql
+-- The is_topical_otc=true authorization can have its consent
+-- recorded via the existing OTC-blanket ack type; no dose log is
+-- REQUIRED per (7) — but events MAY be logged (which is what P-B
+-- just demonstrated).
+select count(*) from public.acknowledgments
+ where provider_id = '<provider_id>'
+   and subject_type = 'child'
+   and subject_id   = '<child_id>'
+   and type         = 'medication_permission_otc_blanket'
+   and archived_at  is null;
+-- This is informational — the OTC-blanket ack is recorded via the
+-- Part 2 UI (not yet built). Zero rows here doesn't fail the
+-- trigger tests above; it just means consent capture hasn't shipped.
+```
+
+**Cleanup:** archive the three test rows (the two authorizations and any events inserted) when done.
+
+```sql
+update public.medication_authorizations
+   set archived_at = now()
+ where medication_name in ('Pr20-test-Tylenol', 'Pr20-test-Sunscreen')
+   and provider_id = '<provider_id>';
+
+update public.medication_administration_events
+   set archived_at = now()
+ where authorization_id in (
+   select id from public.medication_authorizations
+    where medication_name in ('Pr20-test-Tylenol', 'Pr20-test-Sunscreen')
+      and provider_id = '<provider_id>'
+ );
+```
+
+**Rollback (if needed — destructive; preserves no audit data):**
+
+```sql
+drop policy if exists "Parents can view medication events for their children" on public.medication_administration_events;
+drop policy if exists "Providers can update their medication events" on public.medication_administration_events;
+drop policy if exists "Providers can insert their medication events" on public.medication_administration_events;
+drop policy if exists "Providers can view their medication events" on public.medication_administration_events;
+drop policy if exists "Parents can view medication authorizations for their children" on public.medication_authorizations;
+drop policy if exists "Providers can update their medication authorizations" on public.medication_authorizations;
+drop policy if exists "Providers can insert their medication authorizations" on public.medication_authorizations;
+drop policy if exists "Providers can view their medication authorizations" on public.medication_authorizations;
+drop trigger if exists trg_medication_event_caregiver_role_check on public.medication_administration_events;
+drop function if exists public.medication_event_caregiver_role_check();
+drop table if exists public.medication_administration_events;
+drop table if exists public.medication_authorizations;
+```
+
+⚠️ **Do NOT rollback if production dose records exist** — R 400.1931(9) requires 2-year retention. Export the tables first.
+
 ### Migration 027 — relax `acknowledgments_active_unique` + add `occurrence_metadata` (Consents Phase C)
 
 **Status:** PENDING — written 2026-06-01, not yet applied to production. Awaits Seth's manual application via the Supabase web SQL editor and verification screenshots (including the two negative tests) before promotion to Migration History below.
