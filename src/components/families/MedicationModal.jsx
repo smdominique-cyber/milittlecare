@@ -97,6 +97,29 @@ export default function MedicationModal({
   // Sub-form toggles.
   const [addAuthOpen, setAddAuthOpen] = useState(false)
 
+  // Inline success confirmation per save (2026-06-02 fix-forward —
+  // medication records are unsettling without an explicit ✓; the
+  // earlier silent-refresh UX invited double-logging or distrust of
+  // the record). Single `{ key, text }` slot — each save path sets
+  // its own key so the right card renders the message near the
+  // right control. Cleared by a 3-second timer or by the next save
+  // (a fresh setSuccessMessage replaces the prior one). Errors are
+  // surfaced through the existing `error` state — this is the
+  // positive-confirmation counterpart and uses the same visual
+  // tokens as the on-file badges (sage-pale background, sage-dark
+  // text, CheckCircle2 icon) so the visual language stays one.
+  const [successMessage, setSuccessMessage] = useState(null)
+
+  useEffect(() => {
+    if (!successMessage) return undefined
+    const t = setTimeout(() => setSuccessMessage(null), 3000)
+    return () => clearTimeout(t)
+  }, [successMessage])
+
+  function showSuccess(key, text) {
+    setSuccessMessage({ key, text })
+  }
+
   const channelValid = useMemo(() => {
     if (channel === 'in_person_paper')  return parentLabel.trim().length > 0
     if (channel === 'provider_override') return providerReason.trim().length > 0
@@ -190,6 +213,7 @@ export default function MedicationModal({
       if (e) throw e
       setAddAuthOpen(false)
       await refresh()
+      showSuccess('auth-create', '✓ Medication saved')
     } catch (err) {
       setError(err)
     } finally {
@@ -207,6 +231,10 @@ export default function MedicationModal({
       const { error: e } = await archiveMedicationAuthorization({ authorizationId })
       if (e) throw e
       await refresh()
+      // Archive is destructive — the card disappears from the list,
+      // which is itself confirmation. We still surface a brief ✓ at
+      // the list level so the provider can tell the action took.
+      showSuccess('auth-create', '✓ Medication archived')
     } catch (err) {
       setError(err)
     } finally {
@@ -230,6 +258,8 @@ export default function MedicationModal({
       })
       if (e) throw e
       await refresh()
+      // Key is per-authorization so the ✓ lands in the right card.
+      showSuccess(`consent-per-auth:${authorization.id}`, '✓ Consent recorded')
     } catch (err) {
       setError(err)
     } finally {
@@ -251,6 +281,7 @@ export default function MedicationModal({
       })
       if (e) throw e
       await refresh()
+      showSuccess('consent-otc-blanket', '✓ Consent recorded')
     } catch (err) {
       setError(err)
     } finally {
@@ -276,6 +307,9 @@ export default function MedicationModal({
       })
       if (e) throw e
       await refresh()
+      // Per-authorization key — ✓ lands on the right card's dose
+      // section, near where the recent-doses list just gained a row.
+      showSuccess(`dose:${authorization.id}`, '✓ Dose recorded')
     } catch (err) {
       setError(err)
     } finally {
@@ -360,6 +394,7 @@ export default function MedicationModal({
             channelValid={channelValid}
             saving={saving}
             onRecord={handleRecordOtcBlanket}
+            successText={successMessage?.key === 'consent-otc-blanket' ? successMessage.text : null}
           />
 
           {loading ? (
@@ -367,8 +402,13 @@ export default function MedicationModal({
           ) : (
             <>
               <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-                  <h3 style={{ fontSize: '1rem', margin: 0 }}>Active medications</h3>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <h3 style={{ fontSize: '1rem', margin: 0 }}>Active medications</h3>
+                    {successMessage?.key === 'auth-create' && (
+                      <SuccessChip text={successMessage.text} />
+                    )}
+                  </div>
                   {!addAuthOpen && (
                     <button
                       className="btn-save"
@@ -409,6 +449,14 @@ export default function MedicationModal({
                     onArchive={() => handleArchiveAuthorization(auth.id)}
                     onRecordDose={(fields) => handleRecordDose(auth, fields)}
                     onArchiveDose={handleArchiveDose}
+                    consentSuccessText={
+                      successMessage?.key === `consent-per-auth:${auth.id}`
+                        ? successMessage.text : null
+                    }
+                    doseSuccessText={
+                      successMessage?.key === `dose:${auth.id}`
+                        ? successMessage.text : null
+                    }
                   />
                 ))}
               </section>
@@ -442,7 +490,7 @@ export default function MedicationModal({
 
 // ─── OTC-blanket consent card ──────────────────────────────────────
 
-function OtcBlanketCard({ ack, channelValid, saving, onRecord }) {
+function OtcBlanketCard({ ack, channelValid, saving, onRecord, successText }) {
   const onFile = !!(ack && !ack.archived_at &&
     (ack.acknowledged_via === 'parent_portal' || ack.acknowledged_via === 'in_person_paper'))
   const recordedNonSatisfying = !!(ack && !ack.archived_at && !onFile)
@@ -474,7 +522,7 @@ function OtcBlanketCard({ ack, channelValid, saving, onRecord }) {
           count is NOT cleared until the parent signs (paper or portal).
         </p>
       )}
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
         <button
           className="btn-save"
           onClick={onRecord}
@@ -483,6 +531,7 @@ function OtcBlanketCard({ ack, channelValid, saving, onRecord }) {
         >
           {onFile || recordedNonSatisfying ? 'Re-record consent' : 'Record consent'}
         </button>
+        {successText && <SuccessChip text={successText} />}
       </div>
     </div>
   )
@@ -494,6 +543,7 @@ function AuthorizationCard({
   authorization, events, perAuthAck, otcBlanketAck,
   caregivers, channelValid, saving,
   onRecordConsent, onArchive, onRecordDose, onArchiveDose,
+  consentSuccessText, doseSuccessText,
 }) {
   const isOtc = isTopicalOtcExempt(authorization)
   const state = getDoseLogState({
@@ -598,12 +648,16 @@ function AuthorizationCard({
                 {consentSatisfied ? 'Re-record consent' : 'Record consent'}
               </button>
             )}
+            {consentSuccessText && <SuccessChip text={consentSuccessText} />}
           </div>
 
           {/* Recent dose-log entries */}
           {events.length > 0 && (
             <div style={{ marginTop: 12 }}>
-              <strong style={{ fontSize: '0.8125rem' }}>Recent doses</strong>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: '0.8125rem' }}>Recent doses</strong>
+                {doseSuccessText && <SuccessChip text={doseSuccessText} />}
+              </div>
               <ul style={{
                 margin: '6px 0 0 0', padding: 0, listStyle: 'none',
                 fontSize: '0.8125rem', color: 'var(--clr-ink-mid)',
@@ -1021,6 +1075,40 @@ function ChannelChooser({ channel, setChannel, parentLabel, setParentLabel, prov
 }
 
 // ─── Pure render helpers ──────────────────────────────────────────
+
+/**
+ * Inline ✓ confirmation chip (2026-06-02 fix-forward). Sits near the
+ * control that just succeeded, auto-dismisses after 3s via the modal-
+ * level timer. Sage-pale background + sage-dark text + CheckCircle2
+ * icon — same visual tokens as the on-file badges so the visual
+ * language stays one. Error confirmations (red) and success
+ * confirmations (sage) read as a matched pair across the modal.
+ */
+function SuccessChip({ text }) {
+  if (!text) return null
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      data-testid="med-success-chip"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        background: 'var(--clr-sage-pale, #e6efe7)',
+        color: 'var(--clr-sage-dark)',
+        padding: '2px 10px',
+        borderRadius: 'var(--radius-full)',
+        fontSize: '0.75rem',
+        fontWeight: 600,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <CheckCircle2 size={12} aria-hidden="true" />
+      {text}
+    </span>
+  )
+}
 
 function caregiverDisplayName(c) {
   if (!c) return ''
