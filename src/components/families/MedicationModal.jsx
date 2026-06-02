@@ -197,7 +197,30 @@ export default function MedicationModal({
     setEventsByAuth(evMap)
     setOtcBlanketAck(consentsResp.data?.otcBlanket || null)
     setPerAuthAckById(consentsResp.data?.perAuthorization || {})
-    onSaved?.()
+    // 2026-06-02 fix: deliberately DO NOT call `onSaved?.()` here.
+    //
+    // Calling it triggers the parent's `loadAll()` (via FamiliesPage's
+    // `onChange={loadAll}` chain), which sets the parent's `loading`
+    // state to true. The parent's render then short-circuits to a
+    // spinner, unmounting FamilyDetailModal, ChildrenTab, AND THIS
+    // MODAL along with them. When the spinner clears, the parent
+    // remounts FamilyDetailModal → ChildrenTab, but `medicationTarget`
+    // (ChildrenTab-local state) is fresh-null on remount, so this
+    // modal does NOT come back. The provider perceives this as
+    // "saving the dose closed the modal" — and the inline ✓
+    // confirmation never paints because the modal is gone.
+    //
+    // The parent's data fetch (families/children/guardians/emergency/
+    // profile) has nothing to do with the medication tables, so the
+    // parent doesn't actually need the refetch on a medication save.
+    // The modal's own internal state (set above) is the only thing
+    // that needs to be current.
+    //
+    // The `onSaved` prop is still accepted for API symmetry with
+    // sibling modals; a future feature that wants to notify the
+    // parent (e.g., a per-child medication-count badge in the family
+    // tree) can re-introduce the call at a non-destructive moment
+    // (e.g., from `onClose`). NOT here — here it eats the modal.
   }
 
   // ─── Authorization create ───────────────────────────────────────
