@@ -99,6 +99,14 @@ const {
   archiveDoseEvent,
   listActiveAuthorizationsForChild,
   listActiveEventsForAuthorization,
+  // Part 2 helpers (PR #20 UI surface) — caregiver roster, eligibility
+  // filter, consent capture, consent fetch, consent satisfaction.
+  listCaregiversWithRoles,
+  eligibleCaregiversForAdministration,
+  recordMedicationPermission,
+  recordOtcBlanketPermission,
+  listMedicationConsentsForChild,
+  medicationConsentSatisfied,
 } = await import('./medication')
 
 beforeEach(() => {
@@ -107,15 +115,20 @@ beforeEach(() => {
   mockState.selectByTable = {
     medication_authorizations: { data: [], error: null },
     medication_administration_events: { data: [], error: null },
+    caregivers: { data: [], error: null },
+    caregiver_regulatory_roles: { data: [], error: null },
+    acknowledgments: { data: [], error: null },
   }
   mockState.insertEcho = true
   mockState.insertErrorByTable = {
     medication_authorizations: null,
     medication_administration_events: null,
+    acknowledgments: null,
   }
   mockState.updateErrorByTable = {
     medication_authorizations: null,
     medication_administration_events: null,
+    acknowledgments: null,
   }
 })
 
@@ -669,5 +682,434 @@ describe('Topical OTC (R 400.1931(8)) — full data-layer branch', () => {
       caregiver: { regulatory_roles: ['child_care_assistant'] },
       authorization: { is_topical_otc: true },
     })).toBe(true)
+  })
+})
+
+// ─── Part 2 (UI surface) helpers ──────────────────────────────────
+
+describe('listCaregiversWithRoles', () => {
+  it('returns caregivers with their regulatory_roles attached as arrays', async () => {
+    mockState.selectByTable.caregivers = {
+      data: [
+        { id: 'cg-1', licensee_id: 'L', app_user_id: 'L',   full_name: 'Owner Bob',   archived_at: null },
+        { id: 'cg-2', licensee_id: 'L', app_user_id: 'U2',  full_name: 'Staff Sue',   archived_at: null },
+        { id: 'cg-3', licensee_id: 'L', app_user_id: 'U3',  full_name: 'Helper Henry', archived_at: null },
+      ],
+      error: null,
+    }
+    mockState.selectByTable.caregiver_regulatory_roles = {
+      data: [
+        { caregiver_id: 'cg-1', regulatory_role: 'licensee' },
+        { caregiver_id: 'cg-2', regulatory_role: 'child_care_staff_member' },
+        { caregiver_id: 'cg-3', regulatory_role: 'child_care_assistant' },
+      ],
+      error: null,
+    }
+    const { data, error } = await listCaregiversWithRoles({ licenseeId: 'L' })
+    expect(error).toBeNull()
+    expect(data).toHaveLength(3)
+    const byName = Object.fromEntries(data.map(c => [c.full_name, c.regulatory_roles]))
+    expect(byName['Owner Bob']).toEqual(['licensee'])
+    expect(byName['Staff Sue']).toEqual(['child_care_staff_member'])
+    expect(byName['Helper Henry']).toEqual(['child_care_assistant'])
+  })
+
+  it('returns empty array on missing licenseeId', async () => {
+    const { data } = await listCaregiversWithRoles({})
+    expect(data).toEqual([])
+  })
+
+  it('returns empty array when no caregivers exist for the licensee', async () => {
+    mockState.selectByTable.caregivers = { data: [], error: null }
+    const { data } = await listCaregiversWithRoles({ licenseeId: 'L' })
+    expect(data).toEqual([])
+  })
+
+  it('caregivers with no roles get an empty regulatory_roles array', async () => {
+    mockState.selectByTable.caregivers = {
+      data: [{ id: 'cg-1', licensee_id: 'L', full_name: 'No Roles', archived_at: null }],
+      error: null,
+    }
+    mockState.selectByTable.caregiver_regulatory_roles = { data: [], error: null }
+    const { data } = await listCaregiversWithRoles({ licenseeId: 'L' })
+    expect(data[0].regulatory_roles).toEqual([])
+  })
+
+  it('multi-role caregivers get all their roles attached', async () => {
+    mockState.selectByTable.caregivers = {
+      data: [{ id: 'cg-1', licensee_id: 'L', full_name: 'Dual Role', archived_at: null }],
+      error: null,
+    }
+    mockState.selectByTable.caregiver_regulatory_roles = {
+      data: [
+        { caregiver_id: 'cg-1', regulatory_role: 'child_care_staff_member' },
+        { caregiver_id: 'cg-1', regulatory_role: 'driver' },
+      ],
+      error: null,
+    }
+    const { data } = await listCaregiversWithRoles({ licenseeId: 'L' })
+    expect([...data[0].regulatory_roles].sort()).toEqual([
+      'child_care_staff_member', 'driver',
+    ])
+  })
+})
+
+describe('eligibleCaregiversForAdministration — the UI mirror of R 400.1931(1)+(8)', () => {
+  const roster = [
+    { id: 'cg-1', full_name: 'Licensee',  regulatory_roles: ['licensee'] },
+    { id: 'cg-2', full_name: 'Staff',     regulatory_roles: ['child_care_staff_member'] },
+    { id: 'cg-3', full_name: 'Assistant', regulatory_roles: ['child_care_assistant'] },
+    { id: 'cg-4', full_name: 'SupVol',    regulatory_roles: ['supervised_volunteer'] },
+    { id: 'cg-5', full_name: 'NoRoles',   regulatory_roles: [] },
+    { id: 'cg-6', full_name: 'Driver',    regulatory_roles: ['driver'] },
+    { id: 'cg-7', full_name: 'UnsupVol',  regulatory_roles: ['unsupervised_volunteer'] },
+  ]
+
+  it('NON-OTC: only licensee + child_care_staff_member appear (R 400.1931(1))', () => {
+    const out = eligibleCaregiversForAdministration({
+      caregivers: roster,
+      authorization: { is_topical_otc: false },
+    })
+    const names = out.map(c => c.full_name).sort()
+    expect(names).toEqual(['Licensee', 'Staff'])
+  })
+
+  it('NON-OTC: assistant + supervised_volunteer are filtered OUT (R 400.1931(1) prohibits)', () => {
+    const out = eligibleCaregiversForAdministration({
+      caregivers: roster,
+      authorization: { is_topical_otc: false },
+    })
+    const names = out.map(c => c.full_name)
+    expect(names).not.toContain('Assistant')
+    expect(names).not.toContain('SupVol')
+  })
+
+  it('NON-OTC: caregivers with no roles, drivers, and unsupervised volunteers are filtered OUT', () => {
+    const out = eligibleCaregiversForAdministration({
+      caregivers: roster,
+      authorization: { is_topical_otc: false },
+    })
+    const names = out.map(c => c.full_name)
+    expect(names).not.toContain('NoRoles')
+    expect(names).not.toContain('Driver')
+    expect(names).not.toContain('UnsupVol')
+  })
+
+  it('TOPICAL OTC: EVERY caregiver appears (R 400.1931(8) role-gate exempt)', () => {
+    const out = eligibleCaregiversForAdministration({
+      caregivers: roster,
+      authorization: { is_topical_otc: true },
+    })
+    expect(out).toHaveLength(roster.length)
+    const names = out.map(c => c.full_name).sort()
+    expect(names).toEqual([
+      'Assistant', 'Driver', 'Licensee', 'NoRoles',
+      'Staff', 'SupVol', 'UnsupVol',
+    ])
+  })
+
+  it('TOPICAL OTC: returns a shallow copy (not a mutating reference)', () => {
+    const out = eligibleCaregiversForAdministration({
+      caregivers: roster,
+      authorization: { is_topical_otc: true },
+    })
+    expect(out).not.toBe(roster)
+  })
+
+  it('empty roster → empty result regardless of authorization shape', () => {
+    expect(eligibleCaregiversForAdministration({
+      caregivers: [], authorization: { is_topical_otc: false },
+    })).toEqual([])
+    expect(eligibleCaregiversForAdministration({
+      caregivers: [], authorization: { is_topical_otc: true },
+    })).toEqual([])
+  })
+
+  it('null roster → empty result (defensive)', () => {
+    expect(eligibleCaregiversForAdministration({
+      caregivers: null, authorization: { is_topical_otc: false },
+    })).toEqual([])
+  })
+
+  it('null authorization → role-gate applies (safe-by-default)', () => {
+    const out = eligibleCaregiversForAdministration({
+      caregivers: roster,
+      authorization: null,
+    })
+    const names = out.map(c => c.full_name).sort()
+    expect(names).toEqual(['Licensee', 'Staff'])
+  })
+})
+
+// ─── Consent capture (parent permission for medication) ──────────────
+
+describe('recordMedicationPermission (per-authorization)', () => {
+  const auth = {
+    id: 'A1',
+    medication_name: "Children's Tylenol",
+    dose_text: '5 mL',
+    schedule_text: 'every 6 hours as needed',
+    prescriber_name: 'Dr. Smith',
+    is_topical_otc: false,
+    starts_on: '2026-06-01',
+    ends_on: null,
+    original_container_confirmed: true,
+  }
+
+  it('archives any prior active ack of the same type+subject, then inserts a fresh row with snapshot_hash drift detection', async () => {
+    // Pre-existing active ack for this authorization.
+    mockState.selectByTable.acknowledgments = {
+      data: [{ id: 'prior-ack' }],
+      error: null,
+    }
+    const { error } = await recordMedicationPermission({
+      providerId: 'P',
+      authorization: auth,
+      channel: 'in_person_paper',
+      parentLabel: 'Test Parent',
+    })
+    expect(error).toBeNull()
+    // 1) Archive update — sets archived_at on the prior row.
+    expect(mockState.updates).toHaveLength(1)
+    expect(mockState.updates[0].table).toBe('acknowledgments')
+    expect(mockState.updates[0].patch.archived_at).toBeTruthy()
+    // 2) Insert — the new row.
+    expect(mockState.inserts).toHaveLength(1)
+    const row = mockState.inserts[0].rows[0]
+    expect(row.provider_id).toBe('P')
+    expect(row.type).toBe('medication_permission')
+    expect(row.subject_type).toBe('medication_authorization')
+    expect(row.subject_id).toBe('A1')
+    expect(row.acknowledged_via).toBe('in_person_paper')
+    expect(row.acknowledged_by_label).toBe('Test Parent')
+    expect(row.snapshot_hash).toMatch(/^[0-9a-f]{8}$/)
+  })
+
+  it('inserts under provider_override channel — captured but does NOT satisfy parent-signed', async () => {
+    await recordMedicationPermission({
+      providerId: 'P',
+      authorization: auth,
+      channel: 'provider_override',
+      providerReason: 'Parent verbally consented; paper signature pending.',
+    })
+    const row = mockState.inserts[0].rows[0]
+    expect(row.acknowledged_via).toBe('provider_override')
+    expect(row.provider_override_reason).toBe('Parent verbally consented; paper signature pending.')
+    expect(row.acknowledged_by_label).toBeNull()
+  })
+
+  it('throws on missing providerId or authorization', async () => {
+    await expect(recordMedicationPermission({
+      authorization: auth, channel: 'in_person_paper', parentLabel: 'X',
+    })).rejects.toThrow(/providerId/)
+    await expect(recordMedicationPermission({
+      providerId: 'P', channel: 'in_person_paper', parentLabel: 'X',
+    })).rejects.toThrow(/authorization/)
+  })
+
+  it('throws when in_person_paper channel is selected without a parentLabel', async () => {
+    await expect(recordMedicationPermission({
+      providerId: 'P',
+      authorization: auth,
+      channel: 'in_person_paper',
+      parentLabel: '   ',
+    })).rejects.toThrow(/parentLabel/)
+  })
+
+  it('throws when provider_override channel is selected without a reason', async () => {
+    await expect(recordMedicationPermission({
+      providerId: 'P',
+      authorization: auth,
+      channel: 'provider_override',
+      providerReason: '',
+    })).rejects.toThrow(/providerReason/)
+  })
+
+  it('produces a hash that drifts when the authorization changes (drift detection wiring)', async () => {
+    await recordMedicationPermission({
+      providerId: 'P',
+      authorization: auth,
+      channel: 'in_person_paper',
+      parentLabel: 'X',
+    })
+    const firstHash = mockState.inserts[0].rows[0].snapshot_hash
+
+    mockState.inserts = []
+    mockState.updates = []
+    await recordMedicationPermission({
+      providerId: 'P',
+      authorization: { ...auth, dose_text: '10 mL' },
+      channel: 'in_person_paper',
+      parentLabel: 'X',
+    })
+    const secondHash = mockState.inserts[0].rows[0].snapshot_hash
+    expect(firstHash).not.toBe(secondHash)
+  })
+})
+
+describe('recordOtcBlanketPermission (one per child, covers all topical OTC)', () => {
+  it('archives prior + inserts under subject_type=child / subject_id=childId', async () => {
+    mockState.selectByTable.acknowledgments = {
+      data: [{ id: 'prior-otc-ack' }],
+      error: null,
+    }
+    const { error } = await recordOtcBlanketPermission({
+      providerId: 'P',
+      childId: 'C',
+      channel: 'in_person_paper',
+      parentLabel: 'Test Parent',
+    })
+    expect(error).toBeNull()
+    expect(mockState.updates).toHaveLength(1)
+    expect(mockState.inserts).toHaveLength(1)
+    const row = mockState.inserts[0].rows[0]
+    expect(row.type).toBe('medication_permission_otc_blanket')
+    expect(row.subject_type).toBe('child')
+    expect(row.subject_id).toBe('C')
+    expect(row.acknowledged_via).toBe('in_person_paper')
+  })
+
+  it('throws on missing providerId or childId', async () => {
+    await expect(recordOtcBlanketPermission({
+      childId: 'C', channel: 'in_person_paper', parentLabel: 'X',
+    })).rejects.toThrow(/providerId/)
+    await expect(recordOtcBlanketPermission({
+      providerId: 'P', channel: 'in_person_paper', parentLabel: 'X',
+    })).rejects.toThrow(/childId/)
+  })
+})
+
+describe('listMedicationConsentsForChild', () => {
+  it('returns the OTC-blanket and per-authorization acks keyed by subject_id', async () => {
+    // The helper makes two acknowledgments queries in sequence: first
+    // the OTC-blanket (subject_type='child', limit 1), then the
+    // per-authorization fetch (subject_type='medication_authorization',
+    // .in() over auth ids). The mock chain returns the same
+    // selectByTable.acknowledgments.data for both — for this test
+    // both queries see the same data, and the helper picks the
+    // right subset by subject_type.
+    //
+    // The OTC-blanket result is whatever is sliced off by the .limit(1)
+    // — the chain's limit handler slices the data array to that length.
+    // We arrange the data so the OTC row is first.
+    mockState.selectByTable.acknowledgments = {
+      data: [
+        { id: 'otc',  type: 'medication_permission_otc_blanket', subject_type: 'child',
+          subject_id: 'C', acknowledged_via: 'in_person_paper', acknowledged_at: '2026-06-01T00:00:00Z' },
+        { id: 'pa1', type: 'medication_permission', subject_type: 'medication_authorization',
+          subject_id: 'A1', acknowledged_via: 'in_person_paper', acknowledged_at: '2026-06-02T00:00:00Z' },
+        { id: 'pa2', type: 'medication_permission', subject_type: 'medication_authorization',
+          subject_id: 'A2', acknowledged_via: 'parent_portal',   acknowledged_at: '2026-06-03T00:00:00Z' },
+      ],
+      error: null,
+    }
+    const { data, error } = await listMedicationConsentsForChild({
+      providerId: 'P',
+      childId: 'C',
+      authorizationIds: ['A1', 'A2'],
+    })
+    expect(error).toBeNull()
+    // OTC row: comes from the limit(1) query — first row in the array.
+    expect(data.otcBlanket).not.toBeNull()
+    expect(data.otcBlanket.type).toBe('medication_permission_otc_blanket')
+    // Per-authorization: keyed by subject_id; only rows of type
+    // medication_permission are considered (the helper filters by type
+    // in the .eq call, but our mock returns the full array — the
+    // helper assigns whatever it sees per subject_id, which matches
+    // because the prior OTC row's subject_id ('C') is not in the
+    // authorizationIds set, so it's never overwritten in the map).
+    expect(Object.keys(data.perAuthorization).sort()).toEqual(['A1', 'A2'])
+    expect(data.perAuthorization['A1'].id).toBe('pa1')
+    expect(data.perAuthorization['A2'].id).toBe('pa2')
+  })
+
+  it('returns empty perAuthorization when no authorization ids are provided', async () => {
+    mockState.selectByTable.acknowledgments = {
+      data: [
+        { id: 'otc', type: 'medication_permission_otc_blanket', subject_type: 'child',
+          subject_id: 'C', acknowledged_via: 'in_person_paper', acknowledged_at: '2026-06-01T00:00:00Z' },
+      ],
+      error: null,
+    }
+    const { data } = await listMedicationConsentsForChild({
+      providerId: 'P', childId: 'C',
+    })
+    expect(data.otcBlanket).not.toBeNull()
+    expect(data.perAuthorization).toEqual({})
+  })
+
+  it('empty shape on missing providerId / childId', async () => {
+    const { data } = await listMedicationConsentsForChild({})
+    expect(data).toEqual({ otcBlanket: null, perAuthorization: {} })
+  })
+})
+
+describe('medicationConsentSatisfied', () => {
+  const goodAck = {
+    archived_at: null,
+    acknowledged_via: 'in_person_paper',
+  }
+  const overrideAck = {
+    archived_at: null,
+    acknowledged_via: 'provider_override',
+  }
+
+  it('NON-OTC: true when the per-auth ack is parent-signed', () => {
+    expect(medicationConsentSatisfied({
+      authorization: { is_topical_otc: false },
+      perAuthAck: goodAck,
+    })).toBe(true)
+  })
+
+  it('NON-OTC: false when the per-auth ack is provider_override only', () => {
+    expect(medicationConsentSatisfied({
+      authorization: { is_topical_otc: false },
+      perAuthAck: overrideAck,
+    })).toBe(false)
+  })
+
+  it('NON-OTC: false when the per-auth ack is missing', () => {
+    expect(medicationConsentSatisfied({
+      authorization: { is_topical_otc: false },
+      perAuthAck: null,
+    })).toBe(false)
+  })
+
+  it('NON-OTC: false when the OTC-blanket is satisfied but per-auth is missing', () => {
+    expect(medicationConsentSatisfied({
+      authorization: { is_topical_otc: false },
+      perAuthAck: null,
+      otcBlanketAck: goodAck,
+    })).toBe(false)
+  })
+
+  it('TOPICAL OTC: true when the OTC-blanket ack is parent-signed', () => {
+    expect(medicationConsentSatisfied({
+      authorization: { is_topical_otc: true },
+      otcBlanketAck: goodAck,
+    })).toBe(true)
+  })
+
+  it('TOPICAL OTC: false when the OTC-blanket is provider_override only', () => {
+    expect(medicationConsentSatisfied({
+      authorization: { is_topical_otc: true },
+      otcBlanketAck: overrideAck,
+    })).toBe(false)
+  })
+
+  it('TOPICAL OTC: ignores the per-auth ack entirely (consent rides the blanket)', () => {
+    // Even if a per-auth ack happened to exist, OTC reads the blanket.
+    expect(medicationConsentSatisfied({
+      authorization: { is_topical_otc: true },
+      perAuthAck: goodAck,
+      otcBlanketAck: null,
+    })).toBe(false)
+  })
+
+  it('archived ack does NOT satisfy (soft-deleted = not on file)', () => {
+    expect(medicationConsentSatisfied({
+      authorization: { is_topical_otc: false },
+      perAuthAck: { ...goodAck, archived_at: new Date().toISOString() },
+    })).toBe(false)
   })
 })
