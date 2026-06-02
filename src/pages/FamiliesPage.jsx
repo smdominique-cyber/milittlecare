@@ -13,6 +13,7 @@ import FundingSourceList from '@/components/funding/FundingSourceList'
 import FundingSourceForm from '@/components/funding/FundingSourceForm'
 import ChildIntakeModal from '@/components/families/ChildIntakeModal'
 import EnrollmentConsentsModal from '@/components/families/EnrollmentConsentsModal'
+import MedicationModal from '@/components/families/MedicationModal'
 import MiRegistryWarningBanner from '@/components/miregistry/MiRegistryWarningBanner'
 import '@/styles/families.css'
 
@@ -786,6 +787,12 @@ function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuard
   // boundary stays visible in the UI (intake = R 400.1907 bundle;
   // consents = enrollment-level items outside the bundle).
   const [consentsTarget, setConsentsTarget] = useState(null)
+  // PR #20 (R 400.1931) — separate medication modal so the rule
+  // boundary stays visible (medication is its own data model:
+  // medication_authorizations + medication_administration_events,
+  // plus the role-gate trigger). Intake + Consents do not host
+  // medication; medication does not host intake.
+  const [medicationTarget, setMedicationTarget] = useState(null)
   // Licensed homes (family_home / group_home) see the Rule 7 intake surface.
   // LEPs see the legacy 5-field form only.
   const isLicensed =
@@ -892,6 +899,16 @@ function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuard
                   <span style={{ fontSize: 12, fontWeight: 600 }}>Consents</span>
                 </button>
               )}
+              {isLicensed && (
+                <button
+                  className="icon-btn"
+                  title="Record medication plan, parent permission, and dose log (R 400.1931)"
+                  onClick={() => setMedicationTarget(child)}
+                  style={{ color: 'var(--clr-ink-mid)' }}
+                >
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>Meds</span>
+                </button>
+              )}
               <button className="icon-btn" title="Edit" onClick={() => setEditing(child.id)}><Pencil /></button>
               <button
                 className="icon-btn"
@@ -965,6 +982,16 @@ function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuard
           primaryGuardianName={primaryGuardian}
           onClose={() => setConsentsTarget(null)}
           onSaved={async () => { setConsentsTarget(null); await onChange() }}
+        />
+      )}
+
+      {medicationTarget && isLicensed && (
+        <MedicationModal
+          userId={userId}
+          child={medicationTarget}
+          primaryGuardianName={primaryGuardian}
+          onClose={() => setMedicationTarget(null)}
+          onSaved={async () => { await onChange() }}
         />
       )}
     </div>
