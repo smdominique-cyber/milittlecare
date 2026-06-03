@@ -195,7 +195,18 @@ export default function ParentMyFamilyPage() {
             emergency={emergency}
             family={selectedFamily}
             session={session}
-            onSaved={(msg) => { setMessage(msg); loadFamilyData(selectedFamily.id, session.user.id) }}
+            // 2026-06-04 fix-forward — the previous fire-and-forget
+            // `loadFamilyData(...)` left a gap where EmergencyTab closed
+            // the add-contact form before the parent re-fetched the
+            // updated contact list, so the new row didn't appear and the
+            // parent re-submitted (creating duplicate rows). Awaiting
+            // here pairs with the matching `await onSaved(...)` inside
+            // EmergencyTab.save() so the form only transitions out once
+            // the list has the new/edited row.
+            onSaved={async (msg) => {
+              setMessage(msg)
+              await loadFamilyData(selectedFamily.id, session.user.id)
+            }}
           />
         )}
         {activeTab === 'fsa' && (
@@ -618,7 +629,8 @@ function GuardiansTab({ guardians, family, session, onSaved }) {
           <p>No guardians listed yet.</p>
         </div>
       ) : (
-        guardians.map(g => (
+        <>
+          {guardians.map(g => (
           <div key={g.id} className="myfamily-card">
             <div className="myfamily-card-header">
               <div>
@@ -644,7 +656,17 @@ function GuardiansTab({ guardians, family, session, onSaved }) {
               {g.email && <div className="myfamily-readfield-value"><Mail size={12} style={{ display: 'inline', marginRight: 6 }} />{g.email}</div>}
             </div>
           </div>
-        ))
+          ))}
+          {/* 2026-06-04 — matches the helper text on the Emergency
+              Contacts section. Phase X removed the parent's delete
+              affordance per the upload-but-never-delete rule; this
+              explains the new behavior so the parent knows how to
+              request removal rather than wondering where the button
+              went. */}
+          <p className="myfamily-helper" style={{ marginTop: 12, color: 'var(--clr-ink-soft)', fontSize: '0.8125rem' }}>
+            Need to remove someone? Ask your provider — they can remove guardians for you.
+          </p>
+        </>
       )}
     </div>
   )
@@ -750,9 +772,19 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
         changedBy: session.user.user_metadata?.full_name || session.user.email,
       })
 
+      // 2026-06-04 fix-forward — await the refresh BEFORE closing the
+      // form so the parent sees the new/edited row appear concurrently
+      // with the form transition. The previous fire-and-forget order
+      // (close form first, then onSaved's loadFamilyData runs async)
+      // left a ~hundreds-of-ms gap where the form was gone but the
+      // list still lacked the new row, prompting double-submits and
+      // duplicate rows. Same fix applies to add AND edit (including
+      // the pickup_authorized toggle). The parent wrapper's onSaved
+      // is now async; `await` here pauses until loadFamilyData
+      // resolves and setEmergency has run.
+      await onSaved({ type: 'success', text: editingId ? '✓ Emergency contact updated' : '✓ Emergency contact added' })
       setShowForm(false)
       setEditingId(null)
-      onSaved({ type: 'success', text: editingId ? '✓ Emergency contact updated' : '✓ Emergency contact added' })
     } catch (err) {
       onSaved({ type: 'error', text: err.message })
     }
@@ -763,6 +795,8 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
   // upload-but-never-delete rule. Migration 031 dropped the parent
   // DELETE policy on `emergency_contacts`. Provider removes via the
   // family modal. See docs/pr-parent-self-service-scope.md §2c + §7.
+  // The helper text in the section footer points the parent at the
+  // provider for removal.
 
   return (
     <div className="myfamily-section">
@@ -826,31 +860,41 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
           <p>No emergency contacts listed yet.</p>
         </div>
       ) : (
-        emergency.map(c => (
-          <div key={c.id} className="myfamily-card">
-            <div className="myfamily-card-header">
-              <div>
-                <div className="myfamily-card-title">
-                  {c.first_name} {c.last_name}
-                  {c.pickup_authorized && (
-                    <span className="myfamily-pickup-badge">Pickup OK</span>
-                  )}
+        <>
+          {emergency.map(c => (
+            <div key={c.id} className="myfamily-card">
+              <div className="myfamily-card-header">
+                <div>
+                  <div className="myfamily-card-title">
+                    {c.first_name} {c.last_name}
+                    {c.pickup_authorized && (
+                      <span className="myfamily-pickup-badge">Pickup OK</span>
+                    )}
+                  </div>
+                  <div className="myfamily-card-meta">{c.relationship}</div>
                 </div>
-                <div className="myfamily-card-meta">{c.relationship}</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="myfamily-edit-btn" onClick={() => startEdit(c)}>
+                    <Pencil size={13} />
+                  </button>
+                  {/* Phase X (2026-06-03): no parent-side remove button.
+                      Provider removes via the family modal. */}
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button className="myfamily-edit-btn" onClick={() => startEdit(c)}>
-                  <Pencil size={13} />
-                </button>
-                {/* Phase X (2026-06-03): no parent-side remove button.
-                    Provider removes via the family modal. */}
+              <div className="myfamily-card-body">
+                <div className="myfamily-readfield-value"><Phone size={12} style={{ display: 'inline', marginRight: 6 }} />{c.phone}</div>
               </div>
             </div>
-            <div className="myfamily-card-body">
-              <div className="myfamily-readfield-value"><Phone size={12} style={{ display: 'inline', marginRight: 6 }} />{c.phone}</div>
-            </div>
-          </div>
-        ))
+          ))}
+          {/* 2026-06-04 — closes the "where did the delete button go?"
+              gap. Parents previously could delete contacts; Phase X
+              removed that affordance per the upload-but-never-delete
+              rule. This explains the new behavior in a calm tone
+              matching the surrounding section copy. */}
+          <p className="myfamily-helper" style={{ marginTop: 12, color: 'var(--clr-ink-soft)', fontSize: '0.8125rem' }}>
+            Need to remove someone? Ask your provider — they can remove contacts for you.
+          </p>
+        </>
       )}
     </div>
   )
