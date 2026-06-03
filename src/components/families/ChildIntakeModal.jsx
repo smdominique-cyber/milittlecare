@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertCircle, X, CheckCircle2, ShieldAlert } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import ConsentAttachmentSlot from '@/components/families/ConsentAttachmentSlot'
 import {
   ACK_TYPES,
   arePremisesAnsweredForIntake,
@@ -460,6 +461,33 @@ export default function ChildIntakeModal({
             care statement" at intake. We will write one envelope acknowledgment
             plus one row per applicable disclosure below.
           </p>
+
+          {/* PR consent-attachments Part 2 — bundle-level attach.
+              Per scope §12, attach a scanned/photographed copy of the
+              signed paper intake bundle at the ENVELOPE level (one
+              scan covers all sub-rows). Per-sub-item attach is
+              deliberately not exposed — it's possible via the data
+              model but the v1 UX is envelope-only. The slot only
+              renders after the envelope ack has been saved (its id
+              must exist); first-time intake without a saved bundle
+              shows nothing here. */}
+          {(() => {
+            const envelope = findActiveAck(acks, {
+              type: ACK_TYPES.CHILD_IN_CARE_STATEMENT,
+              subjectType: 'child',
+              subjectId: child.id,
+            })
+            if (!envelope?.id || !userId) return null
+            return (
+              <ConsentAttachmentSlot
+                mode="provider"
+                providerUserId={userId}
+                targetType="acknowledgment"
+                targetId={envelope.id}
+                label="Signed intake bundle on file"
+              />
+            )
+          })()}
 
           {loading ? (
             <p>Loading existing acknowledgments...</p>

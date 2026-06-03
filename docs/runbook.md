@@ -45,6 +45,45 @@ against the actual table state are the only reliable confirmation.
 
 ## Pending Application
 
+### Migration 030 — parent metadata SELECT policy `archived_at` parity (Consent Attachments Part 2 hardening)
+
+**Status:** PENDING — written 2026-06-02 alongside the Part 2 UI. Drops + recreates the parent SELECT policy on `public.consent_attachments` to add `AND consent_attachments.archived_at IS NULL` to the `USING` clause. Brings the RLS layer to parity with the Edge Function's own `archived_at=is.null` filter.
+
+**File:** `supabase/migrations/030_consent_attachments_archived_rls.sql`
+
+**Context:** the Part 1 code audit (finding (a)) noted that a linked parent's hand-crafted PostgREST SELECT against `consent_attachments` could see metadata rows with `archived_at IS NOT NULL` tied to their own family's consents. The Edge Function never minted a signed URL for those rows (it filters on `archived_at=is.null`), and the application code (`listConsentAttachments`) filters too — so the UI never surfaced them. **This is NOT a cross-tenant fix** — it's a "soft-deleted attachments stay out of the list" parity fix.
+
+**Dependency:** migration 029 must be applied first. Migration 030 only modifies the named policy created by 029.
+
+**Apply procedure:** open the file, copy contents, paste into the Supabase SQL editor (production), run. Idempotent (DROP-then-CREATE).
+
+**Verification:**
+
+```sql
+-- (a) The policy text now includes archived_at IS NULL on
+--     consent_attachments.
+select pg_get_expr(polqual, polrelid) as using_clause
+from pg_policy
+where polname = 'Parents can list consent attachments for their children';
+-- expect: USING clause starts with "(consent_attachments.archived_at IS NULL) AND (...)"
+```
+
+```sql
+-- (b) Re-run Part 1's Test 4a cross-tenant verification (Parent B
+--     SELECT against Family A's attachment id) — still ZERO rows.
+--     The hardening doesn't change this; it only adds the
+--     archived_at filter on top.
+```
+
+```sql
+-- (c) New: archived attachments on a NON-archived ack do NOT
+--     appear in a linked parent's SELECT. Seed by setting
+--     archived_at = now() on a test attachment row, sign in as the
+--     linked parent, and confirm SELECT returns ZERO rows.
+```
+
+**Rollback:** restore migration 029's policy text (loosens the policy back to the pre-hardening state). Commented at the bottom of `030_consent_attachments_archived_rls.sql`.
+
 ### Migration 029 — `consent_attachments` table + `consent-attachments` storage bucket (Consent Attachments Part 1)
 
 **Status:** PENDING — written 2026-06-02, not yet applied to production. Awaits Seth's manual application via the Supabase web SQL editor and verification screenshots **including the four-test gate** (provider write/read; linked parent metadata list + Edge Function content read; cross-tenant parent denial via BOTH the metadata RLS and the Edge Function) before promotion to Migration History below.

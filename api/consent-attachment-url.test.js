@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { _internals_for_test } from './consent-attachment-url.js'
 
-const { resolveChildIdSync } = _internals_for_test
+const { resolveChildIdSync, isValidStoragePath } = _internals_for_test
 
 // These tests cover the JS-pure branching the Edge Function uses to
 // resolve an attachment → child_id. The async wrapper around this
@@ -148,5 +148,92 @@ describe('resolveChildIdSync — Edge Function branch logic', () => {
         medAuth: { id: 'M1', child_id: 'C2', archived_at: null },
       })).toBeNull()
     })
+  })
+})
+
+// ─── Part 2 hardening — isValidStoragePath shape guard ──────────────
+//
+// Per the Part 1 audit (theoretical path-traversal vector): before
+// minting a signed URL, the Edge Function validates that storage_path
+// matches the exact shape the upload helper produces:
+//   <providerUuid>/<targetUuid>/<uuid>.<ext>
+// Three lowercase-hex UUID segments + a short lowercase extension. No
+// '..', no leading '/', no extra segments, no mixed case.
+//
+// A row whose storage_path doesn't match → mintSignedUrl returns
+// null → handler returns 404. The shape check makes the theoretical
+// path-traversal class unreachable from the parent surface.
+
+describe('isValidStoragePath — Part 2 hardening (path-traversal guard)', () => {
+  const validUuid = '12345678-1234-1234-1234-123456789abc'
+  const okPath = `${validUuid}/${validUuid}/${validUuid}.pdf`
+
+  it('accepts the canonical shape: <uuid>/<uuid>/<uuid>.<ext>', () => {
+    expect(isValidStoragePath(okPath)).toBe(true)
+  })
+
+  it('accepts each allowed extension shape', () => {
+    expect(isValidStoragePath(`${validUuid}/${validUuid}/${validUuid}.jpg`)).toBe(true)
+    expect(isValidStoragePath(`${validUuid}/${validUuid}/${validUuid}.jpeg`)).toBe(true)
+    expect(isValidStoragePath(`${validUuid}/${validUuid}/${validUuid}.png`)).toBe(true)
+    expect(isValidStoragePath(`${validUuid}/${validUuid}/${validUuid}.heic`)).toBe(true)
+    expect(isValidStoragePath(`${validUuid}/${validUuid}/${validUuid}.heif`)).toBe(true)
+    expect(isValidStoragePath(`${validUuid}/${validUuid}/${validUuid}.bin`)).toBe(true)
+  })
+
+  it('rejects path traversal via ".."', () => {
+    expect(isValidStoragePath('../receipts/file.jpg')).toBe(false)
+    expect(isValidStoragePath(`${validUuid}/../${validUuid}/${validUuid}.pdf`)).toBe(false)
+    expect(isValidStoragePath(`${validUuid}/${validUuid}/../${validUuid}.pdf`)).toBe(false)
+  })
+
+  it('rejects a leading slash', () => {
+    expect(isValidStoragePath(`/${validUuid}/${validUuid}/${validUuid}.pdf`)).toBe(false)
+  })
+
+  it('rejects extra segments', () => {
+    expect(isValidStoragePath(`${validUuid}/${validUuid}/${validUuid}/${validUuid}.pdf`)).toBe(false)
+  })
+
+  it('rejects missing segments', () => {
+    expect(isValidStoragePath(`${validUuid}/${validUuid}.pdf`)).toBe(false)
+    expect(isValidStoragePath(`${validUuid}.pdf`)).toBe(false)
+  })
+
+  it('rejects non-lowercase hex in segments (UUIDs are normalized to lowercase)', () => {
+    const upperUuid = '12345678-1234-1234-1234-123456789ABC'
+    expect(isValidStoragePath(`${upperUuid}/${validUuid}/${validUuid}.pdf`)).toBe(false)
+  })
+
+  it('rejects missing extension', () => {
+    expect(isValidStoragePath(`${validUuid}/${validUuid}/${validUuid}`)).toBe(false)
+    expect(isValidStoragePath(`${validUuid}/${validUuid}/${validUuid}.`)).toBe(false)
+  })
+
+  it('rejects uppercase extension', () => {
+    expect(isValidStoragePath(`${validUuid}/${validUuid}/${validUuid}.PDF`)).toBe(false)
+  })
+
+  it('rejects non-string input (defensive)', () => {
+    expect(isValidStoragePath(null)).toBe(false)
+    expect(isValidStoragePath(undefined)).toBe(false)
+    expect(isValidStoragePath(42)).toBe(false)
+    expect(isValidStoragePath({})).toBe(false)
+    expect(isValidStoragePath([])).toBe(false)
+  })
+
+  it('rejects empty string', () => {
+    expect(isValidStoragePath('')).toBe(false)
+  })
+
+  it('rejects URL-encoded traversal attempts', () => {
+    // Even if the attacker manages to insert URL-encoded path
+    // segments into storage_path, the regex requires literal
+    // hyphens and hex — `%2e%2e` doesn't match the UUID shape.
+    expect(isValidStoragePath(`${validUuid}/%2e%2e/${validUuid}.pdf`)).toBe(false)
+  })
+
+  it('rejects bucket-prefix injection', () => {
+    expect(isValidStoragePath(`receipts/${validUuid}/${validUuid}.pdf`)).toBe(false)
   })
 })

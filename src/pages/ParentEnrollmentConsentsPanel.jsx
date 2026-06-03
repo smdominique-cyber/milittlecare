@@ -34,6 +34,7 @@ import { useEffect, useState } from 'react'
 import { CheckCircle2, ShieldAlert, Info } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { ACK_TYPES } from '@/lib/acknowledgments'
+import ConsentAttachmentSlot from '@/components/families/ConsentAttachmentSlot'
 import {
   ENROLLMENT_CONSENT_TYPES,
   TIME_BOUND_TYPES,
@@ -260,19 +261,28 @@ function EnrollmentConsentRow({ type, pending, expired, activeAcks, expiredAcks 
     // Captured-but-lapsed — find the expired row to show its dates.
     const row = pickFirstByType(expiredAcks, type)
     return (
-      <Row
-        icon={ShieldAlert}
-        iconColor="var(--clr-amber, #8a6a1a)"
-        label={label}
-        badge={`Expired ${formatDate(row?.expires_at)}`}
-        badgeKind="pending"
-        detail={
-          'On file ' +
-          (row ? (HUMAN_CHANNEL[row.acknowledged_via] || row.acknowledged_via) : '') +
-          (row?.acknowledged_at ? ` on ${formatDate(row.acknowledged_at)}` : '') +
-          '. Renewal is overdue — talk to your provider so they can record a fresh signature.'
-        }
-      />
+      <>
+        <Row
+          icon={ShieldAlert}
+          iconColor="var(--clr-amber, #8a6a1a)"
+          label={label}
+          badge={`Expired ${formatDate(row?.expires_at)}`}
+          badgeKind="pending"
+          detail={
+            'On file ' +
+            (row ? (HUMAN_CHANNEL[row.acknowledged_via] || row.acknowledged_via) : '') +
+            (row?.acknowledged_at ? ` on ${formatDate(row.acknowledged_at)}` : '') +
+            '. Renewal is overdue — talk to your provider so they can record a fresh signature.'
+          }
+        />
+        {row?.id && (
+          <ConsentAttachmentSlot
+            mode="parent"
+            targetType="acknowledgment"
+            targetId={row.id}
+          />
+        )}
+      </>
     )
   }
 
@@ -296,21 +306,30 @@ function EnrollmentConsentRow({ type, pending, expired, activeAcks, expiredAcks 
   const row = pickFirstByType(activeAcks, type)
   const isTimeBound = TIME_BOUND_TYPES.includes(type)
   return (
-    <Row
-      icon={CheckCircle2}
-      iconColor="var(--clr-sage-dark)"
-      label={label}
-      badge={isTimeBound && row?.expires_at
-        ? `On file — renews ${formatDate(row.expires_at)}`
-        : 'On file'}
-      badgeKind="ok"
-      detail={
-        'Recorded ' +
-        (row ? (HUMAN_CHANNEL[row.acknowledged_via] || row.acknowledged_via) : '') +
-        (row?.acknowledged_at ? ` on ${formatDate(row.acknowledged_at)}` : '') +
-        '.'
-      }
-    />
+    <>
+      <Row
+        icon={CheckCircle2}
+        iconColor="var(--clr-sage-dark)"
+        label={label}
+        badge={isTimeBound && row?.expires_at
+          ? `On file — renews ${formatDate(row.expires_at)}`
+          : 'On file'}
+        badgeKind="ok"
+        detail={
+          'Recorded ' +
+          (row ? (HUMAN_CHANNEL[row.acknowledged_via] || row.acknowledged_via) : '') +
+          (row?.acknowledged_at ? ` on ${formatDate(row.acknowledged_at)}` : '') +
+          '.'
+        }
+      />
+      {row?.id && (
+        <ConsentAttachmentSlot
+          mode="parent"
+          targetType="acknowledgment"
+          targetId={row.id}
+        />
+      )}
+    </>
   )
 }
 
@@ -352,25 +371,35 @@ function PhotoStatusRow({ activeAcks }) {
     // The messaging attachment path does not yet consult this consent
     // state — enforcement is the next PR.
     return (
-      <Row
-        icon={Info}
-        iconColor="var(--clr-ink-mid)"
-        label={label}
-        badge="Revoked — preference recorded"
-        badgeKind="info"
-        detail={
-          'Your withdrawal of photo-sharing consent is on file (' +
-          (HUMAN_CHANNEL[revokedAnyChannel.acknowledged_via] || revokedAnyChannel.acknowledged_via) +
-          (revokedAnyChannel.acknowledged_at ? ` on ${formatDate(revokedAnyChannel.acknowledged_at)}` : '') +
-          '). Note: the messaging system does not yet automatically block ' +
-          'photo attachments — your provider is handling photo decisions ' +
-          'manually until the enforcement update ships.'
-        }
-      />
+      <>
+        <Row
+          icon={Info}
+          iconColor="var(--clr-ink-mid)"
+          label={label}
+          badge="Revoked — preference recorded"
+          badgeKind="info"
+          detail={
+            'Your withdrawal of photo-sharing consent is on file (' +
+            (HUMAN_CHANNEL[revokedAnyChannel.acknowledged_via] || revokedAnyChannel.acknowledged_via) +
+            (revokedAnyChannel.acknowledged_at ? ` on ${formatDate(revokedAnyChannel.acknowledged_at)}` : '') +
+            '). Note: the messaging system does not yet automatically block ' +
+            'photo attachments — your provider is handling photo decisions ' +
+            'manually until the enforcement update ships.'
+          }
+        />
+        {revokedAnyChannel.id && (
+          <ConsentAttachmentSlot
+            mode="parent"
+            targetType="acknowledgment"
+            targetId={revokedAnyChannel.id}
+          />
+        )}
+      </>
     )
   }
   if (consentAnyChannel) {
     return (
+      <>
       <Row
         icon={CheckCircle2}
         iconColor="var(--clr-sage-dark)"
@@ -384,6 +413,14 @@ function PhotoStatusRow({ activeAcks }) {
           '. To withdraw consent, tell your provider — they\'ll record it on file.'
         }
       />
+      {consentAnyChannel.id && (
+        <ConsentAttachmentSlot
+          mode="parent"
+          targetType="acknowledgment"
+          targetId={consentAnyChannel.id}
+        />
+      )}
+      </>
     )
   }
   return (
