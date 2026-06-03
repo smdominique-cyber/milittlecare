@@ -192,6 +192,75 @@ export async function getSignedUrl({ bucket, storagePath, ttlSeconds } = {}) {
 }
 
 // -----------------------------------------------------------------------------
+// compressImageForDocument — async (lazy-loads browser-image-compression)
+// -----------------------------------------------------------------------------
+//
+// 2026-06-02 (consent-attachment UX pass, decision 7 in
+// docs/pr-consent-attachment-ux-scope.md): provider phones routinely
+// produce 5–8 MB photos against our 10 MB hard cap. Compress phone
+// shots before upload so the cap doesn't trip on a normal signed
+// form, and so attachment lists stay light to load from a tethered
+// phone on poor coverage.
+//
+// Differences from the messages compression (`src/lib/messages.js`):
+//   - We target 1 MB / 1800 px, not 300 KB / 1600 px. Signed forms
+//     contain fine-print legal copy; a hair more pixels matters for
+//     auditor legibility.
+//   - PDFs and small images bypass entirely. PDFs are already
+//     optimized; sub-1MB images don't benefit and would re-encode
+//     for no win.
+//   - On any failure, we return the ORIGINAL file unchanged. The
+//     provider's intent is to attach the paper, not to debug
+//     compression. The 10 MB cap is the safety net.
+//
+// The browser-image-compression module is lazy-loaded so it stays
+// out of the cold-start bundle for pages that never attach a photo.
+//
+// HEIC note: the library converts HEIC to JPEG in most browsers via
+// canvas — iOS Safari supports HEIC reads on `<canvas>`. When the
+// browser can't decode (rare), we fall through to the original; the
+// 10 MB cap protects the upload pipeline.
+const COMPRESS_THRESHOLD_BYTES = 1 * 1024 * 1024  // 1 MB
+const COMPRESS_OPTIONS = Object.freeze({
+  maxSizeMB: 1,
+  maxWidthOrHeight: 1800,
+  useWebWorker: true,
+  fileType: 'image/jpeg',
+})
+
+export async function compressImageForDocument(file) {
+  if (!file) return file
+  // Only images — PDFs bypass.
+  const mime = (file.type || '').toLowerCase()
+  const ext = getExtension(file.name)
+  const isImage = mime.startsWith('image/')
+    || ['jpg', 'jpeg', 'png', 'heic', 'heif'].includes(ext)
+  if (!isImage) return file
+  // Small files bypass — no benefit to re-encoding.
+  if (file.size <= COMPRESS_THRESHOLD_BYTES) return file
+  try {
+    const mod = await import('browser-image-compression')
+    const imageCompression = mod.default || mod
+    const compressed = await imageCompression(file, COMPRESS_OPTIONS)
+    // Some library paths return a Blob without a name. Wrap as a File
+    // so downstream code that reads `.name` (path-builders, validators)
+    // sees a stable filename. Extension switches to .jpg because the
+    // library re-encodes to JPEG.
+    if (compressed instanceof Blob && !(compressed instanceof File)) {
+      const baseName = (file.name || 'photo').replace(/\.[^.]+$/, '')
+      return new File([compressed], `${baseName}.jpg`, {
+        type: 'image/jpeg',
+        lastModified: Date.now(),
+      })
+    }
+    return compressed
+  } catch (err) {
+    console.warn('compressImageForDocument: falling back to original', err)
+    return file
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Internal helpers
 // -----------------------------------------------------------------------------
 
