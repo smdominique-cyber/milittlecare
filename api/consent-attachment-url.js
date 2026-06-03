@@ -94,7 +94,7 @@ async function resolveChildIdFromAttachment(attachment) {
 
   if (target_type === 'acknowledgment') {
     const ackResp = await supabaseRequest(
-      `acknowledgments?id=eq.${target_id}&select=id,subject_type,subject_id,archived_at&limit=1`,
+      `acknowledgments?id=eq.${encodeURIComponent(target_id)}&select=id,subject_type,subject_id,archived_at&limit=1`,
       'GET'
     )
     const rows = await ackResp.json().catch(() => null)
@@ -106,7 +106,7 @@ async function resolveChildIdFromAttachment(attachment) {
     }
     if (ack.subject_type === 'medication_authorization') {
       const medResp = await supabaseRequest(
-        `medication_authorizations?id=eq.${ack.subject_id}&select=id,child_id,archived_at&limit=1`,
+        `medication_authorizations?id=eq.${encodeURIComponent(ack.subject_id)}&select=id,child_id,archived_at&limit=1`,
         'GET'
       )
       const medRows = await medResp.json().catch(() => null)
@@ -120,7 +120,7 @@ async function resolveChildIdFromAttachment(attachment) {
 
   if (target_type === 'medication_authorization') {
     const medResp = await supabaseRequest(
-      `medication_authorizations?id=eq.${target_id}&select=id,child_id,archived_at&limit=1`,
+      `medication_authorizations?id=eq.${encodeURIComponent(target_id)}&select=id,child_id,archived_at&limit=1`,
       'GET'
     )
     const medRows = await medResp.json().catch(() => null)
@@ -143,7 +143,7 @@ async function resolveChildIdFromAttachment(attachment) {
 async function parentIsLinkedToChild({ parentUserId, childId }) {
   // Resolve child → family_id.
   const childResp = await supabaseRequest(
-    `children?id=eq.${childId}&select=id,family_id&limit=1`,
+    `children?id=eq.${encodeURIComponent(childId)}&select=id,family_id&limit=1`,
     'GET'
   )
   const childRows = await childResp.json().catch(() => null)
@@ -152,7 +152,7 @@ async function parentIsLinkedToChild({ parentUserId, childId }) {
 
   // Look for an active parent_family_link.
   const linkResp = await supabaseRequest(
-    `parent_family_links?parent_id=eq.${parentUserId}&family_id=eq.${child.family_id}&status=eq.active&select=parent_id&limit=1`,
+    `parent_family_links?parent_id=eq.${encodeURIComponent(parentUserId)}&family_id=eq.${encodeURIComponent(child.family_id)}&status=eq.active&select=parent_id&limit=1`,
     'GET'
   )
   const linkRows = await linkResp.json().catch(() => null)
@@ -160,12 +160,44 @@ async function parentIsLinkedToChild({ parentUserId, childId }) {
 }
 
 /**
+ * Validates that a storage_path matches the expected shape
+ * `<providerUuid>/<targetUuid>/<uuid>.<ext>` — the path that the
+ * upload helper (`src/lib/consentAttachments.js` →
+ * `buildScopedStoragePath`) always produces. Closes the theoretical
+ * path-traversal vector flagged by the Part 1 audit: a malicious
+ * provider COULD in principle insert a `consent_attachments` row
+ * with `storage_path` containing `../` or other traversal segments
+ * that, after URL normalization in `mintSignedUrl`, would target a
+ * different bucket. The shape check here makes that impossible.
+ *
+ * Three lowercased-hex UUID segments separated by `/`, then a
+ * lowercase 3-4 char alpha extension. No `..`, no leading `/`, no
+ * mixed-case, no extra segments.
+ */
+const STORAGE_PATH_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z]{2,5}$/
+
+function isValidStoragePath(storagePath) {
+  if (typeof storagePath !== 'string') return false
+  return STORAGE_PATH_RE.test(storagePath)
+}
+
+/**
  * Mints a 15-min signed URL via the Supabase Storage REST API.
  * Returns the absolute URL or null on error.
+ *
+ * The storage_path is shape-validated before being interpolated
+ * into the URL (defense-in-depth against the theoretical
+ * path-traversal vector — a row whose storage_path contains `..`
+ * or extra segments is rejected here, even though the upload
+ * helper never produces such paths). Caller treats null as 404.
  */
 async function mintSignedUrl(storagePath) {
+  if (!isValidStoragePath(storagePath)) return null
+  // Each segment is already shape-validated as hex/extension —
+  // safe to interpolate, but encode anyway for belt-and-suspenders.
+  const safePath = storagePath.split('/').map(encodeURIComponent).join('/')
   const resp = await fetch(
-    `${process.env.SUPABASE_URL}/storage/v1/object/sign/consent-attachments/${storagePath}`,
+    `${process.env.SUPABASE_URL}/storage/v1/object/sign/consent-attachments/${safePath}`,
     {
       method: 'POST',
       headers: {
@@ -233,7 +265,7 @@ export default async function handler(req) {
     // do NOT 200 + null; the response shape distinguishes auth from
     // existence.
     const attResp = await supabaseRequest(
-      `consent_attachments?id=eq.${attachment_id}&archived_at=is.null&select=id,target_type,target_id,storage_path&limit=1`,
+      `consent_attachments?id=eq.${encodeURIComponent(attachment_id)}&archived_at=is.null&select=id,target_type,target_id,storage_path&limit=1`,
       'GET'
     )
     const attRows = await attResp.json().catch(() => null)
@@ -315,6 +347,7 @@ export const _internals_for_test = {
    * return the resolved child_id or null. The async function above
    * is the same logic glued to Supabase queries.
    */
+  isValidStoragePath,
   resolveChildIdSync({ attachment, ack, medAuth }) {
     if (!attachment) return null
     const { target_type } = attachment

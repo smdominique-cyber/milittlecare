@@ -38,6 +38,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, CheckCircle2, Pill, ShieldAlert, X } from 'lucide-react'
+import ConsentAttachmentSlot from '@/components/families/ConsentAttachmentSlot'
 import {
   ELIGIBLE_ADMINISTERING_ROLES,
   archiveDoseEvent,
@@ -418,6 +419,7 @@ export default function MedicationModal({
             saving={saving}
             onRecord={handleRecordOtcBlanket}
             successText={successMessage?.key === 'consent-otc-blanket' ? successMessage.text : null}
+            userId={userId}
           />
 
           {loading ? (
@@ -472,6 +474,7 @@ export default function MedicationModal({
                     onArchive={() => handleArchiveAuthorization(auth.id)}
                     onRecordDose={(fields) => handleRecordDose(auth, fields)}
                     onArchiveDose={handleArchiveDose}
+                    userId={userId}
                     consentSuccessText={
                       successMessage?.key === `consent-per-auth:${auth.id}`
                         ? successMessage.text : null
@@ -513,7 +516,7 @@ export default function MedicationModal({
 
 // ─── OTC-blanket consent card ──────────────────────────────────────
 
-function OtcBlanketCard({ ack, channelValid, saving, onRecord, successText }) {
+function OtcBlanketCard({ ack, channelValid, saving, onRecord, successText, userId }) {
   const onFile = !!(ack && !ack.archived_at &&
     (ack.acknowledged_via === 'parent_portal' || ack.acknowledged_via === 'in_person_paper'))
   const recordedNonSatisfying = !!(ack && !ack.archived_at && !onFile)
@@ -556,6 +559,20 @@ function OtcBlanketCard({ ack, channelValid, saving, onRecord, successText }) {
         </button>
         {successText && <SuccessChip text={successText} />}
       </div>
+      {/* PR consent-attachments Part 2 — attach scan of the signed
+          OTC-blanket form. The ack row must exist (id present);
+          target_type='acknowledgment' because the consent itself
+          lives in `acknowledgments` (per PR #20 + the consent-
+          attachments scope). The OTC-blanket ack covers every
+          topical OTC on this child collectively. */}
+      {ack?.id && userId && (
+        <ConsentAttachmentSlot
+          mode="provider"
+          providerUserId={userId}
+          targetType="acknowledgment"
+          targetId={ack.id}
+        />
+      )}
     </div>
   )
 }
@@ -566,7 +583,7 @@ function AuthorizationCard({
   authorization, events, perAuthAck, otcBlanketAck,
   caregivers, channelValid, saving,
   onRecordConsent, onArchive, onRecordDose, onArchiveDose,
-  consentSuccessText, doseSuccessText,
+  consentSuccessText, doseSuccessText, userId,
 }) {
   const isOtc = isTopicalOtcExempt(authorization)
   const state = getDoseLogState({
@@ -673,6 +690,22 @@ function AuthorizationCard({
             )}
             {consentSuccessText && <SuccessChip text={consentSuccessText} />}
           </div>
+
+          {/* PR consent-attachments Part 2 — attach signed paper
+              consent for this specific medication. For non-OTC the
+              per-auth `medication_permission` ack is the target; for
+              OTC the per-child OTC-blanket ack (above the
+              authorization list) is the target, so no slot here —
+              OtcBlanketCard owns its own. Only render when the
+              per-auth ack exists for non-OTC authorizations. */}
+          {!isOtc && perAuthAck?.id && userId && (
+            <ConsentAttachmentSlot
+              mode="provider"
+              providerUserId={userId}
+              targetType="acknowledgment"
+              targetId={perAuthAck.id}
+            />
+          )}
 
           {/* Recent dose-log entries */}
           {events.length > 0 && (

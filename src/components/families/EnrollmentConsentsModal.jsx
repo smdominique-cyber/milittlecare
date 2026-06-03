@@ -61,6 +61,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, CheckCircle2, ShieldAlert, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import ConsentAttachmentSlot from '@/components/families/ConsentAttachmentSlot'
 import {
   ACK_TYPES,
   computeAckHash,
@@ -252,12 +253,19 @@ export default function EnrollmentConsentsModal({
     return {
       fieldTripRecorded: !!fieldTrip,
       fieldTripChannel: fieldTrip?.acknowledged_via || null,
+      // PR consent-attachments Part 2: expose the ack row id so the
+      // ConsentAttachmentSlot can target this specific consent row.
+      // Null when no active ack exists; the slot caller guards on it.
+      fieldTripAckId: fieldTrip?.id || null,
       photoState,
       photoChannel: photoState === 'consented'
         ? photoConsent?.acknowledged_via
         : photoState === 'revoked'
           ? photoRevoked?.acknowledged_via
           : null,
+      // The slot attaches to whichever photo ack is currently active
+      // (the consent row OR the revocation row — whichever is on file).
+      photoAckId: (photoConsent?.id) || (photoRevoked?.id) || null,
       transport,
       waterOnPrem,
       transportNonroutineList,
@@ -499,6 +507,14 @@ export default function EnrollmentConsentsModal({
                       disabled: saving || !channelValid,
                     },
                   ]}
+                  footer={state.fieldTripAckId && (
+                    <ConsentAttachmentSlot
+                      mode="provider"
+                      providerUserId={userId}
+                      targetType="acknowledgment"
+                      targetId={state.fieldTripAckId}
+                    />
+                  )}
                 />
 
                 <ConsentRow
@@ -541,6 +557,14 @@ export default function EnrollmentConsentsModal({
                         }]
                       : []),
                   ]}
+                  footer={state.photoAckId && (
+                    <ConsentAttachmentSlot
+                      mode="provider"
+                      providerUserId={userId}
+                      targetType="acknowledgment"
+                      targetId={state.photoAckId}
+                    />
+                  )}
                 />
 
                 {/* Phase B (2026-06-01) — time-bound recurring consents.
@@ -555,6 +579,7 @@ export default function EnrollmentConsentsModal({
                   saving={saving}
                   channelValid={channelValid}
                   onRecord={() => recordOne(ACK_TYPES.TRANSPORTATION_ROUTINE_ANNUAL)}
+                  userId={userId}
                 />
                 <PhaseBConsentRow
                   type={ACK_TYPES.WATER_ACTIVITIES_ON_PREMISES_SEASONAL}
@@ -563,6 +588,7 @@ export default function EnrollmentConsentsModal({
                   saving={saving}
                   channelValid={channelValid}
                   onRecord={() => recordOne(ACK_TYPES.WATER_ACTIVITIES_ON_PREMISES_SEASONAL)}
+                  userId={userId}
                 />
               </section>
 
@@ -687,10 +713,11 @@ export default function EnrollmentConsentsModal({
  * capture — the archive-then-insert flow handles the prior-row
  * archive automatically, and the new row sets a fresh expires_at.
  */
-function PhaseBConsentRow({ type, state, help, saving, channelValid, onRecord }) {
+function PhaseBConsentRow({ type, state, help, saving, channelValid, onRecord, userId }) {
   const { status, row } = state
   const label = TYPE_LABEL[type]
   const channel = row?.acknowledged_via || null
+  const ackId = row?.id || null
 
   let icon, badge, badgeKind, footnote = null, actionLabel
   if (status === 'on_file') {
@@ -734,6 +761,14 @@ function PhaseBConsentRow({ type, state, help, saving, channelValid, onRecord })
           disabled: saving || !channelValid,
         },
       ]}
+      footer={ackId && userId && (
+        <ConsentAttachmentSlot
+          mode="provider"
+          providerUserId={userId}
+          targetType="acknowledgment"
+          targetId={ackId}
+        />
+      )}
     />
   )
 }
@@ -937,7 +972,7 @@ function formatOccurrenceLine(row) {
   return `${date} — ${description} (${channelLabel})`
 }
 
-function ConsentRow({ icon: Icon, title, badge, badgeKind, help, footnote, actions }) {
+function ConsentRow({ icon: Icon, title, badge, badgeKind, help, footnote, actions, footer }) {
   const badgeColors = {
     ok:      { bg: 'var(--clr-sage-pale, #e6efe7)', text: 'var(--clr-sage-dark)' },
     pending: { bg: 'var(--clr-amber-pale, #fdf3d8)', text: 'var(--clr-amber, #8a6a1a)' },
@@ -986,6 +1021,7 @@ function ConsentRow({ icon: Icon, title, badge, badgeKind, help, footnote, actio
               >{a.label}</button>
             ))}
           </div>
+          {footer}
         </div>
       </div>
     </div>
