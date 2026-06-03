@@ -386,6 +386,39 @@
   padding: 0 var(--space-2);
 }
 
+/*
+ * 2026-06-03 — Mobile reflow for the child / guardian / emergency-
+ * contact rows.
+ *
+ * The base `.person-card` is a single horizontal flex row with
+ * `.person-actions { flex-shrink: 0 }` and `.person-info` reliant
+ * on `min-width: 0` to shrink. On phone widths inside the
+ * FamilyDetailModal (modal interior ~310 px on a 390 px iPhone),
+ * the action buttons row (Intake / Consents / Meds + edit + archive)
+ * couldn't fit alongside the name. The name text overflowed and
+ * rendered ON TOP of the buttons — "Audrey" stamped over "Intake"
+ * reading as "AudrIntakeey" (IMG_1307.PNG, 2026-06-03).
+ *
+ * Below 600 px we allow the card to wrap and force the actions
+ * onto their own row via `flex-basis: 100%`. The `gap: var(--space-3)`
+ * already on `.person-card` provides the row spacing between the
+ * wrapped lines (flex `gap` shorthand applies to row-gap too).
+ * Inner `flex-wrap: wrap` on `.person-actions` lets the buttons
+ * themselves wrap if the row is still tight on very narrow phones.
+ *
+ * No effect at >600 px — desktop layout stays a single horizontal
+ * line, unchanged.
+ */
+@media (max-width: 600px) {
+  .person-card {
+    flex-wrap: wrap;
+  }
+  .person-actions {
+    flex-basis: 100%;
+    flex-wrap: wrap;
+  }
+}
+
 /* Attendance */
 .attendance-header {
   display: grid;
