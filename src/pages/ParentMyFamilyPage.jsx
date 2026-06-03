@@ -2,10 +2,17 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { notifyStateChange } from '@/lib/notifications'
+// Phase X (2026-06-03) parent self-service helpers — route parent
+// writes through SECURITY DEFINER RPCs (`child_parent_update`,
+// `parent_photo_consent_set`). Adds upload-but-never-delete
+// lockdown alongside; the existing direct `supabase.from('children')
+// .update(...)` path is gone because the migration 016 broad parent
+// UPDATE policy is dropped in migration 031. See
+// docs/pr-parent-self-service-scope.md §2e + §7.
+import { updateChildAsParent } from '@/lib/parentSelfService'
 import {
   ArrowLeft, User, Users, Phone, AlertTriangle, Baby,
-  Plus, X, Save, Trash2, Pencil, Mail, Shield, Edit3, Check,
-  AlertCircle, Loader, Download,
+  Plus, Save, Pencil, Mail, AlertCircle, Loader, Download,
 } from 'lucide-react'
 import '@/styles/parent.css'
 import '@/styles/parent-myfamily.css'
@@ -310,21 +317,61 @@ function ChildrenTab({ children, family, onSaved }) {
 }
 
 function ChildCard({ child, family, isEditing, onEdit, onCancel, onSaved }) {
+  // Phase X (2026-06-03): the form's column set narrows to the
+  // parent-editable allowlist enforced by `child_parent_update`.
+  // `medications` is now provider-managed (the existing medication
+  // modal — R 400.1931 with role-gate). Dietary needs go in
+  // `medical_notes` per the scope §2e recommendation (free text).
   const [form, setForm] = useState({
-    allergies: child.allergies || '',
-    medical_notes: child.medical_notes || '',
-    medications: child.medications || '',
-    dietary_restrictions: child.dietary_restrictions || '',
+    allergies:       child.allergies       || '',
+    medical_notes:   child.medical_notes   || '',
+    physician_name:  child.physician_name  || '',
+    physician_phone: child.physician_phone || '',
+    dentist_name:    child.dentist_name    || '',
+    dentist_phone:   child.dentist_phone   || '',
   })
   const [saving, setSaving] = useState(false)
 
   const save = async () => {
     setSaving(true)
     try {
-      await supabase.from('children').update(form).eq('id', child.id)
+      // Only send fields that actually changed — the RPC's apply
+      // flags distinguish "leave unchanged" from "set to NULL." This
+      // also means we don't fire spurious care-critical notifications
+      // when the parent saves without editing allergies/medical_notes.
+      const changed = {}
+      if (form.allergies       !== (child.allergies       || '')) changed.allergies       = form.allergies       || null
+      if (form.medical_notes   !== (child.medical_notes   || '')) changed.medical_notes   = form.medical_notes   || null
+      if (form.physician_name  !== (child.physician_name  || '')) changed.physician_name  = form.physician_name  || null
+      if (form.physician_phone !== (child.physician_phone || '')) changed.physician_phone = form.physician_phone || null
+      if (form.dentist_name    !== (child.dentist_name    || '')) changed.dentist_name    = form.dentist_name    || null
+      if (form.dentist_phone   !== (child.dentist_phone   || '')) changed.dentist_phone   = form.dentist_phone   || null
 
-      // Fire notification if allergies changed (LOUD)
-      if (form.allergies !== (child.allergies || '')) {
+      if (Object.keys(changed).length === 0) {
+        // No actual change — close the editor without a server hit.
+        onSaved({ type: 'success', text: `No changes for ${child.first_name}` })
+        setSaving(false)
+        return
+      }
+
+      const { error: rpcErr } = await updateChildAsParent({
+        childId: child.id,
+        fields: changed,
+      })
+      if (rpcErr) {
+        onSaved({ type: 'error', text: rpcErr.message || 'Could not save changes.' })
+        setSaving(false)
+        return
+      }
+
+      // The RPC fires care-critical notifications server-side
+      // (`notification_log` rows for allergies + medical_notes). We
+      // ALSO fire a parent-broadcast notification for backward-compat
+      // with the existing provider-side allergy-banner UX — this is
+      // the existing path the dashboard reads from. The two paths are
+      // independent: the RPC's notification_log is auditable + emails
+      // the provider; notifyStateChange surfaces an in-app banner.
+      if ('allergies' in changed) {
         notifyStateChange('allergy_updated', family.id, {
           childName: `${child.first_name} ${child.last_name || ''}`.trim(),
           allergies: form.allergies || 'None listed',
@@ -357,9 +404,17 @@ function ChildCard({ child, family, isEditing, onEdit, onCancel, onSaved }) {
 
         <div className="myfamily-card-body">
           <Field label="Allergies" value={child.allergies} highlight={!!child.allergies} />
-          <Field label="Medical notes" value={child.medical_notes} />
-          <Field label="Medications" value={child.medications} />
-          <Field label="Dietary restrictions" value={child.dietary_restrictions} />
+          <Field label="Medical notes / dietary needs" value={child.medical_notes} />
+          <Field label="Physician" value={
+            child.physician_name
+              ? `${child.physician_name}${child.physician_phone ? ' · ' + child.physician_phone : ''}`
+              : ''
+          } />
+          <Field label="Dentist" value={
+            child.dentist_name
+              ? `${child.dentist_name}${child.dentist_phone ? ' · ' + child.dentist_phone : ''}`
+              : ''
+          } />
         </div>
       </div>
     )
@@ -385,34 +440,60 @@ function ChildCard({ child, family, isEditing, onEdit, onCancel, onSaved }) {
       </div>
 
       <div className="myfamily-field">
-        <label>Medical notes</label>
+        <label>Medical notes / dietary needs</label>
         <textarea
           className="myfamily-textarea"
           value={form.medical_notes}
           onChange={(e) => setForm(f => ({ ...f, medical_notes: e.target.value }))}
-          placeholder="Asthma, conditions, doctor info, etc."
-          rows={2}
+          placeholder="Asthma, conditions, dietary needs (e.g. vegetarian, no pork), other notes…"
+          rows={3}
         />
+        <p className="myfamily-helper">
+          Your provider is notified when this changes. For active
+          medications your child is taking, talk to your provider —
+          medication records are managed separately for compliance.
+        </p>
       </div>
 
       <div className="myfamily-field">
-        <label>Medications</label>
-        <textarea
-          className="myfamily-textarea"
-          value={form.medications}
-          onChange={(e) => setForm(f => ({ ...f, medications: e.target.value }))}
-          placeholder="Current medications and dosages"
-          rows={2}
-        />
-      </div>
-
-      <div className="myfamily-field">
-        <label>Dietary restrictions</label>
+        <label>Physician name</label>
         <input
           className="myfamily-input"
-          value={form.dietary_restrictions}
-          onChange={(e) => setForm(f => ({ ...f, dietary_restrictions: e.target.value }))}
-          placeholder="e.g., Vegetarian, no pork"
+          value={form.physician_name}
+          onChange={(e) => setForm(f => ({ ...f, physician_name: e.target.value }))}
+          placeholder="Dr. Smith / Children's Hospital"
+        />
+      </div>
+
+      <div className="myfamily-field">
+        <label>Physician phone</label>
+        <input
+          className="myfamily-input"
+          type="tel"
+          value={form.physician_phone}
+          onChange={(e) => setForm(f => ({ ...f, physician_phone: e.target.value }))}
+          placeholder="(555) 123-4567"
+        />
+      </div>
+
+      <div className="myfamily-field">
+        <label>Dentist name</label>
+        <input
+          className="myfamily-input"
+          value={form.dentist_name}
+          onChange={(e) => setForm(f => ({ ...f, dentist_name: e.target.value }))}
+          placeholder="Optional"
+        />
+      </div>
+
+      <div className="myfamily-field">
+        <label>Dentist phone</label>
+        <input
+          className="myfamily-input"
+          type="tel"
+          value={form.dentist_phone}
+          onChange={(e) => setForm(f => ({ ...f, dentist_phone: e.target.value }))}
+          placeholder="Optional"
         />
       </div>
 
@@ -499,19 +580,13 @@ function GuardiansTab({ guardians, family, session, onSaved }) {
     setSaving(false)
   }
 
-  const remove = async (g) => {
-    if (!window.confirm(`Remove ${g.first_name} as a guardian?`)) return
-    // Soft-delete (migration 016 added archived_at). Audit retention.
-    await supabase
-      .from('guardians')
-      .update({ archived_at: new Date().toISOString() })
-      .eq('id', g.id)
-    notifyStateChange('guardian_removed', family.id, {
-      guardianName: `${g.first_name} ${g.last_name || ''}`.trim(),
-      changedBy: session.user.user_metadata?.full_name || session.user.email,
-    })
-    onSaved({ type: 'success', text: '✓ Guardian removed' })
-  }
+  // Phase X (2026-06-03): parent-side remove is REMOVED per the
+  // upload-but-never-delete rule. The `block_parent_archive` trigger
+  // (migration 031) rejects any parent UPDATE that sets archived_at,
+  // and parents no longer have a DELETE policy on `guardians`
+  // (migration 031 dropped it). If a parent needs a guardian
+  // removed, the provider archives it on their end. See
+  // docs/pr-parent-self-service-scope.md §2c + §7.
 
   return (
     <div className="myfamily-section">
@@ -559,9 +634,9 @@ function GuardiansTab({ guardians, family, session, onSaved }) {
                 <button className="myfamily-edit-btn" onClick={() => startEdit(g)}>
                   <Pencil size={13} />
                 </button>
-                <button className="myfamily-del-btn" onClick={() => remove(g)}>
-                  <Trash2 size={13} />
-                </button>
+                {/* Phase X (2026-06-03): no parent-side remove button —
+                    upload-but-never-delete. Provider removes via the
+                    family modal. */}
               </div>
             </div>
             <div className="myfamily-card-body">
@@ -631,7 +706,7 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
   const [saving, setSaving] = useState(false)
 
   const startAdd = () => {
-    setForm({ first_name: '', last_name: '', relationship: '', phone: '' })
+    setForm({ first_name: '', last_name: '', relationship: '', phone: '', pickup_authorized: false })
     setEditingId(null)
     setShowForm(true)
   }
@@ -646,12 +721,18 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
     if (!form.first_name || !form.phone) return
     setSaving(true)
     try {
+      // Phase X (2026-06-03): emergency_contacts has no archived_at
+      // column, so the upload-but-never-delete trigger doesn't apply
+      // here — only the DELETE policy was removed. UPDATE + INSERT
+      // stay parent-writable, including the new `pickup_authorized`
+      // boolean added in migration 031 (§2d Option A).
       if (editingId) {
         await supabase.from('emergency_contacts').update({
           first_name: form.first_name,
           last_name: form.last_name,
           relationship: form.relationship,
           phone: form.phone,
+          pickup_authorized: !!form.pickup_authorized,
         }).eq('id', editingId)
       } else {
         await supabase.from('emergency_contacts').insert({
@@ -661,6 +742,7 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
           last_name: form.last_name,
           relationship: form.relationship,
           phone: form.phone,
+          pickup_authorized: !!form.pickup_authorized,
         })
       }
 
@@ -677,14 +759,10 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
     setSaving(false)
   }
 
-  const remove = async (c) => {
-    if (!window.confirm(`Remove ${c.first_name} as an emergency contact?`)) return
-    await supabase.from('emergency_contacts').delete().eq('id', c.id)
-    notifyStateChange('emergency_contact_updated', family.id, {
-      changedBy: session.user.user_metadata?.full_name || session.user.email,
-    })
-    onSaved({ type: 'success', text: '✓ Emergency contact removed' })
-  }
+  // Phase X (2026-06-03): parent-side remove is REMOVED per the
+  // upload-but-never-delete rule. Migration 031 dropped the parent
+  // DELETE policy on `emergency_contacts`. Provider removes via the
+  // family modal. See docs/pr-parent-self-service-scope.md §2c + §7.
 
   return (
     <div className="myfamily-section">
@@ -722,7 +800,18 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
             <label>Phone *</label>
             <input className="myfamily-input" type="tel" value={form.phone || ''} onChange={(e) => setForm(f => ({ ...f, phone: e.target.value }))} />
           </div>
-          <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end' }}>
+          {/* Phase X (2026-06-03) — authorized pickup checkbox. Per
+              scope §2d Option A: extend emergency_contacts with a
+              pickup_authorized boolean rather than a new table. */}
+          <label className="myfamily-toggle">
+            <input
+              type="checkbox"
+              checked={!!form.pickup_authorized}
+              onChange={(e) => setForm(f => ({ ...f, pickup_authorized: e.target.checked }))}
+            />
+            <span>Authorized to pick up children</span>
+          </label>
+          <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 12 }}>
             <button className="parent-secondary" onClick={() => { setShowForm(false); setEditingId(null) }} style={{ marginTop: 0 }}>Cancel</button>
             <button className="parent-cta" onClick={save} disabled={saving || !form.first_name || !form.phone} style={{ width: 'auto', marginTop: 0 }}>
               <Save size={14} /> {saving ? 'Saving…' : 'Save'}
@@ -741,16 +830,20 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
           <div key={c.id} className="myfamily-card">
             <div className="myfamily-card-header">
               <div>
-                <div className="myfamily-card-title">{c.first_name} {c.last_name}</div>
+                <div className="myfamily-card-title">
+                  {c.first_name} {c.last_name}
+                  {c.pickup_authorized && (
+                    <span className="myfamily-pickup-badge">Pickup OK</span>
+                  )}
+                </div>
                 <div className="myfamily-card-meta">{c.relationship}</div>
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
                 <button className="myfamily-edit-btn" onClick={() => startEdit(c)}>
                   <Pencil size={13} />
                 </button>
-                <button className="myfamily-del-btn" onClick={() => remove(c)}>
-                  <Trash2 size={13} />
-                </button>
+                {/* Phase X (2026-06-03): no parent-side remove button.
+                    Provider removes via the family modal. */}
               </div>
             </div>
             <div className="myfamily-card-body">

@@ -225,6 +225,31 @@ export const ACK_TYPES = Object.freeze({
 })
 
 /**
+ * Per-occurrence consent types (Consents Phase C, 2026-06-01).
+ *
+ * Source-of-truth catalog constant. Moved here from childFiles.js
+ * (2026-06-03) so that pure modules (complianceState.js,
+ * parentComplianceProjections.js) can import it without pulling in
+ * the supabase env-var check via childFiles.js's transitive
+ * dependency. childFiles.js re-exports it for backward-compat;
+ * downstream callers can import from either path.
+ *
+ * Structural separation from ENROLLMENT_CONSENT_TYPES (defined in
+ * childFiles.js): these are EVENT RECORDS, not enrollment-state.
+ * Multiple ACTIVE rows per (provider, type, child) are EXPECTED;
+ * the relaxed `acknowledgments_active_unique` partial index in
+ * migration 027 exempts exactly these types.
+ *
+ * Both types are PARENT-SIGNED — only parent_portal /
+ * in_person_paper satisfy. provider_override is recorded in the
+ * audit trail but does not satisfy the rule.
+ */
+export const PER_OCCURRENCE_CONSENT_TYPES = Object.freeze([
+  'transportation_nonroutine_per_trip',       // R 400.1952(1)(b) — "before each trip"
+  'water_activities_off_premises_per_trip',   // R 400.1934(10)(a) — "before each outdoor water activity"
+])
+
+/**
  * The list of sub-row types that compose the child_in_care_statement
  * envelope. The envelope's `snapshot_hash` is a deterministic function
  * of (the subset of) these sub-row hashes that actually applied to the
