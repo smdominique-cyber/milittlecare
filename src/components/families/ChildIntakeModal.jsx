@@ -111,6 +111,27 @@ export default function ChildIntakeModal({
     'Captured at child intake; parent acknowledged in person.'
   )
 
+  // Inline success confirmation per save (2026-06-02 fix — same
+  // pattern as MedicationModal and EnrollmentConsentsModal). The
+  // save-exits bug fixed in this PR removed onSaved + onClose from
+  // handleSaveBundle and handleSendToPortal; the chip is the
+  // positive confirmation the provider would otherwise have lost.
+  // Workflow payoff: with the modal staying open, the envelope
+  // ConsentAttachmentSlot at the top of the body now renders against
+  // the just-saved envelope ack, so the provider can immediately
+  // photograph the signed intake packet. 3-second auto-dismiss.
+  const [successMessage, setSuccessMessage] = useState(null)
+
+  useEffect(() => {
+    if (!successMessage) return undefined
+    const t = setTimeout(() => setSuccessMessage(null), 3000)
+    return () => clearTimeout(t)
+  }, [successMessage])
+
+  function showSuccess(key, text) {
+    setSuccessMessage({ key, text })
+  }
+
   const required = useMemo(
     () => requiredSubTypesForChild({ child, profile }),
     [child, profile]
@@ -185,6 +206,39 @@ export default function ChildIntakeModal({
     if (channel === 'parent_portal_trigger') return true
     return false
   })()
+
+  // Re-fetch the active acks WITHOUT calling onSaved (2026-06-02 fix).
+  //
+  // The original save handlers fired `onSaved?.()` after each insert,
+  // which cascaded through FamiliesPage.loadAll → setLoading(true) →
+  // the spinner short-circuit that unmounts FamilyDetailModal →
+  // ChildrenTab → this modal. When the spinner cleared, ChildrenTab
+  // remounted with fresh-null `intakeTarget` state, so the modal
+  // did NOT come back. Same mechanism as the medication-modal
+  // silent-refresh bug fixed earlier today. See
+  // docs/pr-consent-attachment-ux-scope.md § Root cause.
+  //
+  // The parent's data fetch (families/children/guardians/emergency/
+  // profile) doesn't include the acknowledgments table, so it doesn't
+  // need the refetch when an intake bundle is saved. The modal's own
+  // state (set below) is sufficient. The `onSaved` prop is still
+  // accepted for API symmetry; any future feature that genuinely
+  // needs a parent refetch on save can call it from `onClose` — NEVER
+  // from a save handler, where it eats the modal.
+  async function refresh() {
+    const { data, error: err } = await supabase
+      .from('acknowledgments')
+      .select('id, type, subject_type, subject_id, snapshot_hash, archived_at, acknowledged_via, acknowledged_at')
+      .eq('provider_id', userId)
+      .eq('subject_type', 'child')
+      .eq('subject_id', child.id)
+      .is('archived_at', null)
+    if (err) {
+      setError(err)
+      return
+    }
+    setAcks(Array.isArray(data) ? data : [])
+  }
 
   // PR #16 follow-up (compliance-meaningful confirm, 2026-05-29).
   //
@@ -336,8 +390,15 @@ export default function ChildIntakeModal({
         }
       )
       if (rpcErr) throw rpcErr
-      onSaved?.()
-      onClose?.()
+
+      // 2026-06-02 fix: stay open, refresh in place, show ✓ chip.
+      // The prior `onSaved` + `onClose` pair ejected the provider to
+      // the family tab and made the attach-after-record motion
+      // impossible. With the modal staying open and the envelope ack
+      // now in `acks`, the envelope-level ConsentAttachmentSlot at
+      // the top of the body becomes reachable in the same session.
+      await refresh()
+      showSuccess('bundle-sent-to-portal', '✓ Intake sent to parent’s portal')
     } catch (err) {
       setError(err)
     } finally {
@@ -426,8 +487,13 @@ export default function ChildIntakeModal({
         .eq('id', child.id)
       if (childErr) throw childErr
 
-      onSaved?.()
-      onClose?.()
+      // 2026-06-02 fix: stay open, refresh in place, show ✓ chip.
+      // The prior `onSaved` + `onClose` pair ejected the provider to
+      // the family tab. The envelope ack is now in `acks`, so the
+      // envelope-level ConsentAttachmentSlot at the top of the body
+      // becomes reachable in the same session.
+      await refresh()
+      showSuccess('bundle-saved', '✓ Intake bundle recorded')
     } catch (err) {
       setError(err)
     } finally {
@@ -635,8 +701,13 @@ export default function ChildIntakeModal({
           )}
         </div>
 
-        <div className="modal-footer" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', padding: 12 }}>
-          <button className="btn-discard" onClick={onClose} disabled={saving}>Cancel</button>
+        <div className="modal-footer" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', padding: 12, alignItems: 'center' }}>
+          {successMessage && (
+            successMessage.key === 'bundle-saved' || successMessage.key === 'bundle-sent-to-portal'
+          ) && (
+            <SuccessChip text={successMessage.text} />
+          )}
+          <button className="btn-discard" onClick={onClose} disabled={saving}>Close</button>
           <button
             className="btn-save"
             onClick={handleSaveBundle}
@@ -724,6 +795,39 @@ function buildPremisesGateMessage(missing) {
     labels.join(' and ') +
     ' in Business Info → Premises before recording this child\'s intake. ' +
     '(R 400.1907 requires the corresponding disclosure rows in the bundle.)'
+  )
+}
+
+/**
+ * Inline ✓ confirmation chip (2026-06-02 fix). Sage-pale background +
+ * sage-dark text + CheckCircle2 icon — same tokens as the on-file
+ * badges. Mirrors the medication / enrollment-consents modals
+ * exactly. See docs/pr-consent-attachment-ux-scope.md
+ * § Cross-modal consistency.
+ */
+function SuccessChip({ text }) {
+  if (!text) return null
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      data-testid="intake-success-chip"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        background: 'var(--clr-sage-pale, #e6efe7)',
+        color: 'var(--clr-sage-dark)',
+        padding: '2px 10px',
+        borderRadius: 'var(--radius-full)',
+        fontSize: '0.75rem',
+        fontWeight: 600,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <CheckCircle2 size={12} aria-hidden="true" />
+      {text}
+    </span>
   )
 }
 

@@ -33,7 +33,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, CheckCircle2, Eye, Paperclip, Trash2, Upload } from 'lucide-react'
-import { validateFile, REJECTION_REASONS } from '@/lib/storage'
+import { compressImageForDocument, validateFile, REJECTION_REASONS } from '@/lib/storage'
 import {
   ALLOWED_TARGET_TYPES,
   archiveConsentAttachment,
@@ -128,7 +128,7 @@ export default function ConsentAttachmentSlot({
     setError(null)
 
     // Validate via the shared helper FIRST so we never start an
-    // upload with a known-bad file.
+    // upload with a known-bad file (wrong type, empty, oversize).
     const check = validateFile(file)
     if (!check.ok) {
       setError(check.reason)
@@ -136,11 +136,18 @@ export default function ConsentAttachmentSlot({
     }
 
     setBusy(true)
+    // 2026-06-02 (consent-attachment UX pass): compress phone photos
+    // before upload so a normal 5–8 MB iPhone shot doesn't trip the
+    // 10 MB cap and downstream lists stay light. PDFs and small
+    // images bypass. On compression failure, the helper falls back to
+    // the original — we never block a paper attach on a JS-library
+    // edge case. See src/lib/storage.js § compressImageForDocument.
+    const fileToUpload = await compressImageForDocument(file)
     const { error: e } = await uploadConsentAttachment({
       providerUserId,
       targetType,
       targetId,
-      file,
+      file: fileToUpload,
     })
     setBusy(false)
     if (e) {
@@ -333,10 +340,20 @@ export default function ConsentAttachmentSlot({
           >
             <Upload size={12} aria-hidden="true" />
             <span>{busy ? 'Uploading…' : 'Attach signed form'}</span>
+            {/* `capture="environment"` hints mobile browsers (iOS Safari,
+                Chrome Android) to open the rear camera directly so a
+                provider standing at the kitchen table can photograph a
+                signed paper without leaving the modal. Desktop browsers
+                ignore the hint and fall back to the file picker — same
+                component, same code path. Mobile OS file pickers also
+                surface a library option from the camera flow if the
+                provider already photographed the paper. */}
             <input
               ref={inputRef}
               type="file"
               accept=".pdf,.jpg,.jpeg,.png,.heic,.heif,application/pdf,image/jpeg,image/png,image/heic,image/heif"
+              capture="environment"
+              data-testid="attachment-file-input"
               onChange={handleFileInputChange}
               disabled={busy}
               style={{ display: 'none' }}
