@@ -163,6 +163,27 @@ export default function EnrollmentConsentsModal({
     'Captured at child enrollment; parent acknowledged in person.'
   )
 
+  // Inline success confirmation per save (2026-06-02 fix — same pattern
+  // as MedicationModal). The save-exits bug fixed in this PR removed
+  // the onSaved/onClose pair from every save handler; the chip is the
+  // positive confirmation the provider would otherwise have lost. The
+  // workflow payoff: with the modal staying open, the just-saved
+  // consent's ConsentAttachmentSlot is reachable in the same session,
+  // so the provider can immediately photograph the signed paper.
+  // Single `{ key, text }` slot — each save path sets its own key so
+  // the chip renders next to the right row. 3-second auto-dismiss.
+  const [successMessage, setSuccessMessage] = useState(null)
+
+  useEffect(() => {
+    if (!successMessage) return undefined
+    const t = setTimeout(() => setSuccessMessage(null), 3000)
+    return () => clearTimeout(t)
+  }, [successMessage])
+
+  function showSuccess(key, text) {
+    setSuccessMessage({ key, text })
+  }
+
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -293,6 +314,40 @@ export default function EnrollmentConsentsModal({
     }
   }
 
+  // Re-fetch the active acks WITHOUT calling onSaved (2026-06-02 fix).
+  //
+  // The original save handlers fired `onSaved?.()` after each insert,
+  // which cascaded through FamiliesPage.loadAll → setLoading(true) →
+  // the spinner short-circuit that unmounts FamilyDetailModal →
+  // ChildrenTab → this modal. When the spinner cleared, ChildrenTab
+  // remounted with fresh-null `consentsTarget` state, so the modal
+  // did NOT come back — the provider perceived the save as "kicked
+  // me out." Same mechanism as the medication-modal silent-refresh
+  // bug fixed earlier today. See
+  // docs/pr-consent-attachment-ux-scope.md § Root cause.
+  //
+  // The parent's data fetch (families/children/guardians/emergency/
+  // profile) doesn't include the acknowledgments table, so it doesn't
+  // need the refetch when a consent is recorded. The modal's own
+  // state (set below) is sufficient. The `onSaved` prop is still
+  // accepted for API symmetry; any future feature that genuinely
+  // needs a parent refetch on save can call it from `onClose` — NEVER
+  // from a save handler, where it eats the modal.
+  async function refresh() {
+    const { data, error: err } = await supabase
+      .from('acknowledgments')
+      .select('id, type, subject_type, subject_id, snapshot_hash, archived_at, acknowledged_via, acknowledged_at, expires_at, occurrence_metadata')
+      .eq('provider_id', userId)
+      .eq('subject_type', 'child')
+      .eq('subject_id', child.id)
+      .is('archived_at', null)
+    if (err) {
+      setError(err)
+      return
+    }
+    setAcks(Array.isArray(data) ? data : [])
+  }
+
   async function archiveActiveOfType(type) {
     // Archive every active (archived_at IS NULL) row of this type for
     // the child, regardless of expires_at. The partial unique index
@@ -347,8 +402,14 @@ export default function EnrollmentConsentsModal({
         }])
       if (insertErr) throw insertErr
 
-      onSaved?.()
-      onClose?.()
+      // 2026-06-02 fix: stay open, refresh in place, show ✓ chip.
+      // The prior `onSaved` + `onClose` pair ejected the provider to
+      // the family tab and made the attach-after-record motion
+      // impossible. With the modal staying open, the just-saved
+      // ack's id now appears in `acks` and the ConsentAttachmentSlot
+      // beneath the row becomes reachable in the same session.
+      await refresh()
+      showSuccess(`consent:${type}`, '✓ Consent recorded')
     } catch (err) {
       setError(err)
     } finally {
@@ -399,22 +460,20 @@ export default function EnrollmentConsentsModal({
         }])
       if (insertErr) throw insertErr
 
-      // Refresh the loaded acks in place — the per-occurrence
-      // recent-N list needs to reflect the new row WITHOUT closing
-      // the modal (provider may want to record another trip).
-      const { data: refreshed } = await supabase
-        .from('acknowledgments')
-        .select('id, type, subject_type, subject_id, snapshot_hash, archived_at, acknowledged_via, acknowledged_at, expires_at, occurrence_metadata')
-        .eq('provider_id', userId)
-        .eq('subject_type', 'child')
-        .eq('subject_id', child.id)
-        .is('archived_at', null)
-      setAcks(Array.isArray(refreshed) ? refreshed : [])
-
-      onSaved?.()
-      // Deliberately do NOT call onClose() here — per-occurrence
-      // recording is iterative; the provider may want to capture
-      // multiple in one sitting.
+      // 2026-06-02 fix: use the shared `refresh()` helper (no inline
+      // re-select), and DROP the `onSaved?.()` call. The original
+      // "deliberately do NOT call onClose()" comment was correct in
+      // intent but the `onSaved` cascade closed the modal anyway
+      // (FamiliesPage.loadAll → setLoading(true) → unmount). Now the
+      // modal stays open and the recent-N list updates in place so
+      // the provider can record another trip back-to-back.
+      await refresh()
+      showSuccess(
+        `occurrence:${type}`,
+        type === ACK_TYPES.TRANSPORTATION_NONROUTINE_PER_TRIP
+          ? '✓ Trip recorded'
+          : '✓ Outing recorded'
+      )
     } catch (err) {
       setError(err)
     } finally {
@@ -448,8 +507,12 @@ export default function EnrollmentConsentsModal({
         }])
       if (insertErr) throw insertErr
 
-      onSaved?.()
-      onClose?.()
+      // 2026-06-02 fix: stay open, refresh in place, show ✓ chip on
+      // the photo-consent row (same row hosts both consent and
+      // revocation, so the `consent:photo_sharing_consent` key
+      // shows the chip in the right place).
+      await refresh()
+      showSuccess(`consent:${ACK_TYPES.PHOTO_SHARING_CONSENT}`, '✓ Revocation recorded')
     } catch (err) {
       setError(err)
     } finally {
@@ -507,6 +570,10 @@ export default function EnrollmentConsentsModal({
                       disabled: saving || !channelValid,
                     },
                   ]}
+                  successText={
+                    successMessage?.key === `consent:${ACK_TYPES.FIELD_TRIP_PERMISSION}`
+                      ? successMessage.text : null
+                  }
                   footer={state.fieldTripAckId && (
                     <ConsentAttachmentSlot
                       mode="provider"
@@ -557,6 +624,10 @@ export default function EnrollmentConsentsModal({
                         }]
                       : []),
                   ]}
+                  successText={
+                    successMessage?.key === `consent:${ACK_TYPES.PHOTO_SHARING_CONSENT}`
+                      ? successMessage.text : null
+                  }
                   footer={state.photoAckId && (
                     <ConsentAttachmentSlot
                       mode="provider"
@@ -580,6 +651,10 @@ export default function EnrollmentConsentsModal({
                   channelValid={channelValid}
                   onRecord={() => recordOne(ACK_TYPES.TRANSPORTATION_ROUTINE_ANNUAL)}
                   userId={userId}
+                  successText={
+                    successMessage?.key === `consent:${ACK_TYPES.TRANSPORTATION_ROUTINE_ANNUAL}`
+                      ? successMessage.text : null
+                  }
                 />
                 <PhaseBConsentRow
                   type={ACK_TYPES.WATER_ACTIVITIES_ON_PREMISES_SEASONAL}
@@ -589,6 +664,10 @@ export default function EnrollmentConsentsModal({
                   channelValid={channelValid}
                   onRecord={() => recordOne(ACK_TYPES.WATER_ACTIVITIES_ON_PREMISES_SEASONAL)}
                   userId={userId}
+                  successText={
+                    successMessage?.key === `consent:${ACK_TYPES.WATER_ACTIVITIES_ON_PREMISES_SEASONAL}`
+                      ? successMessage.text : null
+                  }
                 />
               </section>
 
@@ -614,6 +693,10 @@ export default function EnrollmentConsentsModal({
                     ACK_TYPES.TRANSPORTATION_NONROUTINE_PER_TRIP,
                     metadata,
                   )}
+                  successText={
+                    successMessage?.key === `occurrence:${ACK_TYPES.TRANSPORTATION_NONROUTINE_PER_TRIP}`
+                      ? successMessage.text : null
+                  }
                 />
                 <PerOccurrenceSection
                   type={ACK_TYPES.WATER_ACTIVITIES_OFF_PREMISES_PER_TRIP}
@@ -625,6 +708,10 @@ export default function EnrollmentConsentsModal({
                     ACK_TYPES.WATER_ACTIVITIES_OFF_PREMISES_PER_TRIP,
                     metadata,
                   )}
+                  successText={
+                    successMessage?.key === `occurrence:${ACK_TYPES.WATER_ACTIVITIES_OFF_PREMISES_PER_TRIP}`
+                      ? successMessage.text : null
+                  }
                 />
               </section>
 
@@ -713,7 +800,7 @@ export default function EnrollmentConsentsModal({
  * capture — the archive-then-insert flow handles the prior-row
  * archive automatically, and the new row sets a fresh expires_at.
  */
-function PhaseBConsentRow({ type, state, help, saving, channelValid, onRecord, userId }) {
+function PhaseBConsentRow({ type, state, help, saving, channelValid, onRecord, userId, successText }) {
   const { status, row } = state
   const label = TYPE_LABEL[type]
   const channel = row?.acknowledged_via || null
@@ -761,6 +848,7 @@ function PhaseBConsentRow({ type, state, help, saving, channelValid, onRecord, u
           disabled: saving || !channelValid,
         },
       ]}
+      successText={successText}
       footer={ackId && userId && (
         <ConsentAttachmentSlot
           mode="provider"
@@ -788,7 +876,7 @@ function PhaseBConsentRow({ type, state, help, saving, channelValid, onRecord, u
  * `recordOccurrence`. Submission keeps the modal open so the
  * provider can capture multiple in sequence.
  */
-function PerOccurrenceSection({ type, list, help, saving, channelValid, onRecord }) {
+function PerOccurrenceSection({ type, list, help, saving, channelValid, onRecord, successText }) {
   const [open, setOpen] = useState(false)
   const [fieldErrors, setFieldErrors] = useState(null)
   const isTransport = type === ACK_TYPES.TRANSPORTATION_NONROUTINE_PER_TRIP
@@ -844,17 +932,20 @@ function PerOccurrenceSection({ type, list, help, saving, channelValid, onRecord
     }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
         <strong style={{ fontSize: '0.9375rem' }}>{label}</strong>
-        <span style={{
-          background: 'var(--clr-cream)',
-          color: 'var(--clr-ink-mid)',
-          padding: '2px 8px',
-          borderRadius: 'var(--radius-full)',
-          fontSize: '0.6875rem',
-          fontWeight: 600,
-          textTransform: 'uppercase',
-          letterSpacing: '0.02em',
-          whiteSpace: 'nowrap',
-        }}>{list.length} recorded</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {successText && <SuccessChip text={successText} />}
+          <span style={{
+            background: 'var(--clr-cream)',
+            color: 'var(--clr-ink-mid)',
+            padding: '2px 8px',
+            borderRadius: 'var(--radius-full)',
+            fontSize: '0.6875rem',
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '0.02em',
+            whiteSpace: 'nowrap',
+          }}>{list.length} recorded</span>
+        </div>
       </div>
       <p style={{ margin: 0, color: 'var(--clr-ink-soft)', fontSize: '0.8125rem', lineHeight: 1.45 }}>
         {help}
@@ -972,7 +1063,7 @@ function formatOccurrenceLine(row) {
   return `${date} — ${description} (${channelLabel})`
 }
 
-function ConsentRow({ icon: Icon, title, badge, badgeKind, help, footnote, actions, footer }) {
+function ConsentRow({ icon: Icon, title, badge, badgeKind, help, footnote, actions, footer, successText }) {
   const badgeColors = {
     ok:      { bg: 'var(--clr-sage-pale, #e6efe7)', text: 'var(--clr-sage-dark)' },
     pending: { bg: 'var(--clr-amber-pale, #fdf3d8)', text: 'var(--clr-amber, #8a6a1a)' },
@@ -1011,7 +1102,7 @@ function ConsentRow({ icon: Icon, title, badge, badgeKind, help, footnote, actio
               {footnote}
             </p>
           )}
-          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             {actions.map((a, i) => (
               <button
                 key={i}
@@ -1020,11 +1111,47 @@ function ConsentRow({ icon: Icon, title, badge, badgeKind, help, footnote, actio
                 disabled={a.disabled}
               >{a.label}</button>
             ))}
+            {successText && <SuccessChip text={successText} />}
           </div>
           {footer}
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * Inline ✓ confirmation chip (2026-06-02 fix). Sage-pale background +
+ * sage-dark text + CheckCircle2 icon — same tokens as the on-file
+ * badges so the visual language stays one. Mirrors the medication
+ * modal's SuccessChip exactly (duplicated here rather than extracted
+ * to keep this PR's surface area focused on the fix; extraction
+ * across the three modals is a small follow-up — see
+ * docs/pr-consent-attachment-ux-scope.md § Per-modal fix shape).
+ */
+function SuccessChip({ text }) {
+  if (!text) return null
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      data-testid="consent-success-chip"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        background: 'var(--clr-sage-pale, #e6efe7)',
+        color: 'var(--clr-sage-dark)',
+        padding: '2px 10px',
+        borderRadius: 'var(--radius-full)',
+        fontSize: '0.75rem',
+        fontWeight: 600,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <CheckCircle2 size={12} aria-hidden="true" />
+      {text}
+    </span>
   )
 }
 
