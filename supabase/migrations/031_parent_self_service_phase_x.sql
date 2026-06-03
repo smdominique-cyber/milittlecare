@@ -367,47 +367,70 @@ begin
 
   -- ── Care-critical notifications ──────────────────────────────────
   -- Fire one notification_log row per changed care-critical field.
-  -- The existing api/notify-state-change.js dispatcher reads
-  -- unread rows and emails the provider.
+  -- Column shape matches the existing api/notify-state-change.js +
+  -- api/cron-dispatch-reminders.js writers verbatim:
+  --   recipient_type / recipient_id / recipient_email
+  --   change_type / change_description
+  --   changed_by_user_id / changed_by_role
+  --   family_id / child_id
+  --   email_sent / email_sent_at / email_id
+  --   metadata (jsonb)
   --
-  -- Only fire when the value actually changed (string compare with
-  -- NULL-safe IS DISTINCT FROM). Avoids spam when the parent saved
-  -- with no real change.
+  -- We write the row server-side via the RPC; the actual email send
+  -- happens out-of-band (the existing dispatcher reads unread rows).
+  -- email_sent stays false here — the dispatcher flips it when the
+  -- email actually goes out.
+  --
+  -- recipient_email left null in the SQL; the dispatcher resolves
+  -- from profiles.email at send time, same as
+  -- api/cron-dispatch-reminders.js line 446-447 does for the
+  -- no_recipient case.
+  --
+  -- Only fire when the value actually changed (NULL-safe IS DISTINCT
+  -- FROM). Avoids spam when the parent saved with no real change.
   if p_apply_allergies
      and (p_allergies is distinct from v_old_allergies) then
     insert into public.notification_log (
-      user_id, kind, related_id, payload, created_at
+      recipient_type, recipient_id, recipient_email,
+      change_type, change_description,
+      changed_by_user_id, changed_by_role,
+      family_id, child_id,
+      email_sent, email_sent_at, email_id,
+      metadata
     ) values (
-      v_provider_id,
+      'provider', v_provider_id, null,
       'child_allergies_updated_by_parent',
-      p_child_id,
+      'Allergy info updated by parent',
+      v_parent_id, 'parent',
+      v_child_family_id, p_child_id,
+      false, null, null,
       jsonb_build_object(
-        'child_id', p_child_id,
-        'family_id', v_child_family_id,
-        'updated_by_parent_id', v_parent_id,
         'previous_value', v_old_allergies,
         'new_value', p_allergies
-      ),
-      now()
+      )
     );
   end if;
 
   if p_apply_medical_notes
      and (p_medical_notes is distinct from v_old_medical) then
     insert into public.notification_log (
-      user_id, kind, related_id, payload, created_at
+      recipient_type, recipient_id, recipient_email,
+      change_type, change_description,
+      changed_by_user_id, changed_by_role,
+      family_id, child_id,
+      email_sent, email_sent_at, email_id,
+      metadata
     ) values (
-      v_provider_id,
+      'provider', v_provider_id, null,
       'child_medical_notes_updated_by_parent',
-      p_child_id,
+      'Medical notes updated by parent',
+      v_parent_id, 'parent',
+      v_child_family_id, p_child_id,
+      false, null, null,
       jsonb_build_object(
-        'child_id', p_child_id,
-        'family_id', v_child_family_id,
-        'updated_by_parent_id', v_parent_id,
         'previous_value', v_old_medical,
         'new_value', p_medical_notes
-      ),
-      now()
+      )
     );
   end if;
 
