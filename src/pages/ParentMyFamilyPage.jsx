@@ -65,6 +65,18 @@ export default function ParentMyFamilyPage() {
       supabase.from('emergency_contacts').select('*').eq('family_id', familyId),
       supabase.from('parent_profiles').select('*').eq('id', parentId).maybeSingle(),
     ])
+    // 2026-06-04 — surface read errors (was silently swallowed via
+    // `data || []`, so an RLS denial showed as "No emergency contacts
+    // listed yet" with nothing in the console). Per the emergency-
+    // contact read bug investigation: the user originally couldn't
+    // tell whether the empty list was real or an error. Logging here
+    // gives the next bug a fingerprint instead of a silent empty
+    // state. Errors are non-fatal — we still set the array to []
+    // afterward so the rest of the page renders.
+    if (c.error) console.error('loadFamilyData: children read failed', c.error)
+    if (g.error) console.error('loadFamilyData: guardians read failed', g.error)
+    if (e.error) console.error('loadFamilyData: emergency_contacts read failed', e.error)
+    if (p.error) console.error('loadFamilyData: parent_profiles read failed', p.error)
     setChildren(c.data || [])
     setGuardians(g.data || [])
     setEmergency(e.data || [])
@@ -748,16 +760,29 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
       // here — only the DELETE policy was removed. UPDATE + INSERT
       // stay parent-writable, including the new `pickup_authorized`
       // boolean added in migration 031 (§2d Option A).
+      //
+      // 2026-06-04 — surface write errors. Previously these were
+      // swallowed: `await supabase.from(...).insert(...)` returns
+      // { data, error } rather than throwing on PostgREST errors,
+      // so any RLS denial or column-shape mismatch would fall
+      // through to `notifyStateChange` + `onSaved({type:'success'})`
+      // and the provider's state-change email would fire on a row
+      // that didn't actually get inserted. This was the original
+      // surface of the parent emergency-contact read bug — the
+      // "INSERT succeeds" inference was based on the email firing,
+      // not the row landing. Now we check `.error` explicitly.
+      let writeError = null
       if (editingId) {
-        await supabase.from('emergency_contacts').update({
+        const { error } = await supabase.from('emergency_contacts').update({
           first_name: form.first_name,
           last_name: form.last_name,
           relationship: form.relationship,
           phone: form.phone,
           pickup_authorized: !!form.pickup_authorized,
         }).eq('id', editingId)
+        writeError = error
       } else {
-        await supabase.from('emergency_contacts').insert({
+        const { error } = await supabase.from('emergency_contacts').insert({
           family_id: family.id,
           user_id: family.user_id,
           first_name: form.first_name,
@@ -766,6 +791,22 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
           phone: form.phone,
           pickup_authorized: !!form.pickup_authorized,
         })
+        writeError = error
+      }
+
+      if (writeError) {
+        // Surface the actual DB error rather than letting the
+        // notification fire on a phantom row.
+        console.error('EmergencyTab.save: write failed', writeError)
+        onSaved({
+          type: 'error',
+          text: writeError.message || 'Could not save the emergency contact. Try again.',
+        })
+        // Reset saving state before the early-return so the form
+        // can be re-submitted (or fixed and re-submitted) after the
+        // user reads the error.
+        setSaving(false)
+        return
       }
 
       notifyStateChange('emergency_contact_updated', family.id, {
