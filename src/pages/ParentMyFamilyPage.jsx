@@ -740,7 +740,12 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
   const [saving, setSaving] = useState(false)
 
   const startAdd = () => {
-    setForm({ first_name: '', last_name: '', relationship: '', phone: '', pickup_authorized: false })
+    // 2026-06-04 — emergency_contacts has a single `name` column,
+    // NOT first_name/last_name (per Seth's diagnostic SQL run on
+    // production). children and guardians DO have first_name/last_name
+    // (per migration 016) — those forms stay unchanged. Only this
+    // form is corrected to match the actual schema.
+    setForm({ name: '', relationship: '', phone: '', pickup_authorized: false })
     setEditingId(null)
     setShowForm(true)
   }
@@ -752,7 +757,7 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
   }
 
   const save = async () => {
-    if (!form.first_name || !form.phone) return
+    if (!form.name || !form.phone) return
     setSaving(true)
     try {
       // Phase X (2026-06-03): emergency_contacts has no archived_at
@@ -771,11 +776,17 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
       // surface of the parent emergency-contact read bug — the
       // "INSERT succeeds" inference was based on the email firing,
       // not the row landing. Now we check `.error` explicitly.
+      // 2026-06-04 — write `name` (single text column per the actual
+      // production schema). The two-field first_name/last_name shape
+      // copied over from the children/guardians forms doesn't match
+      // emergency_contacts; production PostgREST rejected every insert
+      // with "Could not find the 'first_name' column" until Seth's
+      // diagnostic SQL caught it. children and guardians keep their
+      // first_name/last_name forms — those tables DO have those columns.
       let writeError = null
       if (editingId) {
         const { error } = await supabase.from('emergency_contacts').update({
-          first_name: form.first_name,
-          last_name: form.last_name,
+          name: form.name,
           relationship: form.relationship,
           phone: form.phone,
           pickup_authorized: !!form.pickup_authorized,
@@ -785,8 +796,7 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
         const { error } = await supabase.from('emergency_contacts').insert({
           family_id: family.id,
           user_id: family.user_id,
-          first_name: form.first_name,
-          last_name: form.last_name,
+          name: form.name,
           relationship: form.relationship,
           phone: form.phone,
           pickup_authorized: !!form.pickup_authorized,
@@ -857,15 +867,11 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
           <div className="myfamily-card-title" style={{ marginBottom: 12 }}>
             {editingId ? 'Edit emergency contact' : 'Add emergency contact'}
           </div>
-          <div className="myfamily-form-grid">
-            <div className="myfamily-field">
-              <label>First name *</label>
-              <input className="myfamily-input" value={form.first_name || ''} onChange={(e) => setForm(f => ({ ...f, first_name: e.target.value }))} />
-            </div>
-            <div className="myfamily-field">
-              <label>Last name</label>
-              <input className="myfamily-input" value={form.last_name || ''} onChange={(e) => setForm(f => ({ ...f, last_name: e.target.value }))} />
-            </div>
+          {/* 2026-06-04 — single Name field. emergency_contacts has
+              a single `name` column (NOT first_name/last_name). */}
+          <div className="myfamily-field">
+            <label>Name *</label>
+            <input className="myfamily-input" value={form.name || ''} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} />
           </div>
           <div className="myfamily-field">
             <label>Relationship</label>
@@ -888,7 +894,7 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
           </label>
           <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 12 }}>
             <button className="parent-secondary" onClick={() => { setShowForm(false); setEditingId(null) }} style={{ marginTop: 0 }}>Cancel</button>
-            <button className="parent-cta" onClick={save} disabled={saving || !form.first_name || !form.phone} style={{ width: 'auto', marginTop: 0 }}>
+            <button className="parent-cta" onClick={save} disabled={saving || !form.name || !form.phone} style={{ width: 'auto', marginTop: 0 }}>
               <Save size={14} /> {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
@@ -907,7 +913,8 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
               <div className="myfamily-card-header">
                 <div>
                   <div className="myfamily-card-title">
-                    {c.first_name} {c.last_name}
+                    {/* 2026-06-04 — single `name` column per actual schema. */}
+                    {c.name}
                     {c.pickup_authorized && (
                       <span className="myfamily-pickup-badge">Pickup OK</span>
                     )}
