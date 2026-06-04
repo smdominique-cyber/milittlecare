@@ -818,3 +818,45 @@ Note for whoever re-enables: the handler is hourly (`0 * * * *`) by design — i
 Implication: hard-deleting a family cascades to all related records (children, guardians, emergency_contacts, etc.). When PR #16 (Child files / Category D) ships and child retention becomes real, families with all-archived-children become a visual and data hygiene problem.
 
 Fix: same pattern as PR #13 — add `archived_at` to families + soft-delete audit. Probably a small standalone PR after PR #16.
+
+## Phase Y1 follow-ups — parked items (2026-06-04)
+
+Recorded with the Y1 e-sign evidence layer merge so they aren't forgotten. None are blockers.
+
+### Y1 test data to clean before Y2 or any real provider use
+
+Provider `35a6d4dd` (the live-gate test provider) carries Y1 gate residue in production:
+
+- `consent_templates` rows v1–v4 for `consent_type='field_trip_permission'` — three archived (the archive-then-insert protocol left them as historical state) and one active. The active row's `body_text` is the spec's PLACEHOLDER text per migration 033's header comment, NOT legal-reviewed copy.
+- `acknowledgments` row `8954aaac…` — a signed test ack from the gate, currently `archived_at IS NOT NULL`. Stays archived; the WORM trigger means we can't and shouldn't mutate the evidence columns.
+- `profiles.medium_risk_consents_enabled -> 'field_trip_permission' = true` on `35a6d4dd` — the category was flipped on during the gate and never flipped back.
+
+Clean-up steps before Y2 lights up the UI for this provider, OR before any real provider depends on the field-trip-permission template:
+
+1. Archive the active v4 template (set `archived_at = now()`). The supersede trigger from migration 035 will resolve any in-flight pendings automatically.
+2. Flip `profiles.medium_risk_consents_enabled -> 'field_trip_permission'` back to `false` on `35a6d4dd`.
+3. Leave the archived ack and archived templates in place — they are compliance-evidence history; deleting them would defeat the WORM design.
+
+(If `35a6d4dd` is itself a synthetic test provider that should be removed entirely, do that instead — but confirm before deleting; the user_id was used through the entire gate and a clean delete needs RLS-cascade verification.)
+
+### Merged branches deletable
+
+Both fully merged into `main`, safe to remove:
+
+- `feature/parent-self-service-phase-y1-evidence-boundary` — carried migrations 033 + 034 + 035 + 036 (merged at `6afb16b`).
+- `feature/paywall-gate-comped-bypass` — carried the `useSubscription` `isComped` change (merged at `241c365`).
+
+### Phase Y2 — next-up scope
+
+Y1 shipped the data layer dormant. Y2 ships the UI surfaces that turn it on:
+
+- Business-tab toggles for the five `medium_risk_consents_enabled` keys (default OFF on every provider).
+- Template editor (archive-then-insert via the existing protocol; relies on the migration 035 supersede trigger to invalidate in-flight pendings on body edit).
+- Provider send modal (calls `consent_esign_send` per child × consent type).
+- Parent pending card on the parent acknowledge surface (calls `consent_esign_complete`).
+
+Blocked-by: **finalized template body copy from a licensing consultant.** The five seed bodies in `consent_templates` are PLACEHOLDER per migration 033's header — compliance-required elements are present but the literal wording must NOT ship without legal review. Y2 cannot light up for a real provider until Seth + consultant land the final copy.
+
+### `@vitest/coverage-v8` still parked
+
+The coverage reporter was parked earlier in the project (dependency-install rule). Y1 would have benefited from having it: the three RPC paths (`consent_esign_send / _complete / _rescind`) and the latent `child_parent_update` provider-notification path were all in-tree but exercised only via the live gate. A coverage report would have surfaced the un-exercised provider-notification branch in `consent_esign_complete` before the live failure. Re-evaluate the install when Y2 work starts; the package gets added the moment its absence costs another debugging round.
