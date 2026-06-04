@@ -65,6 +65,18 @@ export default function ParentMyFamilyPage() {
       supabase.from('emergency_contacts').select('*').eq('family_id', familyId),
       supabase.from('parent_profiles').select('*').eq('id', parentId).maybeSingle(),
     ])
+    // 2026-06-04 — surface read errors (was silently swallowed via
+    // `data || []`, so an RLS denial showed as "No emergency contacts
+    // listed yet" with nothing in the console). Per the emergency-
+    // contact read bug investigation: the user originally couldn't
+    // tell whether the empty list was real or an error. Logging here
+    // gives the next bug a fingerprint instead of a silent empty
+    // state. Errors are non-fatal — we still set the array to []
+    // afterward so the rest of the page renders.
+    if (c.error) console.error('loadFamilyData: children read failed', c.error)
+    if (g.error) console.error('loadFamilyData: guardians read failed', g.error)
+    if (e.error) console.error('loadFamilyData: emergency_contacts read failed', e.error)
+    if (p.error) console.error('loadFamilyData: parent_profiles read failed', p.error)
     setChildren(c.data || [])
     setGuardians(g.data || [])
     setEmergency(e.data || [])
@@ -195,7 +207,18 @@ export default function ParentMyFamilyPage() {
             emergency={emergency}
             family={selectedFamily}
             session={session}
-            onSaved={(msg) => { setMessage(msg); loadFamilyData(selectedFamily.id, session.user.id) }}
+            // 2026-06-04 fix-forward — the previous fire-and-forget
+            // `loadFamilyData(...)` left a gap where EmergencyTab closed
+            // the add-contact form before the parent re-fetched the
+            // updated contact list, so the new row didn't appear and the
+            // parent re-submitted (creating duplicate rows). Awaiting
+            // here pairs with the matching `await onSaved(...)` inside
+            // EmergencyTab.save() so the form only transitions out once
+            // the list has the new/edited row.
+            onSaved={async (msg) => {
+              setMessage(msg)
+              await loadFamilyData(selectedFamily.id, session.user.id)
+            }}
           />
         )}
         {activeTab === 'fsa' && (
@@ -618,7 +641,8 @@ function GuardiansTab({ guardians, family, session, onSaved }) {
           <p>No guardians listed yet.</p>
         </div>
       ) : (
-        guardians.map(g => (
+        <>
+          {guardians.map(g => (
           <div key={g.id} className="myfamily-card">
             <div className="myfamily-card-header">
               <div>
@@ -644,7 +668,17 @@ function GuardiansTab({ guardians, family, session, onSaved }) {
               {g.email && <div className="myfamily-readfield-value"><Mail size={12} style={{ display: 'inline', marginRight: 6 }} />{g.email}</div>}
             </div>
           </div>
-        ))
+          ))}
+          {/* 2026-06-04 — matches the helper text on the Emergency
+              Contacts section. Phase X removed the parent's delete
+              affordance per the upload-but-never-delete rule; this
+              explains the new behavior so the parent knows how to
+              request removal rather than wondering where the button
+              went. */}
+          <p className="myfamily-helper" style={{ marginTop: 12, color: 'var(--clr-ink-soft)', fontSize: '0.8125rem' }}>
+            Need to remove someone? Ask your provider — they can remove guardians for you.
+          </p>
+        </>
       )}
     </div>
   )
@@ -706,7 +740,12 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
   const [saving, setSaving] = useState(false)
 
   const startAdd = () => {
-    setForm({ first_name: '', last_name: '', relationship: '', phone: '', pickup_authorized: false })
+    // 2026-06-04 — emergency_contacts has a single `name` column,
+    // NOT first_name/last_name (per Seth's diagnostic SQL run on
+    // production). children and guardians DO have first_name/last_name
+    // (per migration 016) — those forms stay unchanged. Only this
+    // form is corrected to match the actual schema.
+    setForm({ name: '', relationship: '', phone: '', pickup_authorized: false })
     setEditingId(null)
     setShowForm(true)
   }
@@ -718,7 +757,7 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
   }
 
   const save = async () => {
-    if (!form.first_name || !form.phone) return
+    if (!form.name || !form.phone) return
     setSaving(true)
     try {
       // Phase X (2026-06-03): emergency_contacts has no archived_at
@@ -726,33 +765,77 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
       // here — only the DELETE policy was removed. UPDATE + INSERT
       // stay parent-writable, including the new `pickup_authorized`
       // boolean added in migration 031 (§2d Option A).
+      //
+      // 2026-06-04 — surface write errors. Previously these were
+      // swallowed: `await supabase.from(...).insert(...)` returns
+      // { data, error } rather than throwing on PostgREST errors,
+      // so any RLS denial or column-shape mismatch would fall
+      // through to `notifyStateChange` + `onSaved({type:'success'})`
+      // and the provider's state-change email would fire on a row
+      // that didn't actually get inserted. This was the original
+      // surface of the parent emergency-contact read bug — the
+      // "INSERT succeeds" inference was based on the email firing,
+      // not the row landing. Now we check `.error` explicitly.
+      // 2026-06-04 — write `name` (single text column per the actual
+      // production schema). The two-field first_name/last_name shape
+      // copied over from the children/guardians forms doesn't match
+      // emergency_contacts; production PostgREST rejected every insert
+      // with "Could not find the 'first_name' column" until Seth's
+      // diagnostic SQL caught it. children and guardians keep their
+      // first_name/last_name forms — those tables DO have those columns.
+      let writeError = null
       if (editingId) {
-        await supabase.from('emergency_contacts').update({
-          first_name: form.first_name,
-          last_name: form.last_name,
+        const { error } = await supabase.from('emergency_contacts').update({
+          name: form.name,
           relationship: form.relationship,
           phone: form.phone,
           pickup_authorized: !!form.pickup_authorized,
         }).eq('id', editingId)
+        writeError = error
       } else {
-        await supabase.from('emergency_contacts').insert({
+        const { error } = await supabase.from('emergency_contacts').insert({
           family_id: family.id,
           user_id: family.user_id,
-          first_name: form.first_name,
-          last_name: form.last_name,
+          name: form.name,
           relationship: form.relationship,
           phone: form.phone,
           pickup_authorized: !!form.pickup_authorized,
         })
+        writeError = error
+      }
+
+      if (writeError) {
+        // Surface the actual DB error rather than letting the
+        // notification fire on a phantom row.
+        console.error('EmergencyTab.save: write failed', writeError)
+        onSaved({
+          type: 'error',
+          text: writeError.message || 'Could not save the emergency contact. Try again.',
+        })
+        // Reset saving state before the early-return so the form
+        // can be re-submitted (or fixed and re-submitted) after the
+        // user reads the error.
+        setSaving(false)
+        return
       }
 
       notifyStateChange('emergency_contact_updated', family.id, {
         changedBy: session.user.user_metadata?.full_name || session.user.email,
       })
 
+      // 2026-06-04 fix-forward — await the refresh BEFORE closing the
+      // form so the parent sees the new/edited row appear concurrently
+      // with the form transition. The previous fire-and-forget order
+      // (close form first, then onSaved's loadFamilyData runs async)
+      // left a ~hundreds-of-ms gap where the form was gone but the
+      // list still lacked the new row, prompting double-submits and
+      // duplicate rows. Same fix applies to add AND edit (including
+      // the pickup_authorized toggle). The parent wrapper's onSaved
+      // is now async; `await` here pauses until loadFamilyData
+      // resolves and setEmergency has run.
+      await onSaved({ type: 'success', text: editingId ? '✓ Emergency contact updated' : '✓ Emergency contact added' })
       setShowForm(false)
       setEditingId(null)
-      onSaved({ type: 'success', text: editingId ? '✓ Emergency contact updated' : '✓ Emergency contact added' })
     } catch (err) {
       onSaved({ type: 'error', text: err.message })
     }
@@ -763,6 +846,8 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
   // upload-but-never-delete rule. Migration 031 dropped the parent
   // DELETE policy on `emergency_contacts`. Provider removes via the
   // family modal. See docs/pr-parent-self-service-scope.md §2c + §7.
+  // The helper text in the section footer points the parent at the
+  // provider for removal.
 
   return (
     <div className="myfamily-section">
@@ -782,15 +867,11 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
           <div className="myfamily-card-title" style={{ marginBottom: 12 }}>
             {editingId ? 'Edit emergency contact' : 'Add emergency contact'}
           </div>
-          <div className="myfamily-form-grid">
-            <div className="myfamily-field">
-              <label>First name *</label>
-              <input className="myfamily-input" value={form.first_name || ''} onChange={(e) => setForm(f => ({ ...f, first_name: e.target.value }))} />
-            </div>
-            <div className="myfamily-field">
-              <label>Last name</label>
-              <input className="myfamily-input" value={form.last_name || ''} onChange={(e) => setForm(f => ({ ...f, last_name: e.target.value }))} />
-            </div>
+          {/* 2026-06-04 — single Name field. emergency_contacts has
+              a single `name` column (NOT first_name/last_name). */}
+          <div className="myfamily-field">
+            <label>Name *</label>
+            <input className="myfamily-input" value={form.name || ''} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} />
           </div>
           <div className="myfamily-field">
             <label>Relationship</label>
@@ -813,7 +894,7 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
           </label>
           <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 12 }}>
             <button className="parent-secondary" onClick={() => { setShowForm(false); setEditingId(null) }} style={{ marginTop: 0 }}>Cancel</button>
-            <button className="parent-cta" onClick={save} disabled={saving || !form.first_name || !form.phone} style={{ width: 'auto', marginTop: 0 }}>
+            <button className="parent-cta" onClick={save} disabled={saving || !form.name || !form.phone} style={{ width: 'auto', marginTop: 0 }}>
               <Save size={14} /> {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
@@ -826,31 +907,42 @@ function EmergencyTab({ emergency, family, session, onSaved }) {
           <p>No emergency contacts listed yet.</p>
         </div>
       ) : (
-        emergency.map(c => (
-          <div key={c.id} className="myfamily-card">
-            <div className="myfamily-card-header">
-              <div>
-                <div className="myfamily-card-title">
-                  {c.first_name} {c.last_name}
-                  {c.pickup_authorized && (
-                    <span className="myfamily-pickup-badge">Pickup OK</span>
-                  )}
+        <>
+          {emergency.map(c => (
+            <div key={c.id} className="myfamily-card">
+              <div className="myfamily-card-header">
+                <div>
+                  <div className="myfamily-card-title">
+                    {/* 2026-06-04 — single `name` column per actual schema. */}
+                    {c.name}
+                    {c.pickup_authorized && (
+                      <span className="myfamily-pickup-badge">Pickup OK</span>
+                    )}
+                  </div>
+                  <div className="myfamily-card-meta">{c.relationship}</div>
                 </div>
-                <div className="myfamily-card-meta">{c.relationship}</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="myfamily-edit-btn" onClick={() => startEdit(c)}>
+                    <Pencil size={13} />
+                  </button>
+                  {/* Phase X (2026-06-03): no parent-side remove button.
+                      Provider removes via the family modal. */}
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button className="myfamily-edit-btn" onClick={() => startEdit(c)}>
-                  <Pencil size={13} />
-                </button>
-                {/* Phase X (2026-06-03): no parent-side remove button.
-                    Provider removes via the family modal. */}
+              <div className="myfamily-card-body">
+                <div className="myfamily-readfield-value"><Phone size={12} style={{ display: 'inline', marginRight: 6 }} />{c.phone}</div>
               </div>
             </div>
-            <div className="myfamily-card-body">
-              <div className="myfamily-readfield-value"><Phone size={12} style={{ display: 'inline', marginRight: 6 }} />{c.phone}</div>
-            </div>
-          </div>
-        ))
+          ))}
+          {/* 2026-06-04 — closes the "where did the delete button go?"
+              gap. Parents previously could delete contacts; Phase X
+              removed that affordance per the upload-but-never-delete
+              rule. This explains the new behavior in a calm tone
+              matching the surrounding section copy. */}
+          <p className="myfamily-helper" style={{ marginTop: 12, color: 'var(--clr-ink-soft)', fontSize: '0.8125rem' }}>
+            Need to remove someone? Ask your provider — they can remove contacts for you.
+          </p>
+        </>
       )}
     </div>
   )
