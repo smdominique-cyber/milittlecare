@@ -1604,3 +1604,349 @@ Post-merge � `feature/pr-16-child-files-scope` merged into `main` at
 commit `ff32f09` via `git merge --no-ff`, pushed at 2026-05-29.
 Vercel production deploy triggered by the push to `main`. No
 rollback executed.
+
+### 2026-06-04 — Migration 031: parent self-service Phase X (RLS lockdown + child + photo RPCs)
+
+Applied to production on **2026-06-04**, manually via the Supabase
+web SQL Editor. Companion to the Phase X build
+(`feature/parent-self-service-phase-x` →
+`feature/parent-self-service-phase-x-emergency-refresh`). Closed
+a live production gap (parent DELETE on `emergency_contacts` and
+`guardians`); shipped two SECURITY DEFINER RPCs that gate every
+parent-side write through the data layer.
+
+What the migration does:
+
+- **RLS lockdown.** Drops the migration-016 parent DELETE policy
+  on `emergency_contacts` ("Parents can delete emergency
+  contacts") and the parent DELETE policy on `guardians`
+  ("Parents can delete guardians for their families"). Drops the
+  too-permissive "Parents can update children medical info"
+  policy on `children` (migration 016:267-275 let parents UPDATE
+  any column on `children`, including `archived_at` and
+  `intake_completed_at`). Provider DELETE/UPDATE on these tables
+  is unaffected — the `auth.uid() = user_id`-gated policies stay
+  in place.
+- **`block_parent_archive` BEFORE UPDATE trigger** on `children`
+  and `guardians`. Defense-in-depth: any future RLS edit that
+  accidentally re-opens a parent UPDATE path on these tables is
+  still stopped at the trigger when `archived_at` changes
+  (raises `42501`). `emergency_contacts` has no `archived_at`
+  column — the DELETE-policy removal is the entirety of its
+  lockdown.
+- **Low-risk surface columns.** Adds
+  `emergency_contacts.pickup_authorized boolean NOT NULL DEFAULT
+  false` (per scope §2d Option A — extend the existing table,
+  not a new authorized_pickup table). Adds four nullable text
+  columns to `children`: `physician_name`, `physician_phone`,
+  `dentist_name`, `dentist_phone` (per scope §2e — parent-
+  authored child medical contacts).
+- **`child_parent_update` SECURITY DEFINER RPC** — the only path
+  for parent edits on `children`. Narrow column allowlist:
+  `allergies`, `medical_notes`, `physician_*`, `dentist_*`. Never
+  touches `archived_at`, `intake_completed_at`, `user_id`,
+  `family_id`, `school_*`, or any other provider-owned column.
+  Authorization mirrors `intake_confirm_for_parent` (migration
+  025): joins through `parent_family_links` `status='active'` to
+  confirm the caller has authority on the child. Care-critical
+  notifications: when `allergies` or `medical_notes` changes,
+  fires a `notification_log` row with
+  `change_type='child_allergies_updated_by_parent'` or
+  `child_medical_notes_updated_by_parent` (provider-recipient).
+- **`parent_photo_consent_set` SECURITY DEFINER RPC** — parent-
+  side photo-sharing grant/revoke. Atomic archive-then-insert
+  for the previous active row (consent OR revocation) + new
+  `parent_portal`-channel row. Same authorization shape as
+  above.
+
+In-build fix-forward: the initial migration draft wrote
+`notification_log` with the wrong column names
+(`user_id, kind, related_id, payload, created_at`) — CC caught
+this pre-apply against `api/notify-state-change.js:308` +
+`api/cron-dispatch-reminders.js:443`. The applied migration uses
+the canonical 13-column shape
+(`recipient_type, recipient_id, recipient_email, change_type,
+change_description, changed_by_user_id, changed_by_role,
+family_id, child_id, email_sent, email_sent_at, email_id,
+metadata`). Without that catch, every care-critical edit would
+have failed silently inside the RPC.
+
+Dependencies — sequential after migration 030. Hard dependency
+on `public.parent_family_links` (`status='active'`) from PR #12
+and `public.notification_log` (pre-existing production-only
+schema, also written by `api/notify-state-change.js` +
+`api/cron-dispatch-reminders.js`).
+
+Editor note — large migration with multiple ALTER TABLE +
+DROP POLICY + CREATE FUNCTION + CREATE TRIGGER statements. No
+long seed INSERTs. The web SQL Editor long-statement bug
+(operational note above) did not bite.
+
+Verification — the following five queries run by Seth in the
+Supabase web SQL Editor on **2026-06-04**, all passed before
+merge:
+
+1. **Parent DELETE policies on `emergency_contacts` +
+   `guardians`** — zero rows for `(cmd='DELETE' AND polname like
+   'Parents can%')`.
+2. **Broad parent UPDATE on `children`** — zero rows for
+   `polname='Parents can update children medical info'`.
+3. **`block_parent_archive_trg` trigger** — present on both
+   `children` and `guardians` (two rows).
+4. **Two RPCs present** — `pg_proc` returned `child_parent_update`
+   and `parent_photo_consent_set` both granted `EXECUTE` to
+   `authenticated` only.
+5. **New columns present** — 5 rows
+   (`emergency_contacts.pickup_authorized` + 4 on `children`).
+
+Plus the 13-step live boundary gate ran against real seed
+accounts (Jeff/2549scio, klsnay/Audrey, Dominique): every parent
+DELETE / UPDATE-archive attempt denied; parent RPC paths work
+correctly; care-critical notifications fire; provider DELETE +
+archive unaffected. **DELETE-policy removal closed a live gap —
+production parents could previously delete their
+emergency_contacts and guardians.**
+
+Post-merge — `feature/parent-self-service-phase-x-emergency-refresh`
+merged into `main` via `git merge --no-ff`, pushed at
+**2026-06-04**. Vercel production deploy triggered by the push.
+No rollback executed.
+
+### 2026-06-04 — Migration 033: parent self-service Phase Y1 e-sign evidence layer
+
+Applied to production on **2026-06-04**, manually via the
+Supabase web SQL Editor. Companion to the Phase Y1 build
+(`feature/parent-self-service-phase-y1-evidence-boundary`). The
+data-layer half of medium-risk consent e-signature — schema +
+SECURITY DEFINER RPCs + WORM evidence record. **Zero UI.** Y2
+ships the Business-tab toggles + template editor + provider send
+modal + parent pending card.
+
+What the migration does:
+
+- **`consent_templates` table.** Per-provider templates with
+  archive-then-insert protocol; partial-unique index
+  `consent_templates_active_unique` on
+  `(provider_id, consent_type)` where `archived_at IS NULL`
+  (one active template per category). RLS scoped to provider
+  ownership; parents have **no direct SELECT** — they see template
+  body only through the snapshot column on a sent/completed
+  acknowledgments row.
+- **`consents_pending_esign` table.** Sent-but-not-completed
+  queue. `template_body_at_send` stores a stable copy for the
+  parent to read between send and completion;
+  `per_send_metadata jsonb` carries per-trip data. Partial-unique
+  index for durable types (one active pending per
+  (provider, child, consent_type)); per-occurrence types are
+  exempt. RLS: providers full CRUD on own rows; parents SELECT
+  pendings for linked children but **cannot INSERT/UPDATE/DELETE**
+  directly — the completion path goes through the RPC.
+- **`profiles.medium_risk_consents_enabled jsonb`** — server-
+  authoritative opt-in gate. All five categories default to
+  `false` (OFF by default per Phase Y spec).
+- **`acknowledgments` extension.** Expands the
+  `chk_acknowledgments_via` CHECK to include
+  `'parent_portal_esign'`. Adds three new columns:
+  `typed_signature_text text`, `template_snapshot_text text`,
+  `consent_template_id uuid REFERENCES consent_templates(id)
+  ON DELETE SET NULL`. Adds the new
+  `chk_acknowledgments_esign_shape` CHECK enforcing signature +
+  snapshot non-null when `acknowledged_via='parent_portal_esign'`
+  AND both NULL otherwise.
+- **`block_esign_evidence_update_trg` BEFORE UPDATE trigger.**
+  WORM lock on the three evidence columns
+  (`typed_signature_text`, `template_snapshot_text`,
+  `consent_template_id`). The trigger checks only those three
+  via `IS DISTINCT FROM`; `archived_at` and all other columns
+  remain mutable.
+- **Three SECURITY DEFINER RPCs.**
+  - `consent_esign_send(p_child_id, p_consent_type,
+    p_per_send_metadata, p_expires_at) → uuid` — provider
+    creates a pending. Verifies caller owns the child, the
+    category is enabled on the provider's profile, and an
+    active template exists. Inserts the pending row +
+    notification_log row. **NOTE:** the initial 033 body had a
+    bug in the parent-notification insert; see migration 034
+    below for the fix-forward.
+  - `consent_esign_complete(p_pending_id,
+    p_typed_signature_text, p_claimed_body_text) → uuid` —
+    parent signs. Authorization via active
+    `parent_family_links`. Locks the pending row `FOR UPDATE`.
+    Stale-read protection: re-reads the current
+    `consent_templates.body_text` server-side and compares to
+    `p_claimed_body_text` via `IS DISTINCT FROM` — raises
+    `template_changed_since_send` on mismatch. On success:
+    inserts the acknowledgments row with the AUTHORITATIVE
+    snapshot, marks the pending resolved, resolves any open
+    reminder_instances, fires a provider-recipient
+    notification_log row. All atomic.
+  - `consent_esign_rescind(p_pending_id, p_reason) → boolean`
+    — provider cancels a pending row. Doesn't touch
+    notification_log.
+
+Dependencies — sequential after migration 031. Hard dependency
+on `public.acknowledgments` (the channel CHECK expansion + the
+three new columns), `public.parent_family_links` (parent
+authorization in `consent_esign_complete`), `public.profiles`
+(the new jsonb column), and `public.notification_log` (the RPC
+writes notification rows for the dispatcher to email).
+
+**Phase 1 engine integration:** the same branch shipped
+`'parent_portal_esign'` into all three in-tree copies of
+`PARENT_SIGNED_SATISFYING_CHANNELS` (`src/lib/childFiles.js`,
+`src/lib/complianceState.js`, `src/lib/medication.js`). The
+test suite (`complianceState.test.js` + `medication.test.js`)
+locks the duplication invariant. Result: once an e-sign row is
+written, the Phase 1 engine treats requirements #13-#17 in the
+registry as `on_file` with no registry change.
+
+Editor note — large migration with multiple CREATE TABLE +
+CREATE POLICY + CREATE TRIGGER + CREATE OR REPLACE FUNCTION
+statements + verbose header comments. No long seed INSERTs. The
+web SQL Editor long-statement bug did not bite.
+
+Verification — the eight (a)-(h) queries run by Seth in the
+Supabase web SQL Editor on **2026-06-04**, all passed before
+running the live gate:
+
+1. **The two new tables exist** with expected column counts (11
+   for `consent_templates`, 13 for `consents_pending_esign`).
+2. **`acknowledgments` extension** — three new nullable columns
+   present.
+3. **`chk_acknowledgments_via`** includes `'parent_portal_esign'`.
+4. **`chk_acknowledgments_esign_shape`** present with the
+   channel-conditional clauses.
+5. **`block_esign_evidence_update_trg`** attached to
+   `acknowledgments`.
+6. **Three RPCs present** —
+   `consent_esign_send / _complete / _rescind`, EXECUTE granted
+   to `authenticated` only.
+7. **`profiles.medium_risk_consents_enabled`** present with the
+   five-key default jsonb.
+8. **RLS policies** on the two new tables match the §6 + §7
+   spec.
+
+Then the 8-step live boundary gate ran against real seed
+accounts. **Step 3 surfaced a 23502 bug** in
+`consent_esign_send` (recipient_id NOT NULL violation); see
+migration 034 below. **Steps 1-2 passed; steps 4-8 passed after
+applying 034.**
+
+Post-merge — pending. The branch
+`feature/parent-self-service-phase-y1-evidence-boundary`
+includes both migration 033 (the schema) and migration 034 (the
+fix-forward); the merge to `main` follows the runbook entries
+landing.
+
+### 2026-06-04 — Migration 034: consent_esign_send notification recipients (Phase Y1 fix-forward)
+
+Applied to production on **2026-06-04**, manually via the
+Supabase web SQL Editor, immediately after migration 033 failed
+step 3 of the 8-step Y1 live gate.
+
+What the migration does:
+
+- **CREATE OR REPLACE `consent_esign_send`** with the corrected
+  notification-recipient pattern. **No table changes.** No
+  change to `consent_esign_complete` or `consent_esign_rescind`.
+
+The bug 033 had: the parent notification insert wrote one row
+with `recipient_id=NULL, recipient_email=NULL`, intending the
+existing dispatcher to resolve the parent identity later.
+PostgreSQL rejected with code 23502
+("null value in column "recipient_id" violates not-null
+constraint"). Because the pending-row insert and the
+notification insert ran in one transaction, the whole thing
+rolled back — `consents_pending_esign` stayed empty after every
+step-3 call.
+
+The fix: a `FOR ... LOOP` over active linked parents that mirrors
+the established `parent_via_subject_child` recipient resolver
+pattern (used in production by `api/cron-dispatch-reminders.js`
+lines 269-299, `api/notify-state-change.js` lines 271-278, and
+`api/cron-send-acknowledgment-digest.js` line 312). For each
+parent in `parent_family_links` `status='active'` for the
+child's family, joined to `parent_profiles`, filtered to
+parents with non-null `email` AND
+`coalesce(acknowledgment_email_opt_in, true) = true`, de-duped
+by parent_id (DISTINCT), one notification_log row is written
+with `recipient_id = parent_profiles.id` (POPULATED) and
+`recipient_email = parent_profiles.email` (POPULATED).
+
+Edge case — zero eligible parents (child has no linked active
+parents, OR all parents have empty emails, OR all opted out):
+the loop writes zero notification_log rows. **The pending row
+still inserts and serves as the state of record** — the consent
+waits in the queue for the parent to find it on next login. The
+dispatcher's own "no_recipient" log-the-gap pattern uses
+`recipient_id=null` which fails the NOT NULL constraint
+silently in JS-land (`supabasePost` doesn't throw on non-2xx),
+but we can't afford silent-swallow inside a transactional RPC,
+so we skip the gap-log row entirely.
+
+The other two RPCs verified clean:
+
+- `consent_esign_complete` writes a provider-recipient
+  notification with `recipient_id=v_provider_id` (POPULATED) +
+  `recipient_email=null` — matches the in-production
+  `child_parent_update` provider-recipient pattern from
+  migration 031. **No bug.** No change in 034.
+- `consent_esign_rescind` doesn't write to notification_log at
+  all. **No bug.** No change in 034.
+
+Dependencies — sequential after migration 033.
+
+Editor note — `CREATE OR REPLACE FUNCTION` only; small migration
+(~290 lines including the header comment block). No table
+changes. Applied in seconds.
+
+Verification — the two (a)-(b) queries run by Seth in the
+Supabase web SQL Editor on **2026-06-04**, both passed before
+re-running the gate:
+
+1. **Function body fixed** — `pg_proc.prosrc LIKE
+   '%for v_parent_row in%'` returned `true` for
+   `consent_esign_send`.
+2. **EXECUTE permissions intact** — granted to `authenticated`
+   only; no `public` row.
+
+Then the 8-step Y1 live boundary gate re-ran from step 3 against
+real seed accounts (Jeff/2549scio, klsnay/Audrey, Dominique):
+
+3. **Send succeeds.** `consents_pending_esign` row created.
+   notification_log rows written, one per eligible linked
+   parent, each with `recipient_id` POPULATED and
+   `recipient_email` POPULATED. Confirmed.
+4. **Provider edits template between send + completion.**
+   Archive-then-insert protocol on `consent_templates` runs as
+   expected.
+5. **Parent completes via typed signature.** Stale-read
+   protection fires on the OLD body
+   (`template_changed_since_send` raised); succeeds with the
+   NEW body. Confirmed the resulting acknowledgments row
+   carries the new `template_snapshot_text` verbatim.
+6. **Snapshot survives a later template edit.** The
+   acknowledgments row from step 5 still shows the step-4 body
+   verbatim after a third template edit/archive. The WORM
+   trigger holds.
+7. **Cross-tenant denial.** klsnay attempts to complete a
+   pending sent to a Dominique-family child — error `42501`,
+   no row written.
+8. **Opt-in bypass denied.** Non-provider can't call
+   `consent_esign_send` (caller-mismatch); category-disabled
+   send rejected server-side; parent direct INSERT into
+   `consents_pending_esign` denied by RLS.
+
+Plus invariants: WORM trigger raises on UPDATE attempting to
+change `typed_signature_text` or `template_snapshot_text`;
+provider archival of a completed row succeeds (the trigger
+checks only the evidence columns, not `archived_at`).
+
+**All eight steps + invariant checks passed.** The
+compliance-evidence boundary holds with the same caliber as the
+consent-attachments cross-tenant gate.
+
+Post-merge — pending. Branch
+`feature/parent-self-service-phase-y1-evidence-boundary` carries
+033 + 034 together; merging the branch to `main` is the final
+step.
