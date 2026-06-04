@@ -77,6 +77,35 @@ The app is moving toward a funding-source-driven module activation model where f
 - Don't run database migrations against production without explicit approval.
 - Don't install dependencies without explicit approval.
 
+## Engineering Discipline
+
+Four standing rules. Each one was learned from a real production bug in Phase X / Phase Y1 (see `docs/runbook.md` migrations 031, 034, 036). Treat as preconditions for writing data-layer code, not nice-to-haves.
+
+1. **Read column nullability from `information_schema`, never infer it from another writer.** `notification_log.recipient_id` is `NOT NULL`. `notification_log.recipient_email` is `NOT NULL`. Each cost a separate bug (migrations 034 and 036), and the 036 bug specifically came from migration 034's header reasoning "another migration writes this shape and it works in production, so this column must be nullable." Wrong. The other writer hadn't fired yet either. Before writing any INSERT to a table — especially one not defined by an in-tree migration (`notification_log` predates migration 020) — run:
+   ```sql
+   select column_name, data_type, is_nullable
+     from information_schema.columns
+    where table_schema = 'public' and table_name = '<table>'
+    order by ordinal_position;
+   ```
+   Every `is_nullable='NO'` row is a column the writer MUST populate. The live database is the source of truth. Migration files and other writers are evidence; they are not authority.
+
+2. **Check `.error` on every Supabase call. Never infer success from a side effect.** `supabase.from(...).insert(...)` returns `{ data, error }`. PostgREST does not throw on non-2xx — it returns the error in the body. Code that reads `data` without first checking `error` will silently swallow failures (RLS denials, NOT NULL violations, missing-row UPDATE on 0 rows). The 031 → 036 chain of bugs all involved transactions that "looked successful" from the JS client side but had rolled back server-side. The pattern is: `const { data, error } = await supabase…; if (error) throw error;` (or surface to the UI via `role="alert"` — see the accessibility convention above). Side effects (UI refresh, follow-up reads, dispatcher behavior) are not proof the call succeeded.
+
+3. **The Supabase SQL Editor cannot test auth-gated logic.** The web SQL Editor runs as `service_role`, which bypasses RLS and has no `auth.uid()`. It is the right tool for service-role schema operations (DDL, seeds, admin reads) and dead wrong for testing anything that depends on the caller's identity: every SECURITY DEFINER RPC with an `auth.uid()` check will fail with "no authenticated caller," and every RLS-protected SELECT/INSERT will appear to work because RLS is bypassed (proving nothing about whether a real authenticated user can do the same thing). **Auth-gated steps must be executed in the browser devtools console as the real logged-in user via `window.supabase`.** The dev-only handle is exposed by `src/lib/supabase.js` on non-production hostnames (see §4 below); use it to call RPCs and run table writes under a real session token. The Y1 8-step live gate is the canonical example: every step that exercises authorization (provider sends, parent completes, cross-tenant denial, RLS direct-insert denial) ran in devtools as Vanessa / Jeff / klsnay / Dominique. SQL Editor was used only for the service-role schema verification queries and admin reads of the resulting rows.
+
+4. **Every SECURITY DEFINER function gets the canonical three-line revoke/grant trailer.** Postgres grants `EXECUTE` on `CREATE FUNCTION` to `PUBLIC` by default, which includes the `anon` role used by unauthenticated PostgREST requests. SECURITY DEFINER functions that bypass RLS server-side MUST NOT be callable by `anon`. Migrations 033, 034, and 035 each re-applied the default grant on every `CREATE OR REPLACE` and required manual revoke each time; migration 036 ended the recurrence by baking the revoke into the committed SQL. Canonical trailer to include after every SECURITY DEFINER `CREATE` or `CREATE OR REPLACE`:
+   ```sql
+   revoke all     on function public.<fn>(<arg-types>) from public;
+   revoke execute on function public.<fn>(<arg-types>) from anon;
+   grant  execute on function public.<fn>(<arg-types>) to authenticated;
+   ```
+   (If a function should be callable by `anon` for some legitimate reason — almost never for SECURITY DEFINER — say so explicitly in a comment above the grant, and revisit during review.)
+
+Related — **transaction-boundary principle for compliance writes (migration 036).** When an RPC produces a compliance-evidence row (an `acknowledgments` ack, a `medication_administration_events` dose, a `consent_attachments` metadata row), the side-effects that follow it (notification inserts, reminder resolves, audit logs) MUST NOT be allowed to roll back the evidence write. The evidence row is the artifact a licensing inspector reads; a failed Resend dispatch must never destroy it. Pattern: wrap the side-effect insert in a narrowly-scoped `BEGIN ... EXCEPTION WHEN OTHERS ... RAISE NOTICE ... END` block AFTER the evidence row is written. EXCEPTION scope is narrow — only the side-effect; all genuine state failures (auth, validation, the evidence write itself) still abort the transaction.
+
+Dev-only console handle (referenced by rule 3) — `window.supabase` is attached in `src/lib/supabase.js` on non-production hostnames only. The production denylist is `milittlecare.com` and `www.milittlecare.com`. **If a new production domain is ever added (custom domains, subdomains, staging that becomes prod), update `isProductionHost` in `src/lib/supabase.js` or the authenticated client handle leaks to that hostname.**
+
 ## Documentation Conventions
 
 1. **User help is inline.** Every user-facing feature requires inline help in the UI — tooltips, info icons next to confusing fields, empty-state guidance with "what is this and how do I use it?" copy. No feature ships without it. We do NOT maintain a separate HTML help doc; it would rot.

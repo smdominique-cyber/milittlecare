@@ -1832,11 +1832,25 @@ accounts. **Step 3 surfaced a 23502 bug** in
 migration 034 below. **Steps 1-2 passed; steps 4-8 passed after
 applying 034.**
 
-Post-merge — pending. The branch
-`feature/parent-self-service-phase-y1-evidence-boundary`
-includes both migration 033 (the schema) and migration 034 (the
-fix-forward); the merge to `main` follows the runbook entries
-landing.
+Post-merge — `feature/parent-self-service-phase-y1-evidence-boundary`
+merged into `main` at commit `6afb16b` via `git merge --no-ff`,
+pushed at **2026-06-04**. The branch carried migrations 033 +
+034 + 035 + 036 together (the schema plus three fix-forwards
+caught during the live gate). Vercel production deploy triggered
+by the push. No rollback executed.
+
+> **Post-hoc correction (added with the 036 entry below).** The
+> "No bug. No change in 034." line in the migration 034 entry
+> further down is **wrong** about `consent_esign_complete`. That
+> RPC writes `recipient_email = null` on a provider-recipient
+> row, and `notification_log.recipient_email` is also `NOT NULL`
+> in production — the live gate post-034 surfaced it. Migration
+> 036 corrects the bug and also fixes the latent twin in
+> migration 031's `child_parent_update`. The 034 entry stands as
+> the contemporaneous record of what was known at the time; do
+> not infer constraint state from "another writer does this" —
+> see the 036 entry below and the rule added to `CLAUDE.md`
+> § Engineering Discipline.
 
 ### 2026-06-04 — Migration 034: consent_esign_send notification recipients (Phase Y1 fix-forward)
 
@@ -1946,7 +1960,328 @@ checks only the evidence columns, not `archived_at`).
 compliance-evidence boundary holds with the same caliber as the
 consent-attachments cross-tenant gate.
 
-Post-merge — pending. Branch
-`feature/parent-self-service-phase-y1-evidence-boundary` carries
-033 + 034 together; merging the branch to `main` is the final
-step.
+Post-merge — `feature/parent-self-service-phase-y1-evidence-boundary`
+merged into `main` at commit `6afb16b` via `git merge --no-ff`,
+pushed at **2026-06-04**. The branch carried 033 + 034 + 035 +
+036 together (see the 035 and 036 entries below for the two
+later fix-forwards).
+
+### 2026-06-04 — Migration 035: template-edit invalidates pending consents (Phase Y1 fix-forward, Option A)
+
+Applied to production on **2026-06-04**, manually via the
+Supabase web SQL Editor, after the 8-step Y1 live gate (steps 4
++ 5) surfaced a second-order bug in migration 033's
+`consent_esign_complete`.
+
+The bug 033 had: two layered template-state guards. Guard (1) —
+`SELECT body_text WHERE id = pending.consent_template_id AND
+archived_at IS NULL` — fires whenever the template was archived
+between send and complete. Guard (2) — the
+`p_claimed_body_text IS DISTINCT FROM v_current_body` stale-read
+check — was intended to fire on in-place body edits. **Under the
+actual archive-then-insert edit protocol** (every body edit
+archives the old `consent_templates` row and inserts a new one),
+guard (1) ALWAYS fires before guard (2) can be reached, making
+guard (2) + the `p_claimed_body_text` parameter unreachable dead
+code. Secondary defect: after an edit, the pending row's
+`consent_template_id` points at the now-archived row → guard (1)
+fires forever; the pending is **un-completable**, stuck in the
+queue with no resolution path.
+
+What the migration does (Option A — Seth-confirmed):
+
+- **Expand `chk_consents_pending_esign_resolved_via` CHECK** to
+  allow a fourth value, `'superseded_by_template_edit'`.
+- **`supersede_pendings_on_template_archive_trg`** AFTER UPDATE
+  trigger on `consent_templates`. Fires **only on the
+  `archived_at` NULL → NOT NULL transition** (the archive step
+  of the archive-then-insert protocol). For the matching
+  `(provider_id, consent_type)`, marks all active pendings
+  resolved with `resolved_via='superseded_by_template_edit'` and
+  resolves the corresponding `reminder_instances` rows
+  (`category='consent_esign_pending'`). Done in a single
+  CTE-driven statement so it's atomic with the outer template
+  archive — rollback unwinds both. Other `consent_templates`
+  UPDATEs (toggling `enabled`, label changes that don't archive)
+  do not invalidate pendings.
+- **`DROP FUNCTION consent_esign_complete(uuid, text, text);
+  CREATE consent_esign_complete(uuid, text)`** — signature
+  change. The dead `p_claimed_body_text` parameter is gone.
+  Behaviorally:
+  - Looks up the pending row regardless of `resolved_at` state
+    so the resolved-row case can produce **state-specific,
+    parent-readable** error messages — one branch per
+    `resolved_via` (`parent_completed`, `provider_rescinded`,
+    `expired`, `superseded_by_template_edit`), all `errcode
+    'P0001'`.
+  - Belt-and-suspenders fallback: if the template lookup
+    returns null even though the pending isn't yet marked
+    superseded (rare race window or trigger bypass), mark it
+    superseded in this transaction and raise the same
+    parent-readable message.
+  - Happy path unchanged: snapshot-at-completion still re-reads
+    `consent_templates.body_text` and writes the
+    AUTHORITATIVE snapshot to the acknowledgments row.
+
+**Why Option A and not "let parent sign the stale version".**
+The parent cannot sign a document the provider just amended.
+Signing the OLD body could create a compliance artifact whose
+text the provider no longer stands behind; signing the NEW body
+without showing it to the parent fails informed-consent. Option
+A — invalidate the pending, provider resends with the new
+template — is the only safe path for the evidence layer.
+
+Y1 has no UI; the only callers of `consent_esign_complete` are
+manual devtools / SQL Editor invocations during the live gate.
+Nothing in the app or test suite calls it. DROP+CREATE with the
+new 2-arg signature is safe. Any future caller MUST use the
+2-arg signature.
+
+Dependencies — sequential after migration 034.
+
+Editor note — small migration (~485 lines incl. header). One
+`alter table ... drop/add constraint`, one
+`create or replace function` for the trigger, one
+`create trigger`, one `drop function`, one
+`create or replace function` for the rewritten RPC. No table
+data changes, no long seeds. Applied in seconds.
+
+Anon grant note — the migration's `DROP + CREATE` re-applied
+Postgres's default `EXECUTE` grant to `public` (which includes
+the `anon` role). Seth manually revoked `execute … from anon`
+after applying. Pattern fixed in migration 036; see also
+`CLAUDE.md` § Engineering Discipline.
+
+Verification — the four (a)-(d) queries run by Seth in the
+Supabase web SQL Editor on **2026-06-04**, all passed before
+re-running the gate:
+
+1. **Expanded CHECK** — `pg_get_constraintdef(oid)` for
+   `chk_consents_pending_esign_resolved_via` returns a CHECK
+   text including `'superseded_by_template_edit'`.
+2. **Trigger attached** — `pg_trigger` shows
+   `supersede_pendings_on_template_archive_trg` on
+   `public.consent_templates`.
+3. **Old signature gone** — `pg_proc` returns exactly one
+   `consent_esign_complete` row, args
+   `p_pending_id uuid, p_typed_signature_text text` (2-arg).
+4. **EXECUTE permissions** — granted to `authenticated` only
+   after the manual anon revoke; no `public` row.
+
+Then the Y1 live gate re-ran from step 4. **Step 4** confirmed
+the prior pending got auto-superseded the moment Vanessa's
+template-edit UPDATE archived the old `consent_templates` row
+(`resolved_at` set, `resolved_via='superseded_by_template_edit'`).
+**Step 5** confirmed the fresh pending Vanessa sent next
+completed cleanly with the new body in
+`template_snapshot_text`. **Step 5a** confirmed the OLD
+superseded pending raises the parent-readable "your provider
+updated this consent" message on completion attempt. Steps 6-8
++ invariants unchanged from the 034 entry.
+
+Post-merge — see the merge note on the 033 entry above
+(`6afb16b`, 2026-06-04). Same branch.
+
+### 2026-06-04 — Migration 036: provider-recipient notification_log inserts populate recipient_email (Phase Y1 fix-forward + Phase X latent twin)
+
+Applied to production on **2026-06-04**, manually via the
+Supabase web SQL Editor, after the 8-step Y1 live gate
+(reattempted step 5) surfaced the third bug in the e-sign RPC
+chain. Companion to commit `dcb2098` on the Y1 branch.
+
+The bug 035 still had: a real authenticated parent (Jeff,
+`7bac7213`) called `consent_esign_complete` on a valid pending
+row. Authorization passed; the `acknowledgments` evidence row
+was prepared; the per-pending UPDATE was queued; the reminder
+resolve was queued — and the **final provider-notification
+INSERT failed with PostgreSQL error 23502: null value in column
+"recipient_email" of relation "notification_log" violates
+not-null constraint**. Because that insert was in the same
+transaction as the evidence write, the whole completion rolled
+back. The parent's signed evidence row was lost. The pending row
+stayed un-resolved. Re-attempt produced the same outcome.
+
+**The 034 inference was wrong, twice.** Migration 034's header
+collapsed the constraint check into a single shape claim:
+"Migration 031's `child_parent_update` writes
+`recipient_type='provider'` with `recipient_id=v_provider_id`
+populated — so the provider path was fine." That sentence
+disposed of `recipient_email` by analogy and was wrong on two
+axes:
+
+- `notification_log.recipient_email` is also `NOT NULL` in
+  production (the 034 gate proved only `recipient_id`).
+- Migration 031's `child_parent_update` itself writes
+  `recipient_email = NULL` (lines 401, 424) — same latent bug,
+  armed-but-unfired. No parent had triggered the
+  `p_apply_allergies` or `p_apply_medical_notes` write path
+  through the parent portal yet, so the constraint had not been
+  hit live.
+
+What the migration does:
+
+- **CREATE OR REPLACE `consent_esign_complete(uuid, text)`** —
+  same 2-arg signature from migration 035. Two behavioral
+  changes:
+  1. Resolve the provider's email via `profiles.email` (same
+     source `api/notify-state-change.js` line 246-247 uses) and
+     pass it as `recipient_email`. SECURITY DEFINER bypasses
+     RLS for the parent-caller's read. If the provider has no
+     email on profile, **skip the notification insert entirely**
+     — matches the `recipients.length === 0` silent-skip in
+     `api/notify-state-change.js` lines 282-289. The evidence
+     row still gets written; the provider just doesn't receive
+     an email. Provider-discoverable email gaps must not void
+     the parent's signature.
+  2. Wrap the notification insert in `BEGIN ... EXCEPTION WHEN
+     OTHERS ... RAISE NOTICE ... END`. Any future schema
+     surprise on `notification_log` (another column going NOT
+     NULL, a CHECK added, a column renamed) produces a NOTICE
+     and the outer transaction commits anyway. The
+     `acknowledgments` row IS the compliance artifact; failed
+     side-effects must not destroy it. EXCEPTION scope is
+     narrow — only the notification insert. All other failures
+     (auth gate, pending-row state, template-archive race,
+     evidence insert) still abort the transaction.
+
+- **CREATE OR REPLACE `child_parent_update(13 args)`** — same
+  two behavioral changes applied to its two notification
+  branches (allergies + medical_notes). Signature unchanged
+  from migration 031; existing callers (parent portal
+  medical-update form) keep working with no client change. The
+  children UPDATE still happens before the notifications, so a
+  notification failure also can't void the medical data write.
+
+- **Explicit `revoke execute … from anon`** on each function
+  after the CREATE OR REPLACE. Migrations 033, 034, 035 each
+  re-applied Postgres's default `public`/`anon` EXECUTE grant
+  on CREATE; Seth manually revoked each time. 036 bakes the
+  revoke into the migration. **Canonical SECURITY DEFINER
+  trailer going forward** (recorded in `CLAUDE.md` §
+  Engineering Discipline):
+
+  ```sql
+  revoke all     on function public.fn_name(...) from public;
+  revoke execute on function public.fn_name(...) from anon;
+  grant  execute on function public.fn_name(...) to authenticated;
+  ```
+
+**No table changes.** `notification_log.recipient_email` `NOT
+NULL` is correct — the dispatcher pattern is "resolve recipients
+at WRITE time, then INSERT with email populated"
+(`api/notify-state-change.js`, `api/cron-dispatch-reminders.js`,
+`api/cron-send-acknowledgment-digest.js` all do this). The NOT
+NULL enforces the convention.
+
+No change to `consent_esign_send` (already correct after 034:
+parent loop pre-filters `pp.email IS NOT NULL` at SELECT time).
+No change to `consent_esign_rescind` (writes nothing to
+`notification_log`).
+
+Dependencies — sequential after migration 035.
+
+Editor note — `CREATE OR REPLACE FUNCTION` only on two
+functions; ~633 lines including the verbose header (root-cause
+narrative + transactional recommendation). No table changes.
+Applied in seconds.
+
+Verification — the three (a)-(c) queries run by Seth in the
+Supabase web SQL Editor on **2026-06-04**, all passed before
+the final gate re-run:
+
+1. **REAL `notification_log` NOT NULL list** — the
+   ground-truth audit (the one the migration 034 inference
+   should have done). Confirmed via `information_schema.columns`
+   that **`recipient_id` AND `recipient_email` are both NOT
+   NULL**. The table predates in-tree migrations (PR #12
+   discovered it already existed; see migration 020 lines
+   334-339), so the live schema is the source of truth.
+   Screenshot saved with this entry.
+2. **Both RPC signatures present** —
+   `consent_esign_complete (p_pending_id uuid,
+   p_typed_signature_text text)` (2-arg, unchanged from 035)
+   and `child_parent_update (13-arg form, unchanged from 031)`.
+3. **EXECUTE permissions correct without manual cleanup** —
+   `authenticated` only; no `anon` row; no `public` row.
+
+Then the live gate re-ran step 5 successfully:
+
+5. **Parent (Jeff) completes the pending.** Returns the new
+   `acknowledgments.id`. `acknowledgments` row shows
+   `acknowledged_via='parent_portal_esign'`,
+   `typed_signature_text` matches Jeff's typed name,
+   `template_snapshot_text` is the current template body
+   verbatim, `consent_template_id` references the active
+   template, WORM trigger holds on UPDATE attempts.
+   `consents_pending_esign` row resolved
+   (`resolved_via='parent_completed'`,
+   `resolved_acknowledgment_id` = the new ack id).
+   `notification_log` row written with `recipient_type='provider'`,
+   `recipient_id`=Vanessa's user id, `recipient_email`=Vanessa's
+   `profiles.email` (POPULATED). Confirmed.
+
+Negative coverage exercised separately: if the provider's
+`profiles.email` is NULL, the completion still succeeds
+(evidence row + pending resolved); notification row is silently
+skipped.
+
+Post-merge — see the merge note on the 033 entry above
+(`6afb16b`, 2026-06-04). Same branch.
+
+### 2026-06-04 — Production schema change (manual, no in-tree migration): `profiles.comped` paywall bypass
+
+Not a numbered migration — Seth applied a single `ALTER TABLE`
+directly to production. Recorded here because production schema
+changed and the app now reads the column. Companion to commit
+`241c365` (the `PaywallGate` honor-comped merge to `main`).
+
+What changed in production:
+
+- `public.profiles.comped boolean NOT NULL DEFAULT false` added
+  via the Supabase web SQL Editor. No backfill needed — the
+  default applies the value to every existing row at ALTER
+  time.
+- Two rows flipped to `comped = true` via direct UPDATE:
+  Seth's own provider profile (`smdominique`) and Venessa's
+  (`nessa7190`). All other rows remain `false`.
+
+App side (committed on `feature/paywall-gate-comped-bypass`,
+merged at `241c365`, single-file change in
+`src/hooks/useSubscription.js`):
+
+- The `comped` column is added to the hook's `profiles` SELECT.
+- A new `isComped = !!profile?.comped` derived value is OR'd
+  into `hasAccess`:
+  `hasAccess = isComped || isActive || (isTrialing && daysLeft > 0) || isPastDue`.
+- `isComped` is exposed on the hook return for future UI
+  affordances (e.g., labeling a comped account in admin views).
+
+`PaywallGate.jsx` itself was not changed — it reads
+`sub.hasAccess` from the hook, which is the right seam. Billing
+/ Stripe code unchanged. `subscription_status` writes
+unchanged. Tests stayed at 1201 → 1204 passing (no new tests;
+no existing tests for the hook to extend).
+
+Verification (live, 2026-06-04):
+
+- After the `ALTER TABLE` + the two UPDATEs, Seth signed in as
+  `smdominique` with a deliberately-expired
+  `subscription_status='expired'` and confirmed the paywall did
+  NOT appear; the app loaded normally. Same observation for
+  Venessa's account.
+- A test account left without `comped = true` retained the
+  normal paywall behavior at expiry.
+
+Rollback (if ever needed): `UPDATE profiles SET comped = false
+WHERE id IN (…)` reverts the bypass without dropping the column.
+Dropping the column would require coordinating with the
+`useSubscription` SELECT — leave the column in place and rely
+on the boolean for any future revocation.
+
+Why no in-tree migration: the change is one boolean column with
+a default and zero new logic on the SQL side. Recording it here
+keeps the production schema audit complete; if a future cleanup
+formalizes it, the migration would simply be `ALTER TABLE
+public.profiles ADD COLUMN IF NOT EXISTS comped boolean NOT
+NULL DEFAULT false;` plus a corresponding entry in this section
+referencing the production-rows backfill state.
