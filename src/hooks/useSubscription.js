@@ -17,7 +17,7 @@ export function useSubscription() {
     }
     const { data } = await supabase
       .from('profiles')
-      .select('subscription_status, trial_started_at, trial_ends_at, current_period_end, cancel_at_period_end, stripe_customer_id, stripe_subscription_id')
+      .select('subscription_status, trial_started_at, trial_ends_at, current_period_end, cancel_at_period_end, stripe_customer_id, stripe_subscription_id, comped')
       .eq('id', user.id)
       .maybeSingle()
     setProfile(data)
@@ -45,8 +45,13 @@ export function useSubscription() {
   const isTrialExpired = isTrialing && daysLeft === 0
   const isExpired = status === 'expired' || status === 'canceled' || isTrialExpired
 
+  // Comped users (profiles.comped = true) bypass the paywall entirely,
+  // regardless of subscription_status or trial_ends_at. Extends the
+  // existing allow conditions — does not replace them.
+  const isComped = !!profile?.comped
+
   // hasAccess: user can use the app
-  const hasAccess = isActive || (isTrialing && daysLeft > 0) || isPastDue
+  const hasAccess = isComped || isActive || (isTrialing && daysLeft > 0) || isPastDue
 
   return {
     loading,
@@ -59,6 +64,7 @@ export function useSubscription() {
     isPastDue,
     isExpired,
     isTrialExpired,
+    isComped,
     refresh,
   }
 }
