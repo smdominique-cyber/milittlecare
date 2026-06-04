@@ -31,9 +31,9 @@
 //     so it never lands in the expired bucket.
 
 import { useEffect, useState } from 'react'
-import { CheckCircle2, ShieldAlert, Info } from 'lucide-react'
+import { CheckCircle2, ShieldAlert, Info, ChevronRight, ChevronDown } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { ACK_TYPES } from '@/lib/acknowledgments'
+import { ACK_TYPES, PER_OCCURRENCE_CONSENT_TYPES } from '@/lib/acknowledgments'
 import ConsentAttachmentSlot from '@/components/families/ConsentAttachmentSlot'
 import {
   ENROLLMENT_CONSENT_TYPES,
@@ -43,6 +43,17 @@ import {
   partitionAcksByExpiry,
   pendingEnrollmentConsentsForChild,
 } from '@/lib/childFiles'
+// Phase X (2026-06-03): parent self-service photo consent grant +
+// revoke via the SECURITY DEFINER RPC. Adds buttons next to the
+// existing PhotoStatusRow.
+import {
+  grantPhotoConsent,
+  revokePhotoConsent,
+} from '@/lib/parentSelfService'
+// Phase X: friendly labels for per-occurrence rows sourced from the
+// engine (Bug 1 fix carry-over — the new per-occurrence section
+// renders labels via the same engine lookup the intake page uses).
+import { labelForAckType } from '@/lib/parentComplianceProjections'
 
 // Display names for the per-child status rows.
 const TYPE_LABEL = Object.freeze({
@@ -79,6 +90,11 @@ export default function ParentEnrollmentConsentsPanel() {
   const [children, setChildren] = useState([])
   const [activeByChild, setActiveByChild] = useState({})
   const [expiredByChild, setExpiredByChild] = useState({})
+  // Phase X (Bug 3 fix): which per-occurrence sections are expanded.
+  // Keyed by `${childId}:${ackType}`; default collapsed.
+  const [perOccurrenceOpen, setPerOccurrenceOpen] = useState({})
+  // Phase X: photo-consent action busy flag (prevents double-submit).
+  const [busyPhotoChildId, setBusyPhotoChildId] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -123,9 +139,13 @@ export default function ParentEnrollmentConsentsPanel() {
         // every active (archived_at IS NULL) row including expires_at
         // (Phase B, 2026-06-01) so the panel can render the four
         // states the shared resolver distinguishes.
+        // Phase X (Bug 3 fix): also pull `occurrence_metadata` so
+        // the read-only per-occurrence section can render the
+        // per-event detail (event_date + description) without a
+        // second fetch.
         const ackResp = await supabase
           .from('acknowledgments')
-          .select('id, type, subject_id, acknowledged_via, acknowledged_at, expires_at, archived_at')
+          .select('id, type, subject_id, acknowledged_via, acknowledged_at, expires_at, archived_at, occurrence_metadata')
           .eq('subject_type', 'child')
           .in('subject_id', kids.map(k => k.id))
           .is('archived_at', null)
@@ -156,6 +176,23 @@ export default function ParentEnrollmentConsentsPanel() {
     load()
     return () => { cancelled = true }
   }, [])
+
+  // Phase X: re-pull the active/expired acks for one child after a
+  // parent self-service action (photo grant/revoke). Keeps the UI in
+  // sync without a full page reload.
+  async function reloadAcksForChild(childId) {
+    const { data, error: err } = await supabase
+      .from('acknowledgments')
+      .select('id, type, subject_id, acknowledged_via, acknowledged_at, expires_at, archived_at, occurrence_metadata')
+      .eq('subject_type', 'child')
+      .eq('subject_id', childId)
+      .is('archived_at', null)
+    if (err) { setError(err); return }
+    const rows = Array.isArray(data) ? data : []
+    const { activeAcks, expiredAcks } = partitionAcksByExpiry({ rows })
+    setActiveByChild(prev => ({ ...prev, [childId]: activeAcks }))
+    setExpiredByChild(prev => ({ ...prev, [childId]: expiredAcks }))
+  }
 
   if (loading) {
     return (
@@ -229,10 +266,51 @@ export default function ParentEnrollmentConsentsPanel() {
 
             {/* Photo sharing — tri-state (consented / revoked /
                 not-on-file). Photo consent has no expires_at so the
-                expired bucket can't apply. */}
+                expired bucket can't apply. Phase X (2026-06-03):
+                parent-portal grant + revoke buttons added. */}
             <PhotoStatusRow
               activeAcks={activeAcks}
+              childId={child.id}
+              busy={busyPhotoChildId === child.id}
+              onGrant={async () => {
+                setBusyPhotoChildId(child.id)
+                const { error: e } = await grantPhotoConsent({ childId: child.id })
+                setBusyPhotoChildId(null)
+                if (e) { setError(e); return }
+                await reloadAcksForChild(child.id)
+              }}
+              onRevoke={async () => {
+                setBusyPhotoChildId(child.id)
+                const { error: e } = await revokePhotoConsent({ childId: child.id })
+                setBusyPhotoChildId(null)
+                if (e) { setError(e); return }
+                await reloadAcksForChild(child.id)
+              }}
             />
+
+            {/* Phase X (Bug 3 fix): read-only per-occurrence
+                section. One disclosure per per-occurrence type;
+                collapsed by default with count. Expanded view shows
+                per-event list (date, description, channel,
+                attachment). Phase Y will add the parent-completable
+                e-sign flow on top of this same section. */}
+            {PER_OCCURRENCE_CONSENT_TYPES.map(type => {
+              const events = activeAcks.filter(a => a.type === type)
+              const openKey = `${child.id}:${type}`
+              const isOpen = !!perOccurrenceOpen[openKey]
+              return (
+                <PerOccurrenceSection
+                  key={type}
+                  type={type}
+                  events={events}
+                  isOpen={isOpen}
+                  onToggle={() => setPerOccurrenceOpen(prev => ({
+                    ...prev,
+                    [openKey]: !prev[openKey],
+                  }))}
+                />
+              )
+            })}
           </section>
         )
       })}
@@ -333,7 +411,7 @@ function EnrollmentConsentRow({ type, pending, expired, activeAcks, expiredAcks 
   )
 }
 
-function PhotoStatusRow({ activeAcks }) {
+function PhotoStatusRow({ activeAcks, childId, busy, onGrant, onRevoke }) {
   const label = TYPE_LABEL[ACK_TYPES.PHOTO_SHARING_CONSENT]
   // Photo sharing has its own revocation-pair semantic; we resolve
   // tri-state from the activeAcks set against PARENT_SIGNED_SATISFYING_CHANNELS,
@@ -394,6 +472,10 @@ function PhotoStatusRow({ activeAcks }) {
             targetId={revokedAnyChannel.id}
           />
         )}
+        {/* Phase X parent self-service: re-grant from revoked state. */}
+        {childId && onGrant && (
+          <PhotoActionButtons busy={busy} onGrant={onGrant} grantOnly />
+        )}
       </>
     )
   }
@@ -410,7 +492,7 @@ function PhotoStatusRow({ activeAcks }) {
           'Recorded ' +
           (HUMAN_CHANNEL[consentAnyChannel.acknowledged_via] || consentAnyChannel.acknowledged_via) +
           (consentAnyChannel.acknowledged_at ? ` on ${formatDate(consentAnyChannel.acknowledged_at)}` : '') +
-          '. To withdraw consent, tell your provider — they\'ll record it on file.'
+          '. You can update your preference any time — withdrawing here records the change for the audit trail.'
         }
       />
       {consentAnyChannel.id && (
@@ -420,23 +502,215 @@ function PhotoStatusRow({ activeAcks }) {
           targetId={consentAnyChannel.id}
         />
       )}
+      {/* Phase X parent self-service: revoke from consented state. */}
+      {childId && onRevoke && (
+        <PhotoActionButtons busy={busy} onRevoke={onRevoke} revokeOnly />
+      )}
       </>
     )
   }
   return (
-    <Row
-      icon={ShieldAlert}
-      iconColor="var(--clr-amber, #8a6a1a)"
-      label={label}
-      badge="Not on file"
-      badgeKind="pending"
-      detail={
-        'Your photo-sharing preference is not on file yet. Talk to your ' +
-        'provider — they record your preference (either way) for the audit ' +
-        'trail. Michigan licensing does not require this, but it protects ' +
-        'both of you.'
-      }
-    />
+    <>
+      <Row
+        icon={ShieldAlert}
+        iconColor="var(--clr-amber, #8a6a1a)"
+        label={label}
+        badge="Not on file"
+        badgeKind="pending"
+        detail={
+          'Your photo-sharing preference is not on file yet. Record it below — ' +
+          'either choice is fine. Michigan licensing does not require this, but it ' +
+          'protects both you and your provider, and it lets you control what ' +
+          'happens with photos of your child.'
+        }
+      />
+      {/* Phase X parent self-service: first-time preference capture. */}
+      {childId && onGrant && onRevoke && (
+        <PhotoActionButtons busy={busy} onGrant={onGrant} onRevoke={onRevoke} />
+      )}
+    </>
+  )
+}
+
+/**
+ * Phase X (2026-06-03) — photo consent grant/revoke buttons. The
+ * three callers (revoked, consented, not-on-file) show different
+ * affordances:
+ *   - revoked    → "Grant photo sharing" (re-grant)
+ *   - consented  → "Withdraw consent"    (revoke)
+ *   - not on file → both buttons
+ *
+ * Honest-copy rule (Consents Phase A scope §d) — confirm dialog
+ * before revoke explicitly tells the parent the record is captured
+ * but messaging enforcement is not yet automatic.
+ */
+function PhotoActionButtons({ busy, onGrant, onRevoke, grantOnly = false, revokeOnly = false }) {
+  function handleRevoke() {
+    const confirmed = window.confirm(
+      'Record withdrawal of photo-sharing consent?\n\n' +
+      'Your preference will be recorded for the audit trail. Note: ' +
+      'the messaging system does not yet automatically block photo ' +
+      'attachments — your provider handles photo decisions manually ' +
+      'until that enforcement update ships.'
+    )
+    if (confirmed) onRevoke()
+  }
+  return (
+    <div style={{
+      display: 'flex',
+      gap: 8,
+      marginTop: 8,
+      paddingLeft: 28,  // align with the Row's content column
+    }}>
+      {!revokeOnly && onGrant && (
+        <button
+          type="button"
+          onClick={onGrant}
+          disabled={busy}
+          style={{
+            background: 'var(--clr-sage-dark)',
+            color: 'white',
+            border: 'none',
+            padding: '6px 14px',
+            borderRadius: 8,
+            fontSize: '0.8125rem',
+            cursor: busy ? 'not-allowed' : 'pointer',
+            opacity: busy ? 0.6 : 1,
+          }}
+        >
+          {busy ? 'Saving…' : 'Grant photo sharing'}
+        </button>
+      )}
+      {!grantOnly && onRevoke && (
+        <button
+          type="button"
+          onClick={handleRevoke}
+          disabled={busy}
+          style={{
+            background: 'transparent',
+            color: 'var(--clr-ink-mid)',
+            border: '1px solid var(--clr-warm-mid)',
+            padding: '6px 14px',
+            borderRadius: 8,
+            fontSize: '0.8125rem',
+            cursor: busy ? 'not-allowed' : 'pointer',
+            opacity: busy ? 0.6 : 1,
+          }}
+        >
+          {busy ? 'Saving…' : 'Withdraw consent'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Phase X (Bug 3 fix) — read-only per-occurrence section. One per
+ * per-occurrence type (transport non-routine, water off-premises).
+ * Collapsed by default with a count badge so it stays out of the
+ * way when no events exist (Vanessa's common case); expandable to
+ * show the per-event list when there's data to show.
+ *
+ * Per Phase X scope §4 + §5d: this is the read-only fix. Phase Y
+ * will add the parent e-sign action on top of this same section.
+ */
+function PerOccurrenceSection({ type, events, isOpen, onToggle }) {
+  const count = events.length
+  const label = labelForAckType(type) || type
+  return (
+    <div style={{
+      marginTop: 10,
+      borderTop: '1px solid var(--clr-warm-mid)',
+      paddingTop: 10,
+    }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          width: '100%',
+          textAlign: 'left',
+        }}
+        aria-expanded={isOpen}
+      >
+        {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        <span style={{ fontSize: '0.9375rem', fontWeight: 500 }}>{label}</span>
+        <span style={{
+          background: count > 0 ? 'var(--clr-sage-pale, #e6efe7)' : 'var(--clr-cream)',
+          color: count > 0 ? 'var(--clr-sage-dark)' : 'var(--clr-ink-soft)',
+          padding: '2px 8px',
+          borderRadius: 'var(--radius-full)',
+          fontSize: '0.6875rem',
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: '0.02em',
+          marginLeft: 'auto',
+        }}>
+          {count === 0 ? 'None on file' : `${count} on file`}
+        </span>
+      </button>
+      {isOpen && (
+        <div style={{ paddingLeft: 24, marginTop: 8 }}>
+          {count === 0 ? (
+            <p style={{ margin: 0, color: 'var(--clr-ink-soft)', fontSize: '0.8125rem', lineHeight: 1.45 }}>
+              No per-trip consents on file yet. Your provider records
+              these before each trip or outing.
+            </p>
+          ) : (
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              {events
+                .slice()
+                .sort((a, b) => {
+                  const am = Date.parse(a.acknowledged_at || '') || 0
+                  const bm = Date.parse(b.acknowledged_at || '') || 0
+                  return bm - am
+                })
+                .map(ev => (
+                  <li key={ev.id} style={{
+                    padding: '8px 0',
+                    borderTop: '1px solid var(--clr-warm-mid)',
+                  }}>
+                    <PerOccurrenceEventRow event={ev} />
+                  </li>
+                ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PerOccurrenceEventRow({ event }) {
+  const m = event.occurrence_metadata || {}
+  const date = m.event_date
+    ? formatDate(m.event_date)
+    : (event.acknowledged_at ? formatDate(event.acknowledged_at) : '(date missing)')
+  const description = m.description || '(description missing)'
+  const channel = HUMAN_CHANNEL[event.acknowledged_via] || event.acknowledged_via
+  return (
+    <div>
+      <div style={{ fontSize: '0.875rem', color: 'var(--clr-ink)' }}>
+        <strong>{date}</strong> — {description}
+      </div>
+      <div style={{ fontSize: '0.75rem', color: 'var(--clr-ink-soft)', marginTop: 2 }}>
+        Recorded {channel}
+        {event.acknowledged_at && ` on ${formatDate(event.acknowledged_at)}`}
+      </div>
+      {event.id && (
+        <ConsentAttachmentSlot
+          mode="parent"
+          targetType="acknowledgment"
+          targetId={event.id}
+        />
+      )}
+    </div>
   )
 }
 

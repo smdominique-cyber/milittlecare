@@ -30,6 +30,20 @@ import {
   computeAckHash,
   computeEnvelopeHash,
 } from '@/lib/acknowledgments'
+// Phase X (2026-06-03) — the three parent-view bug fixes:
+//   - Bug 1 (raw type strings): pull labels from the engine via
+//     `labelForAckType` — the engine's REQUIREMENT_REGISTRY is the
+//     single source of truth for friendly labels.
+//   - Bug 2 (per-occurrence leak into intake bundle): use
+//     `isIntakeBundleAckType` to filter the ack fetch to only
+//     intake-bundle types. Per-occurrence consents now structurally
+//     can't reach the confirm bundle.
+// See docs/pr-parent-self-service-scope.md §4.
+import {
+  INTAKE_BUNDLE_ACK_TYPES,
+  isIntakeBundleAckType,
+  labelForAckType,
+} from '@/lib/parentComplianceProjections'
 // PR #16 follow-up (parent-confirm bug, 2026-05-29): `listPendingForParent`
 // is still used to populate the pending-card UI; `resolvePendingForChild`
 // is GONE because intake_confirm_for_parent (migration 025) now resolves
@@ -37,18 +51,6 @@ import {
 // the parent_portal acks.
 import { listPendingForParent } from '@/lib/parentIntakeReminders'
 import '@/styles/parent.css'
-
-const SUB_TYPE_LABEL = Object.freeze({
-  [ACK_TYPES.CHILD_IN_CARE_STATEMENT]:        'Child-in-care statement (envelope)',
-  [ACK_TYPES.LEAD_DISCLOSURE]:                'Lead-based paint disclosure',
-  [ACK_TYPES.FIREARMS_DISCLOSURE]:            'Firearms on premises disclosure',
-  [ACK_TYPES.FOOD_PROVIDER_AGREEMENT]:        'Who provides food',
-  [ACK_TYPES.LICENSING_NOTEBOOK_AVAILABILITY]: 'Licensing notebook availability',
-  [ACK_TYPES.LICENSING_RULES_OFFERED]:        'Licensing rules offered',
-  [ACK_TYPES.INFANT_SAFE_SLEEP]:              'Infant safe sleep practices',
-  [ACK_TYPES.HEALTH_CONDITION]:               'Child health acknowledgment',
-  [ACK_TYPES.DISCIPLINE_POLICY_RECEIPT]:      'Discipline policy received',
-})
 
 export default function ParentIntakeAcknowledgePage() {
   const navigate = useNavigate()
@@ -118,15 +120,24 @@ export default function ParentIntakeAcknowledgePage() {
           return
         }
 
-        // Active acknowledgments for those children.
+        // Active acknowledgments for those children. Phase X (Bug 2
+        // fix): restrict to ack-types that compose the R 400.1907
+        // intake bundle so per-occurrence consent rows (which share
+        // subject_type='child') can't leak into the parent confirm
+        // bundle. The engine's intake-bundle set is the source of
+        // truth — see `parentComplianceProjections.js`.
         const ackResp = await supabase
           .from('acknowledgments')
           .select('id, provider_id, type, subject_id, snapshot_hash, snapshot_version, acknowledged_via, acknowledged_at, archived_at')
           .eq('subject_type', 'child')
           .in('subject_id', kids.map(k => k.id))
+          .in('type', INTAKE_BUNDLE_ACK_TYPES)
           .is('archived_at', null)
         if (ackResp.error) throw ackResp.error
-        const acks = Array.isArray(ackResp.data) ? ackResp.data : []
+        // Defense-in-depth: client-side filter too, in case a future
+        // ack-type accidentally lands in the result.
+        const acks = (Array.isArray(ackResp.data) ? ackResp.data : [])
+          .filter(a => isIntakeBundleAckType(a.type))
 
         // PR #16 third pass: fetch the parent's pending intake-ack
         // reminders via the SECURITY DEFINER RPC
@@ -339,7 +350,12 @@ export default function ParentIntakeAcknowledgePage() {
                   </p>
                   <ul style={{ listStyle: 'disc', paddingLeft: 20, margin: '0 0 12px 0', fontSize: '0.875rem' }}>
                     {subTypeAcks.map(a => (
-                      <li key={a.id}>{SUB_TYPE_LABEL[a.type] || a.type}</li>
+                      // Phase X (Bug 1 fix): friendly label sourced
+                      // from the engine's REQUIREMENT_REGISTRY via
+                      // `labelForAckType`. The raw `a.type` fallback
+                      // is replaced with a placeholder — raw type
+                      // strings should never reach the parent.
+                      <li key={a.id}>{labelForAckType(a.type) || 'Acknowledgment on file'}</li>
                     ))}
                   </ul>
                 </>

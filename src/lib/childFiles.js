@@ -62,7 +62,10 @@
 // portal signatures), remove 'in_person_paper' from the set.
 
 import { supabase } from './supabase'
-import { requiredSubTypesForChild } from './acknowledgments'
+import {
+  requiredSubTypesForChild,
+  PER_OCCURRENCE_CONSENT_TYPES as _PER_OCCURRENCE_CONSENT_TYPES,
+} from './acknowledgments'
 
 // ─── Bucket constants (exported for reuse / inspection) ────────────────
 
@@ -182,10 +185,11 @@ export const TIME_BOUND_TYPES = Object.freeze([
  * consent. provider_override is recorded in the audit trail but
  * does not satisfy the rule.
  */
-export const PER_OCCURRENCE_CONSENT_TYPES = Object.freeze([
-  'transportation_nonroutine_per_trip',       // R 400.1952(1)(b) — "before each trip"
-  'water_activities_off_premises_per_trip',   // R 400.1934(10)(a) — "before each outdoor water activity"
-])
+// 2026-06-03 — moved to acknowledgments.js so pure modules can
+// import it without pulling supabase in transitively. Re-exported
+// here for backward compat with every existing caller importing
+// from `@/lib/childFiles`.
+export const PER_OCCURRENCE_CONSENT_TYPES = _PER_OCCURRENCE_CONSENT_TYPES
 
 // ─── Occurrence-metadata helper (Consents Phase C, 2026-06-01) ──
 //
