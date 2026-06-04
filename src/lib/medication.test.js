@@ -1112,4 +1112,31 @@ describe('medicationConsentSatisfied', () => {
       perAuthAck: { ...goodAck, archived_at: new Date().toISOString() },
     })).toBe(false)
   })
+
+  // Phase Y1 (2026-06-04) — duplication invariant: this file's
+  // copy of PARENT_SIGNED_SATISFYING_CHANNELS must include every
+  // channel the engine's copy includes. The matching engine-side
+  // assertion lives in complianceState.test.js; this is the
+  // medication-side half. Test the BEHAVIOR per channel (the
+  // constant itself is module-internal).
+  it('NON-OTC: parent_portal_esign satisfies (Phase Y1 channel)', () => {
+    expect(medicationConsentSatisfied({
+      authorization: { is_topical_otc: false },
+      perAuthAck: { archived_at: null, acknowledged_via: 'parent_portal_esign' },
+    })).toBe(true)
+  })
+
+  it('TOPICAL OTC: parent_portal_esign on the OTC-blanket satisfies (Phase Y1 channel)', () => {
+    expect(medicationConsentSatisfied({
+      authorization: { is_topical_otc: true },
+      otcBlanketAck: { archived_at: null, acknowledged_via: 'parent_portal_esign' },
+    })).toBe(true)
+  })
+
+  it('parent_portal satisfies (the original channel — sanity check)', () => {
+    expect(medicationConsentSatisfied({
+      authorization: { is_topical_otc: false },
+      perAuthAck: { archived_at: null, acknowledged_via: 'parent_portal' },
+    })).toBe(true)
+  })
 })

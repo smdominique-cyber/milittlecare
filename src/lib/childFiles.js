@@ -340,10 +340,24 @@ export const REVOCATION_PAIRS = Object.freeze({
  * Which `acknowledged_via` values count as a parent's signature on a
  * parent-signed type. See the regulatory-interpretation note at the
  * top of this file for the reasoning + revisit conditions.
+ *
+ * Phase Y1 (2026-06-04) addition: `'parent_portal_esign'` joins the
+ * satisfying set. The parent's typed-name signature, captured with
+ * the snapshotted template body on the same acknowledgments row, IS
+ * the parent's affirmative signature in the rule's sense — the
+ * completed row is the producible-at-inspection electronic record.
+ * Three in-tree copies of this constant exist:
+ *   - here (the source-of-truth)
+ *   - src/lib/complianceState.js (duplicated to avoid pulling
+ *     `./supabase` into the pure engine module)
+ *   - src/lib/medication.js (duplicated for the same reason)
+ * All three MUST stay in lockstep. The backward-compat test in
+ * complianceState.test.js locks the duplication invariant.
  */
 export const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
   'parent_portal',
   'in_person_paper',
+  'parent_portal_esign',
 ])
 
 /**

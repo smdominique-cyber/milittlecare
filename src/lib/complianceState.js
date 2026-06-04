@@ -59,11 +59,18 @@ import { ACK_TYPES, PER_OCCURRENCE_CONSENT_TYPES } from './acknowledgments'
 // downstream unit-test mocking. The two constants MUST stay in
 // lockstep — if childFiles.js's set changes (e.g., a new channel
 // added to PARENT_SIGNED_SATISFYING_CHANNELS), update here too.
-// The duplication is a tested invariant: complianceState.test.js's
-// backward-compat smoke imports both and asserts they're equal.
+// A third copy also lives in src/lib/medication.js for the same
+// reason. The duplication is a tested invariant:
+// complianceState.test.js's backward-compat smoke asserts that
+// the engine treats every member of the satisfying set the same.
+//
+// Phase Y1 (2026-06-04): 'parent_portal_esign' added — the parent's
+// typed-name signature with the snapshotted template body on the
+// same acknowledgments row IS the parent's affirmative signature.
 const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
   'parent_portal',
   'in_person_paper',
+  'parent_portal_esign',
 ])
 
 // -----------------------------------------------------------------------------
