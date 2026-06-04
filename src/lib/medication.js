@@ -525,9 +525,27 @@ export function eligibleCaregiversForAdministration({ caregivers, authorization 
 // snapshot no longer matches and the modal prompts re-record.
 // -----------------------------------------------------------------------------
 
+// Three in-tree copies of this constant exist:
+//   - src/lib/childFiles.js (source-of-truth)
+//   - src/lib/complianceState.js (duplicated to avoid supabase pull-in)
+//   - here (duplicated for the same reason)
+// All three MUST stay in lockstep. The backward-compat test in
+// complianceState.test.js locks the duplication invariant.
+//
+// Phase Y1 (2026-06-04): 'parent_portal_esign' added — the parent's
+// typed-name e-signature satisfies parent-signed requirements the
+// same way 'parent_portal' does. Medication parent e-sign is NOT
+// in V1 per parent doc §12 (out of scope), so the
+// `buildAckSharedFields` channel validation below is intentionally
+// NOT extended — the medication modal's capture flow doesn't use
+// this new channel. The constant itself still needs the new value
+// because medication's read paths (medicationConsentSatisfied,
+// per-auth ack checks) need to treat an e-signed medication
+// permission as on-file IF a future PR opens that capture path.
 const PARENT_SIGNED_SATISFYING_CHANNELS = Object.freeze([
   'parent_portal',
   'in_person_paper',
+  'parent_portal_esign',
 ])
 
 /**

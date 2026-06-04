@@ -1475,23 +1475,45 @@ describe('Backward-compat smoke — Phase 1 does not touch existing helpers', ()
   // if childFiles.js's constant ever changes, the duplicated constant
   // in complianceState.js must change in lockstep, and this test
   // would surface a value mismatch on read.
-  it('Pattern A satisfies on parent_portal + in_person_paper (mirrors childFiles.PARENT_SIGNED_SATISFYING_CHANNELS)', () => {
-    // Indirect: any Pattern A row should accept parent_portal and
-    // in_person_paper, and NOT provider_override alone.
+  it('Pattern A satisfies on every member of PARENT_SIGNED_SATISFYING_CHANNELS (mirrors childFiles.js + medication.js duplicates)', () => {
+    // Indirect: any Pattern A row should accept every channel in
+    // the satisfying set, and NOT provider_override alone.
+    //
+    // Phase Y1 (2026-06-04): 'parent_portal_esign' joined the
+    // satisfying set in all three in-tree copies (childFiles.js,
+    // complianceState.js, medication.js). This test locks the
+    // duplication invariant — if any copy drifts, the assertions
+    // here surface the mismatch on read.
     const req = REQUIREMENT_REGISTRY.intake_food_provider_agreement
     const make = (channel) => getRequirementState({
       requirement: req,
       child: makeChild(),
       provider: makeLicensedProvider(),
       sourceRows: makeSourceRows({
-        acks: [makeAck({ type: ACK_TYPES.FOOD_PROVIDER_AGREEMENT, acknowledged_via: channel })],
+        acks: [makeAck({
+          type: ACK_TYPES.FOOD_PROVIDER_AGREEMENT,
+          acknowledged_via: channel,
+          // The shape CHECK on the DB requires signature + snapshot
+          // for esign rows; the test fixture isn't a DB row so we
+          // just supply them so any future client-side validation
+          // sees a "valid" esign row.
+          typed_signature_text: channel === 'parent_portal_esign' ? 'Jane Smith' : null,
+          template_snapshot_text: channel === 'parent_portal_esign' ? '[template body]' : null,
+        })],
       }),
       now: FIXED_NOW,
     })
     expect(make('parent_portal').kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
     expect(make('in_person_paper').kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+    expect(make('parent_portal_esign').kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
     expect(make('provider_override').kind).toBe(REQUIREMENT_STATE_KIND.PENDING_PARENT)
   })
+
+  // NOTE — the matching invariant for medication.js's duplicated
+  // PARENT_SIGNED_SATISFYING_CHANNELS copy lives in
+  // medication.test.js (where the supabase mock is set up).
+  // Importing medication.js here would fire its eager
+  // ./supabase import at module load time.
 })
 
 // -----------------------------------------------------------------------------
