@@ -147,8 +147,9 @@
 - **Status.** **Shipped.**
 - **Source.** `docs/onboarding_wizard_spec.md`,
   `src/pages/OnboardingPage.jsx`, `src/lib/onboarding.js`,
-  `src/components/onboarding/*.jsx`,
-  `src/components/dashboard/OnboardingCompletionCard.jsx`,
+  `src/components/onboarding/*.jsx` (the wizard components +
+  `OnboardingCompletionCard.jsx` live under `onboarding/`, not
+  `dashboard/`),
   `src/pages/DashboardPage.jsx:22-24` (auto-open sessionStorage key).
 
 ### 2.2 License-status prompt modal (legacy fallback)
@@ -584,8 +585,12 @@ at least one `funding_sources.type='cdc_scholarship'` row or has set
 - **What it is.** Daily attendance status per child × day:
   `present`, `absent`, `sick`, `vacation`, `holiday`. In/Out times
   optional. Per-day notes. Week navigator.
-- **Who uses it.** Provider (every role can read; licensee /
-  adult_staff / assistant write; view_only reads only).
+- **Who uses it.** Provider. The sidebar config has no explicit
+  `roles` array on the Attendance link, so every authenticated
+  provider role can navigate to it. **Needs in-product
+  verification:** whether server-side write paths are role-gated
+  for `view_only` (extrapolated from convention, not confirmed
+  against `AttendancePage.jsx`'s save handlers).
 - **How they interact.** Sidebar → `Operations → Attendance`
   (`/attendance`). Week grid → click a cell → pick status. Per-day
   sticky-note for notes.
@@ -631,8 +636,12 @@ at least one `funding_sources.type='cdc_scholarship'` row or has set
 - **Who uses it.** Provider (licensee + adult_staff).
 - **How they interact.** Sidebar → `Revenue → Billing` (`/billing`).
   See per-family invoices, the suggested next period, payment status.
-  Send via email (Resend) or share via copy-link. Mark paid for
-  out-of-band methods (cash, check, venmo, zelle, other).
+  Send via email (**Needs in-product verification:** Resend is the
+  project-wide email provider per `notify-state-change.js`, but the
+  exact invoice-send path inside `BillingPage.jsx` was not opened to
+  confirm Resend specifically for invoices) or share via copy-link.
+  Mark paid for out-of-band methods (cash, check, venmo, zelle,
+  other).
 - **Automatic vs manual.** Period suggestion + amount computation
   automatic from `getNextInvoicePeriod`/`computeInvoiceAmount`.
   Cron-driven autopay invoice generation (see 9.3) automatic. Sending
@@ -647,8 +656,12 @@ at least one `funding_sources.type='cdc_scholarship'` row or has set
   Stripe Checkout.
 - **Who uses it.** Parent.
 - **How they interact.** From `/parent` dashboard → invoice card →
-  "Pay now" → Stripe Checkout in a new tab → success returns to
-  `/parent?paid=1`.
+  "Pay now" → Stripe-hosted payment surface in a new tab → success
+  returns to `/parent?paid=1`. **Needs in-product verification:**
+  whether the surface is Stripe Checkout (`api/create-checkout-session.js`)
+  or a Stripe Payment Link (`api/create-payment-link.js`) — both
+  endpoints exist; `api/parent-pay-invoice.js` was not opened to
+  confirm which path it actually invokes.
 - **Automatic vs manual.** Stripe session creation
   (`api/parent-pay-invoice.js`) + Stripe webhook
   (`api/stripe-webhook.js`) automatic; the pay click is manual.
@@ -712,10 +725,14 @@ at least one `funding_sources.type='cdc_scholarship'` row or has set
   level (`business_policies.messaging_enabled`).
 - **Who uses it.** Provider; parent (per family).
 - **How they interact.**
-  - Provider: enables via `Settings → Business Info → Policies →
-    Messaging`. Once enabled, sidebar shows `Revenue → Messages`
+  - Provider: enables via a toggle on `Settings → Business Info`
+    that writes `business_policies.messaging_enabled = true`.
+    Once enabled, sidebar shows `Revenue → Messages`
     (`/messages`). Thread per child or per family with
-    `MessageThreadPage`.
+    `MessageThreadPage`. **Needs in-product verification:** the
+    exact tab/section label within Business Info where the
+    toggle lives (`BusinessInfoPage.jsx` was not opened far
+    enough to confirm the precise click-path string).
   - Parent: `/parent/messages` shows the threads they're party to;
     `/parent/messages/:childId` for thread detail.
 - **Automatic vs manual.** Email notification of new messages via
@@ -847,11 +864,16 @@ at least one `funding_sources.type='cdc_scholarship'` row or has set
   their child, physician + dentist contacts, photo-sharing consent
   (grant/revoke).
 - **Who uses it.** Parent.
-- **How they interact.** `/parent/family` → tabbed surface (Contact,
-  Children, Guardians, Emergency Contacts). Edits to children's
-  allergies / medical notes route through `child_parent_update`
-  SECURITY DEFINER RPC (narrow allowlist of columns); photo consent
-  through `parent_photo_consent_set` RPC.
+- **How they interact.** `/parent/family` → tabbed surface; the
+  initial tab is `'contact'` per `ParentMyFamilyPage.jsx:26`.
+  **Needs in-product verification:** the full tab list (the
+  partial code read confirmed the `'contact'` initial state but
+  not the complete set of tab keys — the spec implies Contact +
+  Children + Guardians + Emergency Contacts, but read the page
+  state machine to confirm before quoting in user-facing copy).
+  Edits to children's allergies / medical notes route through
+  `child_parent_update` SECURITY DEFINER RPC (narrow allowlist of
+  columns); photo consent through `parent_photo_consent_set` RPC.
 - **Automatic vs manual.** Care-critical change (`allergies` or
   `medical_notes`) fires a `notification_log` row → provider email.
   Per PR migration 036, the notification is now non-fatal to the
