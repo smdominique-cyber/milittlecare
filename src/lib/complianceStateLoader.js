@@ -370,3 +370,178 @@ export async function computeChildComplianceState({ providerId, childId, now = n
   if (!child) return null
   return getChildComplianceStatePure({ child, provider, sourceRows, now })
 }
+
+// -----------------------------------------------------------------------------
+// Phase 3 — applicability overrides loader + mutation helpers.
+//
+// Reads/writes the compliance_applicability_overrides table (migration 037).
+// The pure engine already accepts the Map shape these functions produce; no
+// engine API change.
+//
+// §2a contract: a row is the affirmative basis. An absent row (or an
+// archived row) makes the engine fall back to the registry's
+// autoDefault. Phase 3 UI ONLY writes provider-wide rows (family_id +
+// child_id both NULL) — the narrower-scope columns are forward-compat
+// per the migration 037 header.
+// -----------------------------------------------------------------------------
+
+/**
+ * Load every active applicability override row for a provider and
+ * convert to the `Map<requirement_key, 'applies' | 'does_not_apply'>`
+ * shape `resolveApplicability` accepts as the `overrides` parameter.
+ *
+ * Phase 3 honors only PROVIDER-WIDE rows (family_id IS NULL AND
+ * child_id IS NULL). Rows with a non-null narrower scope are
+ * forward-compat — silently skipped until a per-family or per-child
+ * writer ships.
+ *
+ * Defensive: returns an empty Map on any error (per the loader's
+ * project-wide defensive contract). The engine then falls back to
+ * autoDefault for every row, which is the safe behavior — never
+ * `does_not_apply` without a real row.
+ */
+export async function loadApplicabilityOverrides({ providerId } = {}) {
+  if (!providerId) return new Map()
+  const rows = await safeQuery('compliance_applicability_overrides', () =>
+    supabase
+      .from('compliance_applicability_overrides')
+      .select('requirement_key, mode, family_id, child_id')
+      .eq('provider_id', providerId)
+      .is('archived_at', null)
+  )
+  const map = new Map()
+  for (const row of rows) {
+    // Forward-compat: skip rows with a narrower scope. The narrower-
+    // overrides-wider semantics ships when a writer for that scope
+    // does.
+    if (row.family_id || row.child_id) continue
+    if (row.mode === 'applies' || row.mode === 'does_not_apply') {
+      map.set(row.requirement_key, row.mode)
+    }
+  }
+  return map
+}
+
+/**
+ * Upsert a provider-wide applicability override.
+ *
+ * Idempotent: re-saving the same answer leaves the table state
+ * unchanged (modulo updated_at). The partial-unique index makes
+ * "one active row per (provider, requirement_key, family_id,
+ * child_id)" the schema-enforced invariant; this helper achieves
+ * it by archiving any existing active row before inserting the
+ * new one (archive-then-insert protocol, same shape as
+ * consent_templates edits).
+ *
+ * Passing `mode = null` resets to auto by archiving the current
+ * active row WITHOUT inserting a replacement — the engine then
+ * falls back to the registry's autoDefault for that requirement.
+ *
+ * NOTE on §2a: this helper never writes 'does_not_apply' implicitly.
+ * Only an explicit caller-supplied `mode = 'does_not_apply'` produces
+ * such a row. A "Skip — ask me later" UI affordance MUST translate
+ * to `mode = null` (reset to auto), NOT `mode = 'does_not_apply'`.
+ *
+ * @param {object} args
+ * @param {string} args.providerId
+ * @param {string} args.requirementKey
+ * @param {'applies'|'does_not_apply'|null} args.mode
+ *   null = archive the current active row (reset to autoDefault).
+ * @param {string|null} [args.familyId]    Phase 3 always passes null.
+ * @param {string|null} [args.childId]     Phase 3 always passes null.
+ * @param {string|null} [args.notes]
+ * @returns {Promise<{ ok: boolean, error?: any }>}
+ */
+export async function setApplicabilityOverride({
+  providerId,
+  requirementKey,
+  mode,
+  familyId = null,
+  childId = null,
+  notes = null,
+} = {}) {
+  if (!providerId || !requirementKey) {
+    return { ok: false, error: new Error('setApplicabilityOverride: providerId + requirementKey required') }
+  }
+  if (mode !== null && mode !== 'applies' && mode !== 'does_not_apply') {
+    return { ok: false, error: new Error(`setApplicabilityOverride: invalid mode ${mode}`) }
+  }
+
+  // 1. Archive every active row for this exact (provider, requirement,
+  //    family, child) tuple. PostgREST's null-aware matching needs
+  //    .is() for the nullable columns.
+  let archiveQ = supabase
+    .from('compliance_applicability_overrides')
+    .update({ archived_at: new Date().toISOString() })
+    .eq('provider_id', providerId)
+    .eq('requirement_key', requirementKey)
+    .is('archived_at', null)
+  archiveQ = familyId == null ? archiveQ.is('family_id', null) : archiveQ.eq('family_id', familyId)
+  archiveQ = childId  == null ? archiveQ.is('child_id', null)  : archiveQ.eq('child_id', childId)
+  const archiveResp = await archiveQ
+  if (archiveResp.error) {
+    return { ok: false, error: archiveResp.error }
+  }
+
+  // 2. If mode was null, we're done — that was a reset.
+  if (mode === null) return { ok: true }
+
+  // 3. Insert the new active row.
+  const { data: userResp } = await supabase.auth.getUser()
+  const insertResp = await supabase
+    .from('compliance_applicability_overrides')
+    .insert({
+      provider_id:    providerId,
+      requirement_key: requirementKey,
+      mode,
+      family_id:      familyId,
+      child_id:       childId,
+      set_at:         new Date().toISOString(),
+      set_by_user_id: userResp?.user?.id || providerId,
+      notes:          notes || null,
+    })
+  if (insertResp.error) {
+    return { ok: false, error: insertResp.error }
+  }
+  return { ok: true }
+}
+
+/**
+ * Convenience: load source rows + overrides + compute provider rollup
+ * in one call. The Phase 3 checklist surfaces use this; Phase 4's
+ * score will too. Replaces the Phase 1 `computeProviderComplianceState`
+ * for any consumer that wants overrides honored (which is everyone
+ * Phase 3 onward).
+ */
+export async function computeProviderComplianceStateWithOverrides({
+  providerId,
+  childIds,
+  now = new Date(),
+} = {}) {
+  if (!providerId) return null
+  const [{ provider, children, sourceRows }, overrides] = await Promise.all([
+    loadComplianceSourceRows({ providerId, childIds }),
+    loadApplicabilityOverrides({ providerId }),
+  ])
+  if (!provider) return null
+  return getProviderComplianceStatePure({ provider, children, sourceRows, overrides, now })
+}
+
+/**
+ * Same as above but per-child.
+ */
+export async function computeChildComplianceStateWithOverrides({
+  providerId,
+  childId,
+  now = new Date(),
+} = {}) {
+  if (!providerId || !childId) return null
+  const [{ provider, children, sourceRows }, overrides] = await Promise.all([
+    loadComplianceSourceRows({ providerId, childIds: [childId] }),
+    loadApplicabilityOverrides({ providerId }),
+  ])
+  if (!provider) return null
+  const child = children.find(c => c.id === childId)
+  if (!child) return null
+  return getChildComplianceStatePure({ child, provider, sourceRows, overrides, now })
+}

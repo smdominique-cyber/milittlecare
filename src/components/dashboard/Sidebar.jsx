@@ -26,6 +26,7 @@ import {
   CalendarClock,
   GraduationCap,
   ClipboardCheck,
+  ClipboardList,
   FileSpreadsheet,
   UserCheck,
   BookOpen,
@@ -45,9 +46,14 @@ function getInitials(name) {
 export default function Sidebar({ isOpen = false }) {
   const { user, signOut } = useAuth()
   const { role, isLicensee, licenseeId } = useRole()
-  const { modules } = useActiveModules()
+  const { modules, profile } = useActiveModules()
   const navigate = useNavigate()
   const [messagingEnabled, setMessagingEnabled] = useState(false)
+  // Phase 3 decision #8 — opt-in flag for the Compliance Checklist
+  // sidebar entry. Absent → OFF (existing-provider default during
+  // rollout); explicit true → ON (provider opted in via Business Info).
+  const complianceChecklistEnabled =
+    profile?.program_settings?.compliance_checklist_enabled === true
 
   const fullName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'You'
   const email = user?.email || ''
@@ -106,6 +112,14 @@ export default function Sidebar({ isOpen = false }) {
       items: [
         { label: 'MiRegistry', icon: GraduationCap, path: '/miregistry', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.MIREGISTRY_TRACKER },
         { label: 'Staff Training', icon: ClipboardCheck, path: '/staff-training', roles: ['licensee', 'adult_staff', 'assistant'], module: MODULE_KEYS.STAFF_TRAINING },
+        // Phase 3 — Compliance Checklist (provider-wide). Module-gated
+        // to licensed homes only via MODULE_KEYS.LICENSED_COMPLIANCE
+        // (license_type IN family_home / group_home). LEPs see no entry.
+        // Plus the opt-in flag — hidden when the provider hasn't
+        // explicitly enabled it in Business Info (decision #8).
+        ...(complianceChecklistEnabled
+          ? [{ label: 'Compliance Checklist', icon: ClipboardList, path: '/compliance', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.LICENSED_COMPLIANCE }]
+          : []),
         { label: 'Parent Acknowledgments', icon: UserCheck, path: '/acknowledgments', roles: ['licensee', 'adult_staff'] },
         { label: 'CDC Pay Periods', icon: CalendarClock, path: '/cdc-pay-periods', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.CDC },
         { label: 'CDC I-Billing', icon: FileSpreadsheet, path: '/i-billing', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.CDC },

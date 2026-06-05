@@ -15,6 +15,9 @@ import ChildIntakeModal from '@/components/families/ChildIntakeModal'
 import EnrollmentConsentsModal from '@/components/families/EnrollmentConsentsModal'
 import MedicationModal from '@/components/families/MedicationModal'
 import MiRegistryWarningBanner from '@/components/miregistry/MiRegistryWarningBanner'
+// Phase 3 — per-family Compliance tab. Module-gated to licensed
+// homes (family_home / group_home); LEPs never see the tab.
+import FamilyComplianceTab from '@/components/compliance/FamilyComplianceTab'
 import '@/styles/families.css'
 
 const STATUS_OPTIONS = [
@@ -415,6 +418,16 @@ function FamilyDetailModal({ userId, family, licenseeProfile, children: initialC
             <button className={`detail-tab${tab === 'attendance' ? ' active' : ''}`} onClick={() => setTab('attendance')}>
               Attendance
             </button>
+            {/* Phase 3 — per-family Compliance tab. Licensed homes
+                only AND opt-in (decision #8: default OFF during
+                rollout; provider enables in Business Info). */}
+            {(licenseeProfile?.license_type === 'family_home' ||
+              licenseeProfile?.license_type === 'group_home') &&
+             licenseeProfile?.program_settings?.compliance_checklist_enabled === true && (
+              <button className={`detail-tab${tab === 'compliance' ? ' active' : ''}`} onClick={() => setTab('compliance')}>
+                Compliance
+              </button>
+            )}
           </div>
         )}
 
@@ -450,6 +463,12 @@ function FamilyDetailModal({ userId, family, licenseeProfile, children: initialC
           )}
           {!isNew && tab === 'attendance' && (
             <AttendanceTab userId={userId} children={initialChildren} />
+          )}
+          {!isNew && tab === 'compliance' &&
+            (licenseeProfile?.license_type === 'family_home' ||
+             licenseeProfile?.license_type === 'group_home') &&
+            licenseeProfile?.program_settings?.compliance_checklist_enabled === true && (
+            <FamilyComplianceTab children={initialChildren} />
           )}
         </div>
 
