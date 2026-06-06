@@ -1678,7 +1678,15 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   attendance_parent_acknowledgment_per_day: Object.freeze({
     key: 'attendance_parent_acknowledgment_per_day',
     category: 'attendance',
-    rule_citation: 'R 400.1906 (audit trail)',
+    // CDC subsidy audit trail, not a R 400 licensing requirement
+    // (re-cited 2026-06-06 from 'R 400.1906' per the Phase 3.1
+    // consultant-worksheet H1 question + the CDC-subsidy-layer
+    // gating audit). The daily-parent-ack obligation derives from
+    // MDHHS's CDC billing audit-trail expectations; it does NOT
+    // apply to private-pay-only families or to LEPs / licensed homes
+    // who have no children on CDC. Gating below now mirrors the
+    // existing G1/G2/G3/G4 CDC-funding-source pattern.
+    rule_citation: 'CDC Handbook (daily attendance audit trail)',
     label: 'Daily attendance parent acknowledgment',
     subject_type: 'attendance_day',
     data_authority: 'milittlecare',
@@ -1686,13 +1694,51 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'medium',
     data_state: 'shipped',
     applicability: {
+      // Gate on existence of ≥1 active CDC funding source. The
+      // CDC-subsidy-layer audit (2026-06-06) found H1 was the only
+      // CDC-derived requirement that wasn't CDC-gated — every other
+      // CDC row (G1-G4) already filters funding_sources by
+      // type='cdc_scholarship'. With this change H1 joins them and
+      // becomes does_not_apply for private-pay-only providers.
+      //
+      // §2a posture: the absence-of-data case (no funding_sources
+      // rows at all) collapses to DOES_NOT_APPLY here, matching
+      // G1/G2/G3 verbatim. A provider who hasn't entered ANY funding
+      // sources reads as "no CDC kids" — affirmative, not unknown —
+      // because the funding-source-entry surface in Families is the
+      // single capture point and absence IS the answer. (This
+      // engine-wide loader-default behavior is consistent across
+      // all four CDC rows; if §2a tightening is wanted, do it once
+      // across all four.)
       inferFromData: ({ sourceRows }) => {
-        const acks = sourceRows.attendance_acks || []
-        return acks.length > 0 ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
+        const cdcSources = (sourceRows.funding_sources || [])
+          .filter(f => !f.archived_at && f.type === 'cdc_scholarship')
+        return cdcSources.length > 0
+          ? APPLICABILITY_RESULT.APPLIES
+          : APPLICABILITY_RESULT.DOES_NOT_APPLY
       },
     },
     state_resolver: ({ sourceRows }) => {
-      const acks = (sourceRows.attendance_acks || []).filter(a => !a.archived_at)
+      // Per-child filter: only attendance acks for children on an
+      // active CDC funding source count toward the verdict. Private-
+      // pay children's attendance acks don't move this requirement's
+      // needle even when present.
+      //
+      // funding_sources.child_id is the hybrid-FK target for every
+      // non-private-pay type per migration 003 lines 71-103 (CHECK
+      // constraint: type='cdc_scholarship' → child_id NOT NULL +
+      // family_id NULL). Confirmed via grep against
+      // supabase/migrations/003_funding_sources.sql before this edit.
+      const cdcChildIds = new Set(
+        (sourceRows.funding_sources || [])
+          .filter(f => !f.archived_at && f.type === 'cdc_scholarship')
+          .map(f => f.child_id)
+          .filter(Boolean)
+      )
+      const acks = (sourceRows.attendance_acks || []).filter(a =>
+           !a.archived_at
+        && cdcChildIds.has(a.child_id)
+      )
       if (acks.length === 0) return { kind: REQUIREMENT_STATE_KIND.NOT_APPLICABLE }
       const SATISFYING = new Set(['parent_portal', 'in_person_paper'])
       let pendingCount = 0

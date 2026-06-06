@@ -1226,24 +1226,56 @@ describe('provider_miregistry_level_2_currency (Blocker 1 resolution)', () => {
 describe('attendance_parent_acknowledgment_per_day', () => {
   const requirement = REQUIREMENT_REGISTRY.attendance_parent_acknowledgment_per_day
 
-  it('no attendance acks → not_applicable', () => {
+  // Helpers — H1 was re-gated on CDC enrollment in the 2026-06-06
+  // CDC-subsidy-layer audit. Every test below either supplies a CDC
+  // funding source (→ applicability=applies) or expects the
+  // private-pay-only path (→ applicability=does_not_apply →
+  // state.kind=not_applicable).
+  function cdcSource(child_id, overrides = {}) {
+    return {
+      id: 's-' + child_id,
+      type: 'cdc_scholarship',
+      status: 'active',
+      child_id,
+      family_id: null,
+      archived_at: null,
+      ...overrides,
+    }
+  }
+  function privatePaySource(family_id, overrides = {}) {
+    return {
+      id: 'pp-' + family_id,
+      type: 'private_pay',
+      status: 'active',
+      child_id: null,
+      family_id,
+      archived_at: null,
+      ...overrides,
+    }
+  }
+
+  it('no attendance acks → not_applicable (existing behavior preserved)', () => {
     const state = getRequirementState({
       requirement,
       provider: makeLicensedProvider(),
-      sourceRows: makeSourceRows({ attendance_acks: [] }),
+      sourceRows: makeSourceRows({
+        funding_sources: [cdcSource('c-1')],   // CDC-enrolled
+        attendance_acks: [],
+      }),
       now: FIXED_NOW,
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
   })
 
-  it('all acks parent-signed → on_file', () => {
+  it('all CDC-kid acks parent-signed → on_file', () => {
     const state = getRequirementState({
       requirement,
       provider: makeLicensedProvider(),
       sourceRows: makeSourceRows({
+        funding_sources: [cdcSource('c-1')],
         attendance_acks: [
-          { id: 'a-1', acknowledged_via: 'parent_portal', archived_at: null },
-          { id: 'a-2', acknowledged_via: 'in_person_paper', archived_at: null },
+          { id: 'a-1', child_id: 'c-1', acknowledged_via: 'parent_portal', archived_at: null },
+          { id: 'a-2', child_id: 'c-1', acknowledged_via: 'in_person_paper', archived_at: null },
         ],
       }),
       now: FIXED_NOW,
@@ -1251,18 +1283,149 @@ describe('attendance_parent_acknowledgment_per_day', () => {
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
   })
 
-  it('all acks provider_override → pending_parent', () => {
+  it('all CDC-kid acks provider_override → pending_parent', () => {
     const state = getRequirementState({
       requirement,
       provider: makeLicensedProvider(),
       sourceRows: makeSourceRows({
+        funding_sources: [cdcSource('c-1')],
         attendance_acks: [
-          { id: 'a-1', acknowledged_via: 'provider_override', archived_at: null },
+          { id: 'a-1', child_id: 'c-1', acknowledged_via: 'provider_override', archived_at: null },
         ],
       }),
       now: FIXED_NOW,
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.PENDING_PARENT)
+  })
+
+  // ─── CDC-gating audit (2026-06-06) ──────────────────────────────
+  // H1 is the audit's "odd one out": it used to apply to any
+  // provider with attendance_acks, regardless of CDC enrollment.
+  // The fix gates inferFromData on ≥1 active CDC funding source,
+  // matching G1/G2/G3/G4. The tests below lock that in.
+
+  describe('CDC enrollment gating (2026-06-06 fix)', () => {
+    it('private-pay-only provider → not_applicable (private-pay attendance acks don\'t count)', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          funding_sources: [privatePaySource('f-1')],
+          attendance_acks: [
+            { id: 'a-1', child_id: 'c-private', acknowledged_via: 'parent_portal', archived_at: null },
+          ],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
+    })
+
+    it('no funding sources at all → not_applicable (collapses to does_not_apply matching G1)', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          funding_sources: [],
+          attendance_acks: [
+            { id: 'a-1', child_id: 'c-1', acknowledged_via: 'parent_portal', archived_at: null },
+          ],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
+    })
+
+    it('archived CDC source → not_applicable (no longer counts as active enrollment)', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          funding_sources: [cdcSource('c-1', { archived_at: '2026-01-01T00:00:00Z' })],
+          attendance_acks: [
+            { id: 'a-1', child_id: 'c-1', acknowledged_via: 'parent_portal', archived_at: null },
+          ],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
+    })
+
+    it('mixed CDC + private-pay: only CDC-kid acks count toward verdict', () => {
+      // c-cdc is CDC-enrolled; c-pp is private-pay.
+      // c-cdc has a clean parent_portal ack; c-pp has provider_override only.
+      // Without per-child filtering this would resolve to pending_parent
+      // (the c-pp override would bring the verdict down). With the
+      // per-child filter, only c-cdc's ack is considered → on_file.
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          funding_sources: [
+            cdcSource('c-cdc'),
+            privatePaySource('f-pp'),
+          ],
+          attendance_acks: [
+            { id: 'a-1', child_id: 'c-cdc', acknowledged_via: 'parent_portal',    archived_at: null },
+            { id: 'a-2', child_id: 'c-pp',  acknowledged_via: 'provider_override', archived_at: null },
+          ],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+    })
+
+    it('mixed CDC + private-pay: a CDC-kid provider_override DOES move the verdict to pending_parent', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          funding_sources: [
+            cdcSource('c-cdc'),
+            privatePaySource('f-pp'),
+          ],
+          attendance_acks: [
+            { id: 'a-1', child_id: 'c-cdc', acknowledged_via: 'provider_override', archived_at: null },
+            { id: 'a-2', child_id: 'c-pp',  acknowledged_via: 'parent_portal',    archived_at: null },
+          ],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.PENDING_PARENT)
+    })
+
+    it('applicability returns DOES_NOT_APPLY for private-pay-only provider (§2a check)', () => {
+      // Direct applicability resolver call — confirms the gate fires
+      // at layer 3 (inferFromData) and doesn't silently fall through.
+      const result = resolveApplicability({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          funding_sources: [privatePaySource('f-1')],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(result).toBe(APPLICABILITY_RESULT.DOES_NOT_APPLY)
+    })
+
+    it('applicability returns APPLIES for a CDC-enrolled provider', () => {
+      const result = resolveApplicability({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          funding_sources: [cdcSource('c-1')],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(result).toBe(APPLICABILITY_RESULT.APPLIES)
+    })
+
+    it('rule citation is the CDC Handbook, not R 400', () => {
+      // Locks the 2026-06-06 re-cite. If a future contributor flips
+      // this back to R 400.xxxx without rechecking the consultant
+      // worksheet H1 entry, this test fails first.
+      expect(requirement.rule_citation).toMatch(/CDC Handbook/i)
+      expect(requirement.rule_citation).not.toMatch(/R 400\./)
+    })
   })
 })
 
