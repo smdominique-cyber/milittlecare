@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useRole } from '@/hooks/useRole'
 import { supabase } from '@/lib/supabase'
@@ -99,6 +100,15 @@ export default function FamiliesPage() {
   // downstream code reads (PR #15 lesson).
   const [licenseeProfile, setLicenseeProfile] = useState(null)
 
+  // Phase 3 fix-forward (Finding #5): deep-link from /compliance per-
+  // child rollup. URL shape: /families?family=<id>&child=<id>&tab=compliance.
+  // When `family` matches a loaded family, open its modal with `tab`
+  // as the initial tab. This is the page's FIRST query-param handler
+  // — keep the scheme tight so any future deep-link adds plug in
+  // here without inventing a parallel convention.
+  const [params, setParams] = useSearchParams()
+  const [modalInitialTab, setModalInitialTab] = useState('overview')
+
   useEffect(() => { if (licenseeId) loadAll() }, [licenseeId])
 
   async function loadAll() {
@@ -125,6 +135,48 @@ export default function FamiliesPage() {
     setEmergency(e.data || [])
     setLicenseeProfile(p.data || null)
     setLoading(false)
+  }
+
+  // Phase 3 fix-forward (Finding #5) — consume the deep-link params
+  // once families are loaded. The /compliance per-child rollup links
+  // here as /families?family=<id>&child=<id>&tab=compliance; without
+  // this effect FamiliesPage ignored the params entirely and the
+  // user landed on the default list with no modal open.
+  //
+  // Known tab keys from FamilyDetailModal: overview / invitations /
+  // children / funding / guardians / emergency / attendance /
+  // compliance. Unknown values fall back to overview (defensive —
+  // e.g. a stale link from a future "Reports" tab that wasn't built).
+  useEffect(() => {
+    if (loading || families.length === 0) return
+    const familyId = params.get('family')
+    if (!familyId) return
+    const match = families.find(f => f.id === familyId)
+    if (!match) return
+    const KNOWN_TABS = new Set([
+      'overview', 'invitations', 'children', 'funding',
+      'guardians', 'emergency', 'attendance', 'compliance',
+    ])
+    const tabParam = params.get('tab')
+    setModalInitialTab(KNOWN_TABS.has(tabParam) ? tabParam : 'overview')
+    setSelectedFamily(match)
+    // The `child` param is currently informational — the per-family
+    // Compliance tab already lists every child in the family. A future
+    // polish step could scroll/focus the named child within the tab;
+    // for now landing on the family + compliance tab is the load-
+    // bearing fix.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, families, params])
+
+  function clearDeepLinkParams() {
+    // Tidy the URL when the modal closes so refreshing doesn't
+    // re-trigger the deep-link, and forward/back navigation behaves.
+    if (!params.get('family') && !params.get('tab') && !params.get('child')) return
+    const next = new URLSearchParams(params)
+    next.delete('family')
+    next.delete('child')
+    next.delete('tab')
+    setParams(next, { replace: true })
   }
 
   const filteredFamilies = families.filter(f =>
@@ -306,7 +358,14 @@ export default function FamiliesPage() {
           children={children.filter(c => c.family_id === selectedFamily?.id)}
           guardians={guardians.filter(g => g.family_id === selectedFamily?.id)}
           emergencyContacts={emergency.filter(e => e.family_id === selectedFamily?.id)}
-          onClose={() => { setSelectedFamily(null); setCreating(false) }}
+          initialTab={modalInitialTab}
+          onClose={() => {
+            setSelectedFamily(null)
+            setCreating(false)
+            // Reset the next-open default; clear any sticky deep-link.
+            setModalInitialTab('overview')
+            clearDeepLinkParams()
+          }}
           onChange={loadAll}
         />
       )}
@@ -315,9 +374,13 @@ export default function FamiliesPage() {
 }
 
 // ════════════════════════════════════════════════════════════
-function FamilyDetailModal({ userId, family, licenseeProfile, children: initialChildren, guardians: initialGuardians, emergencyContacts: initialEC, onClose, onChange }) {
+function FamilyDetailModal({ userId, family, licenseeProfile, children: initialChildren, guardians: initialGuardians, emergencyContacts: initialEC, initialTab = 'overview', onClose, onChange }) {
   const isNew = !family
-  const [tab, setTab] = useState('overview')
+  // Phase 3 fix-forward (Finding #5): initialTab is the parent's
+  // deep-link target (e.g. 'compliance' when the user clicks "Open
+  // child's compliance tab" on /compliance). When opening a new
+  // family or no deep-link, defaults to 'overview' — pre-fix behavior.
+  const [tab, setTab] = useState(isNew ? 'overview' : initialTab)
   const [form, setForm] = useState({
     family_name:                 family?.family_name || '',
     billing_type:                family?.billing_type || 'weekly',

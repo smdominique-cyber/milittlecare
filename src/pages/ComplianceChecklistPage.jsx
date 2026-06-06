@@ -324,6 +324,16 @@ function PerChildSummary({ per_child, children }) {
   // first_name/last_name again.
   const displayName = findChildDisplayName(children, childId)
     || `Child ${childId.slice(0, 8)}…`
+  // Phase 3 fix-forward (Finding #5): the "Open child's compliance
+  // tab" link needs family_id so FamiliesPage opens the right
+  // modal. The Families modal opens per FAMILY (not per child);
+  // child_id alone is insufficient. The loader's children list
+  // carries family_id (added with first_name/last_name in the
+  // earlier fix-forward).
+  const childRow = Array.isArray(children)
+    ? children.find(c => c && c.id === childId)
+    : null
+  const familyId = childRow && childRow.family_id
   const summary = []
   if (t.on_file)          summary.push(`${t.on_file} on file`)
   if (t.missing_required) summary.push(`${t.missing_required} missing`)
@@ -350,7 +360,11 @@ function PerChildSummary({ per_child, children }) {
         <div style={{ color: 'var(--clr-ink-mid)', fontSize: '0.875rem' }}>{detail}</div>
       </div>
       <Link
-        to={`/families?child=${childId}&tab=compliance`}
+        to={
+          familyId
+            ? `/families?family=${familyId}&child=${childId}&tab=compliance`
+            : `/families?child=${childId}&tab=compliance`
+        }
         style={{
           color: 'var(--clr-sage-dark, #3e5849)',
           fontSize: '0.875rem',
