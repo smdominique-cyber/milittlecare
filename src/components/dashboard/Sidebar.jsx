@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useRole } from '@/hooks/useRole'
 import { useActiveModules } from '@/hooks/useActiveModules'
 import { MODULE_KEYS } from '@/lib/modules'
+import { isComplianceChecklistVisible } from '@/lib/complianceChecklistVisibility'
 import { supabase } from '@/lib/supabase'
 import { InstallLink } from '@/components/ui/InstallBanner'
 import {
@@ -26,6 +27,7 @@ import {
   CalendarClock,
   GraduationCap,
   ClipboardCheck,
+  ClipboardList,
   FileSpreadsheet,
   UserCheck,
   BookOpen,
@@ -45,9 +47,18 @@ function getInitials(name) {
 export default function Sidebar({ isOpen = false }) {
   const { user, signOut } = useAuth()
   const { role, isLicensee, licenseeId } = useRole()
-  const { modules } = useActiveModules()
+  const { loading: modulesLoading, modules, profile } = useActiveModules()
   const navigate = useNavigate()
   const [messagingEnabled, setMessagingEnabled] = useState(false)
+  // Phase 3 — Compliance Checklist sidebar entry. Single source of
+  // truth in src/lib/complianceChecklistVisibility.js so the Sidebar,
+  // the /compliance page, and the per-family Compliance tab all agree.
+  // Returns true ONLY when licensed-home + opted-in + not loading.
+  const complianceChecklistEnabled = isComplianceChecklistVisible({
+    loading: modulesLoading,
+    modules,
+    profile,
+  })
 
   const fullName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'You'
   const email = user?.email || ''
@@ -106,6 +117,14 @@ export default function Sidebar({ isOpen = false }) {
       items: [
         { label: 'MiRegistry', icon: GraduationCap, path: '/miregistry', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.MIREGISTRY_TRACKER },
         { label: 'Staff Training', icon: ClipboardCheck, path: '/staff-training', roles: ['licensee', 'adult_staff', 'assistant'], module: MODULE_KEYS.STAFF_TRAINING },
+        // Phase 3 — Compliance Checklist (provider-wide). Module-gated
+        // to licensed homes only via MODULE_KEYS.LICENSED_COMPLIANCE
+        // (license_type IN family_home / group_home). LEPs see no entry.
+        // Plus the opt-in flag — hidden when the provider hasn't
+        // explicitly enabled it in Business Info (decision #8).
+        ...(complianceChecklistEnabled
+          ? [{ label: 'Compliance Checklist', icon: ClipboardList, path: '/compliance', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.LICENSED_COMPLIANCE }]
+          : []),
         { label: 'Parent Acknowledgments', icon: UserCheck, path: '/acknowledgments', roles: ['licensee', 'adult_staff'] },
         { label: 'CDC Pay Periods', icon: CalendarClock, path: '/cdc-pay-periods', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.CDC },
         { label: 'CDC I-Billing', icon: FileSpreadsheet, path: '/i-billing', roles: ['licensee', 'adult_staff'], module: MODULE_KEYS.CDC },

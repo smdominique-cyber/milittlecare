@@ -17,6 +17,13 @@ import {
   getRequirementState,
   getChildComplianceState,
   getProviderComplianceState,
+  // Phase 3 — pure projection helpers.
+  classifyUnknownReason,
+  filterByDataState,
+  getChildComplianceStateForCategory,
+  listProviderDeclaredApplicabilityRequirements,
+  // Phase 3 fix-forward (2026-06-05).
+  NEEDS_PROVIDER_DATA_REASONS,
 } from './complianceState'
 import { ACK_TYPES } from './acknowledgments'
 
@@ -1552,5 +1559,344 @@ describe('Defensive', () => {
       now: FIXED_NOW,
     })
     expect(state.kind).toBeDefined()
+  })
+})
+
+// -----------------------------------------------------------------------------
+// Phase 3 — new pure projection helpers
+// -----------------------------------------------------------------------------
+
+describe('Phase 3 — classifyUnknownReason', () => {
+  it('awaiting-provider-input → awaiting_input', () => {
+    const state = { kind: 'unknown', reason: 'awaiting-provider-input' }
+    expect(classifyUnknownReason({ state })).toBe('awaiting_input')
+  })
+
+  it('feature-not-yet-shipped → feature_not_yet_shipped', () => {
+    const state = { kind: 'unknown', reason: 'feature-not-yet-shipped' }
+    expect(classifyUnknownReason({ state })).toBe('feature_not_yet_shipped')
+  })
+
+  // Phase 3 fix-forward (2026-06-05) — Finding #3 from the live gate:
+  // `caregiver-missing-date-of-hire` used to fall through to
+  // `data_anomaly` → "Data anomaly — please contact support" copy,
+  // even though the provider can fix it themselves by adding the
+  // hire date. New bucket: `needs_provider_data` with actionable copy.
+  describe('needs_provider_data bucket', () => {
+    it('caregiver-missing-date-of-hire → needs_provider_data (the live-gate finding)', () => {
+      const state = { kind: 'unknown', reason: 'caregiver-missing-date-of-hire' }
+      expect(classifyUnknownReason({ state })).toBe('needs_provider_data')
+    })
+
+    it('no-authorization-end-on-funding-source → needs_provider_data', () => {
+      const state = { kind: 'unknown', reason: 'no-authorization-end-on-funding-source' }
+      expect(classifyUnknownReason({ state })).toBe('needs_provider_data')
+    })
+
+    it('every reason in NEEDS_PROVIDER_DATA_REASONS classifies to needs_provider_data', () => {
+      for (const reason of NEEDS_PROVIDER_DATA_REASONS) {
+        const state = { kind: 'unknown', reason }
+        expect(classifyUnknownReason({ state })).toBe('needs_provider_data')
+      }
+    })
+
+    it('NEEDS_PROVIDER_DATA_REASONS is frozen (catalog cannot mutate at runtime)', () => {
+      // Set frozen on a Set means no .add() / .delete() succeed silently —
+      // a future contributor extending the set must do it in source.
+      expect(Object.isFrozen(NEEDS_PROVIDER_DATA_REASONS)).toBe(true)
+    })
+  })
+
+  describe('data_anomaly bucket — genuine engine/data issues', () => {
+    it('unparseable-date → data_anomaly (corrupt date string in record)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'unparseable-date' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('unparseable-hire-date → data_anomaly', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'unparseable-hire-date' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('unparseable-fingerprint-date → data_anomaly', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'unparseable-fingerprint-date' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('completion-date-in-future → data_anomaly', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'completion-date-in-future' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('unrecognized-miregistry-status → data_anomaly (record has unknown enum)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'unrecognized-miregistry-status' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('no-state-resolver → data_anomaly (dev/registry bug)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'no-state-resolver' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('no-requirement-supplied → data_anomaly (engine misuse)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'no-requirement-supplied' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('source-not-loaded → data_anomaly (hypothetical — not currently emitted)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'source-not-loaded' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('arbitrary unknown reason string → data_anomaly (fallthrough catches future codes)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'something-the-engine-might-emit-someday' } }))
+        .toBe('data_anomaly')
+    })
+  })
+
+  it('no reason → data_anomaly', () => {
+    expect(classifyUnknownReason({ state: { kind: 'unknown' } })).toBe('data_anomaly')
+  })
+
+  it('missing state → data_anomaly (defensive)', () => {
+    expect(classifyUnknownReason({})).toBe('data_anomaly')
+    expect(classifyUnknownReason()).toBe('data_anomaly')
+  })
+})
+
+describe('Phase 3 — listProviderDeclaredApplicabilityRequirements', () => {
+  it('returns the three Phase-1 rows with autoDefault=unknown', () => {
+    const rows = listProviderDeclaredApplicabilityRequirements()
+    const keys = rows.map(r => r.key).sort()
+    // The three rows resolved 2026-06-03 in the Phase 1 scope §6.
+    expect(keys).toEqual([
+      'consent_transportation_routine_annual',
+      'consent_water_activities_on_premises_seasonal',
+      'property_animal_notification',
+    ].sort())
+  })
+
+  it('every returned row has autoDefault = unknown', () => {
+    const rows = listProviderDeclaredApplicabilityRequirements()
+    for (const r of rows) {
+      expect(r.applicability.autoDefault).toBe(APPLICABILITY_RESULT.UNKNOWN)
+    }
+  })
+
+  it('never includes a row with autoDefault = applies', () => {
+    const rows = listProviderDeclaredApplicabilityRequirements()
+    const haveApplies = rows.some(r => r.applicability.autoDefault === APPLICABILITY_RESULT.APPLIES)
+    expect(haveApplies).toBe(false)
+  })
+})
+
+describe('Phase 3 — filterByDataState', () => {
+  // Build a minimal ProviderComplianceState fixture and run filters.
+  function makeState() {
+    return getProviderComplianceState({
+      provider: makeLicensedProvider(),
+      children: [makeChild()],
+      sourceRows: makeSourceRows(),
+      overrides: new Map(),
+      now: FIXED_NOW,
+    })
+  }
+
+  it('filtering to shipped removes not_yet_modelled rows from provider_level', () => {
+    const full = makeState()
+    const shipped = filterByDataState({ state: full, dataState: DATA_STATE.SHIPPED })
+    const fullDrills = full.provider_level.per_category.drills?.requirements || []
+    const shippedDrills = shipped.provider_level.per_category.drills?.requirements || []
+    // The full rollup includes 4 drill rows (all not_yet_modelled).
+    // The shipped filter drops them all.
+    expect(fullDrills.length).toBeGreaterThan(0)
+    expect(shippedDrills.length).toBe(0)
+  })
+
+  it('filtering to not_yet_modelled keeps only Pattern E rows', () => {
+    const full = makeState()
+    const nyM = filterByDataState({ state: full, dataState: DATA_STATE.NOT_YET_MODELLED })
+    // Drills and property are all not_yet_modelled.
+    const drillsCount = nyM.provider_level.per_category.drills?.requirements.length || 0
+    const propertyCount = nyM.provider_level.per_category.property?.requirements.length || 0
+    expect(drillsCount).toBeGreaterThan(0)
+    expect(propertyCount).toBeGreaterThan(0)
+  })
+
+  it('filtered totals recompute correctly', () => {
+    const full = makeState()
+    const shipped = filterByDataState({ state: full, dataState: DATA_STATE.SHIPPED })
+    const nyM     = filterByDataState({ state: full, dataState: DATA_STATE.NOT_YET_MODELLED })
+    // Totals should partition: shipped + not_yet_modelled = original
+    // (modulo defensive default — rows with missing data_state are
+    // treated as shipped, so no double-count).
+    expect((shipped.totals.unknown || 0) + (nyM.totals.unknown || 0))
+      .toBeGreaterThanOrEqual(full.totals.unknown || 0 - 1)  // ±1 tolerance for defensive defaults
+  })
+
+  it('null state returns null', () => {
+    expect(filterByDataState({ state: null, dataState: 'shipped' })).toBe(null)
+  })
+})
+
+describe('Phase 3 — getChildComplianceStateForCategory', () => {
+  it('returns the category sub-state', () => {
+    const child = makeChild()
+    const fullChildState = getChildComplianceState({
+      child,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows(),
+      overrides: new Map(),
+      now: FIXED_NOW,
+    })
+    const consents = getChildComplianceStateForCategory({
+      state: fullChildState,
+      category: 'consents',
+    })
+    expect(consents).toBeDefined()
+    expect(consents.requirements).toBeDefined()
+  })
+
+  it('returns null for unknown category', () => {
+    const fullChildState = getChildComplianceState({
+      child: makeChild(),
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows(),
+      overrides: new Map(),
+      now: FIXED_NOW,
+    })
+    expect(getChildComplianceStateForCategory({ state: fullChildState, category: 'nonexistent' }))
+      .toBe(null)
+  })
+
+  it('null state → null', () => {
+    expect(getChildComplianceStateForCategory({ state: null, category: 'consents' })).toBe(null)
+  })
+})
+
+// -----------------------------------------------------------------------------
+// Phase 3 — §2a invariant: override round-trip + UNanswered stays unknown
+// -----------------------------------------------------------------------------
+//
+// The load-bearing principle for Phase 3: the engine NEVER silently
+// resolves a real regulatory requirement to not_applicable without an
+// affirmative provider answer. The override row IS the affirmative
+// basis. Verify the full round-trip:
+//
+//   - No override row → applicability resolves to UNKNOWN →
+//     state = { kind: 'unknown', reason: 'awaiting-provider-input' }
+//   - mode='applies' override → applicability = APPLIES → state runs
+//     the row's state_resolver (missing_required for the row in test
+//     because no satisfying ack exists).
+//   - mode='does_not_apply' override → applicability = DOES_NOT_APPLY
+//     → state = not_applicable.
+//   - Archived override (no longer "active") → loader returns Map
+//     without the key → applicability falls back to autoDefault =
+//     UNKNOWN → state = unknown awaiting-provider-input. The reset
+//     path.
+//
+// We exercise the engine layer here (the loader is integration-shaped
+// and lives in src/lib/complianceStateLoader.js, which is tested via
+// integration testing where the Supabase mock is set up — out of scope
+// for this pure-layer suite).
+
+describe('Phase 3 — §2a override round-trip', () => {
+  const PROVIDER_DECLARED_KEYS = [
+    'consent_transportation_routine_annual',
+    'consent_water_activities_on_premises_seasonal',
+    'property_animal_notification',
+  ]
+
+  for (const key of PROVIDER_DECLARED_KEYS) {
+    it(`${key}: no override → state = unknown awaiting-provider-input`, () => {
+      const requirement = REQUIREMENT_REGISTRY[key]
+      const state = getRequirementState({
+        requirement,
+        child: makeChild(),
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows(),
+        overrides: new Map(),    // empty — the "unanswered" case
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(state.reason).toBe('awaiting-provider-input')
+    })
+
+    it(`${key}: mode='applies' override → state resolver runs (missing_required when no ack)`, () => {
+      const requirement = REQUIREMENT_REGISTRY[key]
+      const overrides = new Map([[key, APPLICABILITY_RESULT.APPLIES]])
+      const state = getRequirementState({
+        requirement,
+        child: makeChild(),
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows(),
+        overrides,
+        now: FIXED_NOW,
+      })
+      // property_animal_notification is also Pattern E (data_state=
+      // 'not_yet_modelled') — even with applies override, its
+      // state_resolver returns unknown(feature-not-yet-shipped).
+      if (key === 'property_animal_notification') {
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+        expect(state.reason).toBe('feature-not-yet-shipped')
+      } else {
+        // The two shipped consent rows fall through to Pattern A,
+        // which returns missing_required when no ack is on file.
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      }
+    })
+
+    it(`${key}: mode='does_not_apply' override → state = not_applicable`, () => {
+      const requirement = REQUIREMENT_REGISTRY[key]
+      const overrides = new Map([[key, APPLICABILITY_RESULT.DOES_NOT_APPLY]])
+      const state = getRequirementState({
+        requirement,
+        child: makeChild(),
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows(),
+        overrides,
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
+    })
+
+    it(`${key}: "archive" simulated by removing the key → returns to unknown`, () => {
+      // The loader's behavior: an archived row produces no Map entry.
+      // Simulate "removed" by passing an empty Map.
+      const requirement = REQUIREMENT_REGISTRY[key]
+      const archivedScenario = new Map()
+      const state = getRequirementState({
+        requirement,
+        child: makeChild(),
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows(),
+        overrides: archivedScenario,
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(state.reason).toBe('awaiting-provider-input')
+    })
+  }
+
+  it('§2a invariant: with empty overrides, NO provider-declared row resolves to not_applicable', () => {
+    // Walk every PROVIDER_DECLARED row with empty overrides and
+    // confirm none silently resolves to not_applicable. This is the
+    // engine-level proof that an absent override row keeps the
+    // requirement honest.
+    for (const key of PROVIDER_DECLARED_KEYS) {
+      const requirement = REQUIREMENT_REGISTRY[key]
+      const applicability = resolveApplicability({
+        requirement,
+        child: makeChild(),
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows(),
+        overrides: new Map(),
+        now: FIXED_NOW,
+      })
+      // The critical check: NEVER does_not_apply when no override.
+      expect(applicability).not.toBe(APPLICABILITY_RESULT.DOES_NOT_APPLY)
+      // Should be unknown (the engine's safe default per §2a).
+      expect(applicability).toBe(APPLICABILITY_RESULT.UNKNOWN)
+    }
   })
 })

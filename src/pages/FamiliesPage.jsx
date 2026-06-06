@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useRole } from '@/hooks/useRole'
 import { supabase } from '@/lib/supabase'
@@ -15,6 +16,9 @@ import ChildIntakeModal from '@/components/families/ChildIntakeModal'
 import EnrollmentConsentsModal from '@/components/families/EnrollmentConsentsModal'
 import MedicationModal from '@/components/families/MedicationModal'
 import MiRegistryWarningBanner from '@/components/miregistry/MiRegistryWarningBanner'
+// Phase 3 — per-family Compliance tab. Module-gated to licensed
+// homes (family_home / group_home); LEPs never see the tab.
+import FamilyComplianceTab from '@/components/compliance/FamilyComplianceTab'
 import '@/styles/families.css'
 
 const STATUS_OPTIONS = [
@@ -96,6 +100,15 @@ export default function FamiliesPage() {
   // downstream code reads (PR #15 lesson).
   const [licenseeProfile, setLicenseeProfile] = useState(null)
 
+  // Phase 3 fix-forward (Finding #5): deep-link from /compliance per-
+  // child rollup. URL shape: /families?family=<id>&child=<id>&tab=compliance.
+  // When `family` matches a loaded family, open its modal with `tab`
+  // as the initial tab. This is the page's FIRST query-param handler
+  // — keep the scheme tight so any future deep-link adds plug in
+  // here without inventing a parallel convention.
+  const [params, setParams] = useSearchParams()
+  const [modalInitialTab, setModalInitialTab] = useState('overview')
+
   useEffect(() => { if (licenseeId) loadAll() }, [licenseeId])
 
   async function loadAll() {
@@ -109,7 +122,12 @@ export default function FamiliesPage() {
       supabase.from('children').select('*').eq('user_id', licenseeId),
       supabase.from('guardians').select('*').eq('user_id', licenseeId).is('archived_at', null),
       supabase.from('emergency_contacts').select('*').eq('user_id', licenseeId),
-      supabase.from('profiles').select('id, license_type, home_built_before_1978, firearms_on_premises').eq('id', licenseeId).maybeSingle(),
+      // Phase 3 fix-forward (2026-06-05) — `program_settings` was missing
+      // from this SELECT, so the per-family Compliance tab's opt-in
+      // check (`licenseeProfile?.program_settings?.compliance_checklist_enabled`)
+      // always evaluated `undefined === true` → false. Caught during the
+      // Phase 3 live gate.
+      supabase.from('profiles').select('id, license_type, home_built_before_1978, firearms_on_premises, program_settings').eq('id', licenseeId).maybeSingle(),
     ])
     setFamilies(f.data || [])
     setChildren(c.data || [])
@@ -117,6 +135,48 @@ export default function FamiliesPage() {
     setEmergency(e.data || [])
     setLicenseeProfile(p.data || null)
     setLoading(false)
+  }
+
+  // Phase 3 fix-forward (Finding #5) — consume the deep-link params
+  // once families are loaded. The /compliance per-child rollup links
+  // here as /families?family=<id>&child=<id>&tab=compliance; without
+  // this effect FamiliesPage ignored the params entirely and the
+  // user landed on the default list with no modal open.
+  //
+  // Known tab keys from FamilyDetailModal: overview / invitations /
+  // children / funding / guardians / emergency / attendance /
+  // compliance. Unknown values fall back to overview (defensive —
+  // e.g. a stale link from a future "Reports" tab that wasn't built).
+  useEffect(() => {
+    if (loading || families.length === 0) return
+    const familyId = params.get('family')
+    if (!familyId) return
+    const match = families.find(f => f.id === familyId)
+    if (!match) return
+    const KNOWN_TABS = new Set([
+      'overview', 'invitations', 'children', 'funding',
+      'guardians', 'emergency', 'attendance', 'compliance',
+    ])
+    const tabParam = params.get('tab')
+    setModalInitialTab(KNOWN_TABS.has(tabParam) ? tabParam : 'overview')
+    setSelectedFamily(match)
+    // The `child` param is currently informational — the per-family
+    // Compliance tab already lists every child in the family. A future
+    // polish step could scroll/focus the named child within the tab;
+    // for now landing on the family + compliance tab is the load-
+    // bearing fix.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, families, params])
+
+  function clearDeepLinkParams() {
+    // Tidy the URL when the modal closes so refreshing doesn't
+    // re-trigger the deep-link, and forward/back navigation behaves.
+    if (!params.get('family') && !params.get('tab') && !params.get('child')) return
+    const next = new URLSearchParams(params)
+    next.delete('family')
+    next.delete('child')
+    next.delete('tab')
+    setParams(next, { replace: true })
   }
 
   const filteredFamilies = families.filter(f =>
@@ -298,7 +358,14 @@ export default function FamiliesPage() {
           children={children.filter(c => c.family_id === selectedFamily?.id)}
           guardians={guardians.filter(g => g.family_id === selectedFamily?.id)}
           emergencyContacts={emergency.filter(e => e.family_id === selectedFamily?.id)}
-          onClose={() => { setSelectedFamily(null); setCreating(false) }}
+          initialTab={modalInitialTab}
+          onClose={() => {
+            setSelectedFamily(null)
+            setCreating(false)
+            // Reset the next-open default; clear any sticky deep-link.
+            setModalInitialTab('overview')
+            clearDeepLinkParams()
+          }}
           onChange={loadAll}
         />
       )}
@@ -307,9 +374,13 @@ export default function FamiliesPage() {
 }
 
 // ════════════════════════════════════════════════════════════
-function FamilyDetailModal({ userId, family, licenseeProfile, children: initialChildren, guardians: initialGuardians, emergencyContacts: initialEC, onClose, onChange }) {
+function FamilyDetailModal({ userId, family, licenseeProfile, children: initialChildren, guardians: initialGuardians, emergencyContacts: initialEC, initialTab = 'overview', onClose, onChange }) {
   const isNew = !family
-  const [tab, setTab] = useState('overview')
+  // Phase 3 fix-forward (Finding #5): initialTab is the parent's
+  // deep-link target (e.g. 'compliance' when the user clicks "Open
+  // child's compliance tab" on /compliance). When opening a new
+  // family or no deep-link, defaults to 'overview' — pre-fix behavior.
+  const [tab, setTab] = useState(isNew ? 'overview' : initialTab)
   const [form, setForm] = useState({
     family_name:                 family?.family_name || '',
     billing_type:                family?.billing_type || 'weekly',
@@ -415,6 +486,24 @@ function FamilyDetailModal({ userId, family, licenseeProfile, children: initialC
             <button className={`detail-tab${tab === 'attendance' ? ' active' : ''}`} onClick={() => setTab('attendance')}>
               Attendance
             </button>
+            {/* Phase 3 — per-family Compliance tab. Licensed homes
+                only AND opt-in (decision #8: default OFF during
+                rollout; provider enables in Business Info).
+                Logically equivalent to
+                isComplianceChecklistVisible() — kept inline because
+                FamiliesPage doesn't use useActiveModules and the
+                license_type check is the direct underlying signal
+                the module activation in modules.js:125-128 keys on.
+                FamiliesPage's own loadAll has resolved by the time
+                a family modal is interactable, so there's no
+                loading race here. */}
+            {(licenseeProfile?.license_type === 'family_home' ||
+              licenseeProfile?.license_type === 'group_home') &&
+             licenseeProfile?.program_settings?.compliance_checklist_enabled === true && (
+              <button className={`detail-tab${tab === 'compliance' ? ' active' : ''}`} onClick={() => setTab('compliance')}>
+                Compliance
+              </button>
+            )}
           </div>
         )}
 
@@ -450,6 +539,12 @@ function FamilyDetailModal({ userId, family, licenseeProfile, children: initialC
           )}
           {!isNew && tab === 'attendance' && (
             <AttendanceTab userId={userId} children={initialChildren} />
+          )}
+          {!isNew && tab === 'compliance' &&
+            (licenseeProfile?.license_type === 'family_home' ||
+             licenseeProfile?.license_type === 'group_home') &&
+            licenseeProfile?.program_settings?.compliance_checklist_enabled === true && (
+            <FamilyComplianceTab children={initialChildren} />
           )}
         </div>
 

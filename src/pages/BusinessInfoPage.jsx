@@ -5,8 +5,9 @@ import { notifyStateChange } from '@/lib/notifications'
 import {
   Clock, Calendar, DollarSign, Phone, AlertTriangle,
   Plus, X, Save, Trash2, ChevronDown, ChevronRight, Check,
-  MessageCircle, Info, ScrollText, Shield,
+  MessageCircle, Info, ScrollText, Shield, ClipboardCheck,
 } from 'lucide-react'
+import ApplicabilityQuestionsSection from '@/components/compliance/ApplicabilityQuestionsSection'
 import '@/styles/business-info.css'
 
 const DAYS = [
@@ -436,6 +437,24 @@ export default function BusinessInfoPage() {
       icon: Shield,
       done: profile?.home_built_before_1978 != null && profile?.firearms_on_premises != null,
     },
+    // PR Phase 3 — Compliance Engine: applicability questions for the
+    // 'auto: unknown' registry rows (routine transport, water on
+    // premises, animals). Gated to licensed homes only — LEPs see no
+    // compliance UI per modules.js + CLAUDE.md.
+    ...(profile?.license_type === 'family_home' || profile?.license_type === 'group_home'
+      ? [{
+          id: 'compliance_applicability',
+          label: 'What applies?',
+          icon: ClipboardCheck,
+          // "Done" semantics here are intentionally loose. The section
+          // is informational — every question can legitimately be in
+          // "Skip — ask me later" indefinitely; that's not a failure
+          // state. So the section never shows the green check (no
+          // false-completion signal). The Compliance checklist surfaces
+          // any remaining unknown rows directly.
+          done: false,
+        }]
+      : []),
   ]
 
   const paymentMethods = policies.payment_methods || {}
@@ -900,6 +919,10 @@ export default function BusinessInfoPage() {
           onSave={savePremises}
           saving={saving}
         />
+      )}
+
+      {activeSection === 'compliance_applicability' && (
+        <ApplicabilityQuestionsSection providerId={user?.id} />
       )}
     </>
   )

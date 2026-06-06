@@ -2197,3 +2197,217 @@ export const REGISTRY_ROW_COUNT = Object.keys(REQUIREMENT_REGISTRY).length
  * Per-occurrence consent types — re-exported for consumer convenience.
  */
 export { PER_OCCURRENCE_CONSENT_TYPES }
+
+// -----------------------------------------------------------------------------
+// Phase 3 — pure projection helpers (§1 of phase-3 scope doc).
+//
+// These are PROJECTIONS over the existing engine output. They do NOT
+// change the engine API, the registry, or the resolver. Each is pure;
+// the consumer composes them as needed.
+// -----------------------------------------------------------------------------
+
+/**
+ * Reasons that mean "a record exists but is missing a field the
+ * provider can supply themselves." These map to the
+ * `needs_provider_data` bucket — actionable copy, NOT
+ * "contact support." Added 2026-06-05 from a Phase 3 live-gate
+ * finding: the staff "New-hire 14-topic training" row showed up
+ * as "Data anomaly — please contact support" with reason code
+ * `caregiver-missing-date-of-hire`, when the provider could just
+ * add the hire date.
+ *
+ * Frozen list — every entry added here must have matching
+ * actionable copy in the consumer (ChecklistRow.jsx); a reason
+ * with no copy fallback would still surface the generic
+ * needs_provider_data message, but the explicit map keeps the
+ * intent legible.
+ *
+ * If a future engine addition emits a new self-fixable reason
+ * code, add it here AND add the copy in ChecklistRow's
+ * NEEDS_PROVIDER_DATA_COPY map.
+ */
+export const NEEDS_PROVIDER_DATA_REASONS = Object.freeze(new Set([
+  'caregiver-missing-date-of-hire',
+  'no-authorization-end-on-funding-source',
+]))
+
+/**
+ * Classify an `unknown` state into a UI surface bucket. The checklist's
+ * row renderer reads this to pick a treatment per the Phase 3 scope's
+ * §5.4 mapping (plus the §3 live-gate fix-forward):
+ *
+ *   - 'awaiting_input'         — provider hasn't answered the
+ *                                applicability question yet (resolver
+ *                                set reason = 'awaiting-provider-input').
+ *                                UI: amber, deep-link to BusinessInfo
+ *                                "What applies to my program?" section.
+ *   - 'feature_not_yet_shipped'— the requirement is in the catalog but
+ *                                the source substrate hasn't shipped
+ *                                yet (Pattern E; reason =
+ *                                'feature-not-yet-shipped'). Option A
+ *                                from §4 of the phase-3 scope. UI: gray
+ *                                informational treatment + "tracking
+ *                                ships with PR #N" copy.
+ *   - 'needs_provider_data'    — a record exists but is missing a field
+ *                                the provider can supply (e.g. a
+ *                                caregiver row without date_of_hire).
+ *                                UI: red/amber actionable, "Needs hire
+ *                                date on the staff record" copy.
+ *                                NOT "contact support." Reasons live
+ *                                in NEEDS_PROVIDER_DATA_REASONS above.
+ *   - 'data_anomaly'           — every other reason (unparseable-date,
+ *                                completion-date-in-future,
+ *                                source-not-loaded, no-state-resolver,
+ *                                or no reason at all). UI: gray,
+ *                                "contact support."
+ *
+ * Pure. Returns the bucket string for any input, including states that
+ * are not 'unknown' — callers should gate on `state.kind === 'unknown'`
+ * before calling.
+ */
+export function classifyUnknownReason({ state } = {}) {
+  const reason = state && state.reason
+  if (reason === 'awaiting-provider-input') return 'awaiting_input'
+  if (reason === 'feature-not-yet-shipped') return 'feature_not_yet_shipped'
+  if (reason && NEEDS_PROVIDER_DATA_REASONS.has(reason)) return 'needs_provider_data'
+  return 'data_anomaly'
+}
+
+/**
+ * Filter a ProviderComplianceState rollup down to requirements whose
+ * registry row has the given `data_state`. Used by the checklist UI to
+ * split "what we track today" from "tracking ships with PR #N", and
+ * by future Phase 4 score code to exclude not_yet_modelled rows from
+ * the denominator.
+ *
+ * Pure: builds a NEW rollup object with the same shape as the input;
+ * does not mutate. Requirements whose registry row is missing or whose
+ * data_state is unknown are treated as 'shipped' (defensive default —
+ * filtering should never drop a row the engine reported).
+ *
+ * @param {object} args
+ * @param {object} args.state         ProviderComplianceState from
+ *                                    getProviderComplianceState.
+ * @param {'shipped'|'not_yet_modelled'} args.dataState
+ * @returns {object} A new ProviderComplianceState with the filtered
+ *                   per_child + provider_level rollups.
+ */
+export function filterByDataState({ state, dataState } = {}) {
+  if (!state || !dataState) return state || null
+
+  function filterCategoryState(catState) {
+    const filtered = (catState.requirements || []).filter(r => {
+      const key = r && r.state && r.state.requirement_key
+      const req = key ? REQUIREMENT_REGISTRY[key] : null
+      if (!req) return dataState === DATA_STATE.SHIPPED  // defensive default
+      const rds = req.data_state || DATA_STATE.SHIPPED
+      return rds === dataState
+    })
+    // Recompute counts.
+    const next = emptyCategoryState()
+    next.requirements = filtered
+    for (const r of filtered) {
+      if (r.applicability === APPLICABILITY_RESULT.APPLIES) next.applicable_count += 1
+      switch (r.state && r.state.kind) {
+        case REQUIREMENT_STATE_KIND.ON_FILE:          next.on_file_count += 1;          break
+        case REQUIREMENT_STATE_KIND.EXPIRED:          next.expired_count += 1;          break
+        case REQUIREMENT_STATE_KIND.MISSING_REQUIRED: next.missing_required_count += 1; break
+        case REQUIREMENT_STATE_KIND.PENDING_PARENT:   next.pending_parent_count += 1;   break
+        case REQUIREMENT_STATE_KIND.NOT_APPLICABLE:   next.not_applicable_count += 1;   break
+        case REQUIREMENT_STATE_KIND.UNKNOWN:          next.unknown_count += 1;          break
+        default: break
+      }
+    }
+    return next
+  }
+
+  function filterPerChild(pc) {
+    if (!pc) return pc
+    const per_category = {}
+    const totals = emptyTotals()
+    for (const c of Object.keys(pc.per_category || {})) {
+      const next = filterCategoryState(pc.per_category[c])
+      per_category[c] = next
+      totals.applicable      += next.applicable_count
+      totals.on_file         += next.on_file_count
+      totals.expired         += next.expired_count
+      totals.missing_required+= next.missing_required_count
+      totals.pending_parent  += next.pending_parent_count
+      totals.not_applicable  += next.not_applicable_count
+      totals.unknown         += next.unknown_count
+    }
+    return {
+      child_id: pc.child_id,
+      per_category,
+      totals,
+      any_gap:           totals.expired > 0 || totals.missing_required > 0 || totals.pending_parent > 0,
+      any_unknown_input: totals.unknown > 0,
+    }
+  }
+
+  const per_child = (state.per_child || []).map(filterPerChild)
+
+  const provider_level = { per_category: {} }
+  const providerTotals = emptyTotals()
+  for (const c of Object.keys(state.provider_level?.per_category || {})) {
+    const next = filterCategoryState(state.provider_level.per_category[c])
+    provider_level.per_category[c] = next
+    providerTotals.applicable      += next.applicable_count
+    providerTotals.on_file         += next.on_file_count
+    providerTotals.expired         += next.expired_count
+    providerTotals.missing_required+= next.missing_required_count
+    providerTotals.pending_parent  += next.pending_parent_count
+    providerTotals.not_applicable  += next.not_applicable_count
+    providerTotals.unknown         += next.unknown_count
+  }
+
+  const totals = emptyTotals()
+  for (const pc of per_child) {
+    if (!pc) continue
+    for (const k of Object.keys(totals)) totals[k] += pc.totals[k] || 0
+  }
+  for (const k of Object.keys(totals)) totals[k] += providerTotals[k] || 0
+
+  return {
+    provider_id: state.provider_id,
+    per_child,
+    provider_level,
+    totals,
+    any_gap:           totals.expired > 0 || totals.missing_required > 0 || totals.pending_parent > 0,
+    any_unknown_input: totals.unknown > 0,
+  }
+}
+
+/**
+ * Project a PerChildComplianceState down to a single category. Used by
+ * the per-child Compliance tab to render one category section at a
+ * time without re-running the engine. Also unblocks Phase 2 (the
+ * scope doc decision 9 — added here pre-emptively since Phase 2
+ * hasn't shipped at Phase-3-build time).
+ *
+ * Pure. Returns the category sub-rollup or `null` if the category
+ * doesn't exist in the supplied state.
+ */
+export function getChildComplianceStateForCategory({ state, category } = {}) {
+  if (!state || !category) return null
+  const cat = state.per_category && state.per_category[category]
+  return cat || null
+}
+
+/**
+ * Returns the registry rows that are provider-declared via
+ * `'auto': unknown` — the catalog the Phase 3 BusinessInfo
+ * "What applies to my program?" section asks about. Future registry
+ * additions with the same shape automatically appear in the UI
+ * without a code change there (the UI iterates this list).
+ *
+ * Returns an array of full registry rows (not just keys). Frozen at
+ * call time.
+ */
+export function listProviderDeclaredApplicabilityRequirements() {
+  return Object.values(REQUIREMENT_REGISTRY).filter(req =>
+    req
+    && req.applicability
+    && req.applicability.autoDefault === APPLICABILITY_RESULT.UNKNOWN
+  )
+}
