@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { computeProviderComplianceStateWithOverrides } from '@/lib/complianceStateLoader'
+import { findChildDisplayName } from '@/lib/children'
 import ChecklistCategoryCard from './ChecklistCategoryCard'
 
 // Categories that make sense at the per-child surface. The engine
@@ -24,12 +25,6 @@ const PER_CHILD_CATEGORIES = Object.freeze([
   'medication',
   'attendance',
 ])
-
-function findChildName(children, childId) {
-  const c = (children || []).find(x => x.id === childId)
-  if (!c) return null
-  return [c.first_name, c.last_name].filter(Boolean).join(' ') || null
-}
 
 export default function FamilyComplianceTab({ children: familyChildren }) {
   const { user } = useAuth()
@@ -54,7 +49,13 @@ export default function FamilyComplianceTab({ children: familyChildren }) {
           childIds,
         })
         if (cancelled) return
-        setProviderState(result)
+        // Phase 3 fix-forward: loader now returns { state, children }.
+        // Tolerate the older { only state } shape for any test/mock.
+        if (result && Object.prototype.hasOwnProperty.call(result, 'state')) {
+          setProviderState(result.state)
+        } else {
+          setProviderState(result)
+        }
       } catch (err) {
         if (!cancelled) setError(err?.message || 'Failed to compute compliance state')
       } finally {
@@ -107,7 +108,7 @@ export default function FamilyComplianceTab({ children: familyChildren }) {
 
       {(providerState.per_child || []).map(pc => {
         if (!pc) return null
-        const name = findChildName(familyChildren, pc.child_id)
+        const name = findChildDisplayName(familyChildren, pc.child_id)
         return (
           <section
             key={pc.child_id}

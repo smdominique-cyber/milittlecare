@@ -31,6 +31,25 @@ import {
   classifyUnknownReason,
 } from '@/lib/complianceState'
 
+// Per-reason copy for the `needs_provider_data` bucket. The
+// classifier returns the bucket; the renderer picks the right
+// message per reason code. Phase 3 live-gate finding (2026-06-05):
+// these used to show "Data anomaly — please contact support" via
+// the generic data_anomaly bucket, which is misleading — these are
+// self-fixable by the provider.
+//
+// If a new reason code joins NEEDS_PROVIDER_DATA_REASONS in
+// complianceState.js, add its copy here. A reason without explicit
+// copy falls back to the generic "needs more information on the
+// underlying record" message (still actionable, not "contact
+// support").
+const NEEDS_PROVIDER_DATA_COPY = Object.freeze({
+  'caregiver-missing-date-of-hire':
+    'Needs hire date on the staff record',
+  'no-authorization-end-on-funding-source':
+    'Needs authorization end date on the funding source',
+})
+
 // Pluggable "tracking ships with PR #N" copy per category. The
 // not_yet_modelled rows in the registry today are: drills (PR #19),
 // property (PR #21), three staff-file gaps (PR #18 mostly; the
@@ -245,8 +264,35 @@ export default function ChecklistRow({
       )
     }
 
+    if (bucket === 'needs_provider_data') {
+      // A record exists but is missing a field the provider can
+      // supply. Same visual voice as MISSING_REQUIRED rows ("Missing
+      // — needs staff record") — actionable, NOT "contact support."
+      // Per-reason copy from NEEDS_PROVIDER_DATA_COPY; fallback is
+      // generic but still actionable.
+      const message = NEEDS_PROVIDER_DATA_COPY[state.reason]
+        || 'Needs additional information on the underlying record'
+      return (
+        <RowShell
+          icon={<XCircle size={16} aria-hidden style={{ color: 'var(--clr-error, #b03a3a)' }} />}
+          color="bad"
+          label={label}
+          ruleCitation={req.rule_citation}
+          primary={
+            <span style={{ color: 'var(--clr-error, #b03a3a)' }}>
+              {message}
+            </span>
+          }
+          isType1={isType1}
+        />
+      )
+    }
+
     // data_anomaly fallthrough — engine encountered something it
-    // can't classify (unparseable date, source not loaded, etc.).
+    // genuinely can't classify (unparseable date, completion date in
+    // future, dev-bug "no-state-resolver", etc.). These ARE worth
+    // contacting support over because they imply corrupt data or an
+    // engine misuse — not provider-fixable from the UI.
     return (
       <RowShell
         icon={<HelpCircle size={16} aria-hidden style={{ color: 'var(--clr-ink-mid)' }} />}

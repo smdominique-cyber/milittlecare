@@ -24,6 +24,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useActiveModules } from '@/hooks/useActiveModules'
 import { computeProviderComplianceStateWithOverrides } from '@/lib/complianceStateLoader'
 import { CATEGORIES } from '@/lib/complianceState'
+import { findChildDisplayName } from '@/lib/children'
 import {
   resolveComplianceChecklistGate,
   CHECKLIST_GATE,
@@ -60,6 +61,11 @@ export default function ComplianceChecklistPage() {
   // licensed-home providers get bounced to /dashboard.
   const { loading: modulesLoading, modules, profile } = useActiveModules()
   const [state, setState] = useState(null)
+  // Phase 3 fix-forward (2026-06-05): the loader's
+  // computeProviderComplianceStateWithOverrides now returns
+  // { state, children } so the per-child rollup can render names
+  // instead of truncated UUIDs (the live-gate Finding #4).
+  const [children, setChildren] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -83,7 +89,16 @@ export default function ComplianceChecklistPage() {
           providerId: user.id,
         })
         if (cancelled) return
-        setState(result)
+        // Defensive against the older { only state } shape — the loader
+        // change is internal but worth tolerating for any test/mock
+        // that returns the engine state directly.
+        if (result && Object.prototype.hasOwnProperty.call(result, 'state')) {
+          setState(result.state)
+          setChildren(result.children || [])
+        } else {
+          setState(result)
+          setChildren([])
+        }
       } catch (err) {
         if (cancelled) return
         setError(err?.message || 'Failed to compute compliance state')
@@ -233,7 +248,11 @@ export default function ComplianceChecklistPage() {
           </p>
         )}
         {perChild.map(pc => (
-          <PerChildSummary key={pc.child_id} per_child={pc} />
+          <PerChildSummary
+            key={pc.child_id}
+            per_child={pc}
+            children={children}
+          />
         ))}
       </section>
 
@@ -296,9 +315,15 @@ function Totals({ state }) {
   )
 }
 
-function PerChildSummary({ per_child }) {
+function PerChildSummary({ per_child, children }) {
   const t = per_child.totals || {}
   const childId = per_child.child_id
+  // Display name from the loaded children list. Fallback to the
+  // truncated UUID only when names are genuinely missing — keeps
+  // the page interpretable even if the SELECT ever drops
+  // first_name/last_name again.
+  const displayName = findChildDisplayName(children, childId)
+    || `Child ${childId.slice(0, 8)}…`
   const summary = []
   if (t.on_file)          summary.push(`${t.on_file} on file`)
   if (t.missing_required) summary.push(`${t.missing_required} missing`)
@@ -321,7 +346,7 @@ function PerChildSummary({ per_child }) {
       }}
     >
       <div>
-        <div style={{ fontWeight: 500 }}>Child {childId.slice(0, 8)}…</div>
+        <div style={{ fontWeight: 500 }}>{displayName}</div>
         <div style={{ color: 'var(--clr-ink-mid)', fontSize: '0.875rem' }}>{detail}</div>
       </div>
       <Link

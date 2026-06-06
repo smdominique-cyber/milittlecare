@@ -2207,9 +2207,34 @@ export { PER_OCCURRENCE_CONSENT_TYPES }
 // -----------------------------------------------------------------------------
 
 /**
+ * Reasons that mean "a record exists but is missing a field the
+ * provider can supply themselves." These map to the
+ * `needs_provider_data` bucket — actionable copy, NOT
+ * "contact support." Added 2026-06-05 from a Phase 3 live-gate
+ * finding: the staff "New-hire 14-topic training" row showed up
+ * as "Data anomaly — please contact support" with reason code
+ * `caregiver-missing-date-of-hire`, when the provider could just
+ * add the hire date.
+ *
+ * Frozen list — every entry added here must have matching
+ * actionable copy in the consumer (ChecklistRow.jsx); a reason
+ * with no copy fallback would still surface the generic
+ * needs_provider_data message, but the explicit map keeps the
+ * intent legible.
+ *
+ * If a future engine addition emits a new self-fixable reason
+ * code, add it here AND add the copy in ChecklistRow's
+ * NEEDS_PROVIDER_DATA_COPY map.
+ */
+export const NEEDS_PROVIDER_DATA_REASONS = Object.freeze(new Set([
+  'caregiver-missing-date-of-hire',
+  'no-authorization-end-on-funding-source',
+]))
+
+/**
  * Classify an `unknown` state into a UI surface bucket. The checklist's
  * row renderer reads this to pick a treatment per the Phase 3 scope's
- * §5.4 mapping:
+ * §5.4 mapping (plus the §3 live-gate fix-forward):
  *
  *   - 'awaiting_input'         — provider hasn't answered the
  *                                applicability question yet (resolver
@@ -2223,6 +2248,13 @@ export { PER_OCCURRENCE_CONSENT_TYPES }
  *                                from §4 of the phase-3 scope. UI: gray
  *                                informational treatment + "tracking
  *                                ships with PR #N" copy.
+ *   - 'needs_provider_data'    — a record exists but is missing a field
+ *                                the provider can supply (e.g. a
+ *                                caregiver row without date_of_hire).
+ *                                UI: red/amber actionable, "Needs hire
+ *                                date on the staff record" copy.
+ *                                NOT "contact support." Reasons live
+ *                                in NEEDS_PROVIDER_DATA_REASONS above.
  *   - 'data_anomaly'           — every other reason (unparseable-date,
  *                                completion-date-in-future,
  *                                source-not-loaded, no-state-resolver,
@@ -2237,6 +2269,7 @@ export function classifyUnknownReason({ state } = {}) {
   const reason = state && state.reason
   if (reason === 'awaiting-provider-input') return 'awaiting_input'
   if (reason === 'feature-not-yet-shipped') return 'feature_not_yet_shipped'
+  if (reason && NEEDS_PROVIDER_DATA_REASONS.has(reason)) return 'needs_provider_data'
   return 'data_anomaly'
 }
 

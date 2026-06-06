@@ -22,6 +22,8 @@ import {
   filterByDataState,
   getChildComplianceStateForCategory,
   listProviderDeclaredApplicabilityRequirements,
+  // Phase 3 fix-forward (2026-06-05).
+  NEEDS_PROVIDER_DATA_REASONS,
 } from './complianceState'
 import { ACK_TYPES } from './acknowledgments'
 
@@ -1575,13 +1577,81 @@ describe('Phase 3 — classifyUnknownReason', () => {
     expect(classifyUnknownReason({ state })).toBe('feature_not_yet_shipped')
   })
 
-  it('any other reason → data_anomaly', () => {
-    expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'unparseable-date' } }))
-      .toBe('data_anomaly')
-    expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'source-not-loaded' } }))
-      .toBe('data_anomaly')
-    expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'completion-date-in-future' } }))
-      .toBe('data_anomaly')
+  // Phase 3 fix-forward (2026-06-05) — Finding #3 from the live gate:
+  // `caregiver-missing-date-of-hire` used to fall through to
+  // `data_anomaly` → "Data anomaly — please contact support" copy,
+  // even though the provider can fix it themselves by adding the
+  // hire date. New bucket: `needs_provider_data` with actionable copy.
+  describe('needs_provider_data bucket', () => {
+    it('caregiver-missing-date-of-hire → needs_provider_data (the live-gate finding)', () => {
+      const state = { kind: 'unknown', reason: 'caregiver-missing-date-of-hire' }
+      expect(classifyUnknownReason({ state })).toBe('needs_provider_data')
+    })
+
+    it('no-authorization-end-on-funding-source → needs_provider_data', () => {
+      const state = { kind: 'unknown', reason: 'no-authorization-end-on-funding-source' }
+      expect(classifyUnknownReason({ state })).toBe('needs_provider_data')
+    })
+
+    it('every reason in NEEDS_PROVIDER_DATA_REASONS classifies to needs_provider_data', () => {
+      for (const reason of NEEDS_PROVIDER_DATA_REASONS) {
+        const state = { kind: 'unknown', reason }
+        expect(classifyUnknownReason({ state })).toBe('needs_provider_data')
+      }
+    })
+
+    it('NEEDS_PROVIDER_DATA_REASONS is frozen (catalog cannot mutate at runtime)', () => {
+      // Set frozen on a Set means no .add() / .delete() succeed silently —
+      // a future contributor extending the set must do it in source.
+      expect(Object.isFrozen(NEEDS_PROVIDER_DATA_REASONS)).toBe(true)
+    })
+  })
+
+  describe('data_anomaly bucket — genuine engine/data issues', () => {
+    it('unparseable-date → data_anomaly (corrupt date string in record)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'unparseable-date' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('unparseable-hire-date → data_anomaly', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'unparseable-hire-date' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('unparseable-fingerprint-date → data_anomaly', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'unparseable-fingerprint-date' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('completion-date-in-future → data_anomaly', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'completion-date-in-future' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('unrecognized-miregistry-status → data_anomaly (record has unknown enum)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'unrecognized-miregistry-status' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('no-state-resolver → data_anomaly (dev/registry bug)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'no-state-resolver' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('no-requirement-supplied → data_anomaly (engine misuse)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'no-requirement-supplied' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('source-not-loaded → data_anomaly (hypothetical — not currently emitted)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'source-not-loaded' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('arbitrary unknown reason string → data_anomaly (fallthrough catches future codes)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'something-the-engine-might-emit-someday' } }))
+        .toBe('data_anomaly')
+    })
   })
 
   it('no reason → data_anomaly', () => {

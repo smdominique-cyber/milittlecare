@@ -104,12 +104,18 @@ export async function loadComplianceSourceRows({
   )
 
   // 2. Children. Either the supplied subset (resolved against this
-  //    provider) or all active children.
+  //    provider) or all active children. Phase 3 fix-forward
+  //    (2026-06-05): include `first_name, last_name` so the loader's
+  //    convenience wrappers can expose display-ready child rows to
+  //    the checklist UI (the per-child rollup on /compliance was
+  //    rendering raw UUIDs). The pure engine layer ignores these
+  //    fields — they're display data only.
   let childrenQuery = supabase
     .from('children')
     .select(
-      'id, family_id, date_of_birth, intake_completed_at, ' +
-      'records_last_reviewed_on, immunization_status, food_provider'
+      'id, family_id, first_name, last_name, date_of_birth, ' +
+      'intake_completed_at, records_last_reviewed_on, ' +
+      'immunization_status, food_provider'
     )
     .eq('user_id', providerId)
     .is('archived_at', null)
@@ -512,6 +518,13 @@ export async function setApplicabilityOverride({
  * score will too. Replaces the Phase 1 `computeProviderComplianceState`
  * for any consumer that wants overrides honored (which is everyone
  * Phase 3 onward).
+ *
+ * Return shape (Phase 3 fix-forward 2026-06-05):
+ *   { state: ProviderComplianceState, children: Array<ChildRow> }
+ * Children carry `id, first_name, last_name` plus the fields the
+ * engine reads, so UI consumers can render child names in the
+ * per-child rollup without a second fetch. Returns `null` only when
+ * the provider profile itself can't be loaded.
  */
 export async function computeProviderComplianceStateWithOverrides({
   providerId,
@@ -524,11 +537,15 @@ export async function computeProviderComplianceStateWithOverrides({
     loadApplicabilityOverrides({ providerId }),
   ])
   if (!provider) return null
-  return getProviderComplianceStatePure({ provider, children, sourceRows, overrides, now })
+  const state = getProviderComplianceStatePure({ provider, children, sourceRows, overrides, now })
+  return { state, children: children || [] }
 }
 
 /**
  * Same as above but per-child.
+ *
+ * Return shape (Phase 3 fix-forward):
+ *   { state: PerChildComplianceState, child: ChildRow }
  */
 export async function computeChildComplianceStateWithOverrides({
   providerId,
@@ -543,5 +560,6 @@ export async function computeChildComplianceStateWithOverrides({
   if (!provider) return null
   const child = children.find(c => c.id === childId)
   if (!child) return null
-  return getChildComplianceStatePure({ child, provider, sourceRows, overrides, now })
+  const state = getChildComplianceStatePure({ child, provider, sourceRows, overrides, now })
+  return { state, child }
 }
