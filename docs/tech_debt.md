@@ -860,3 +860,125 @@ Blocked-by: **finalized template body copy from a licensing consultant.** The fi
 ### `@vitest/coverage-v8` still parked
 
 The coverage reporter was parked earlier in the project (dependency-install rule). Y1 would have benefited from having it: the three RPC paths (`consent_esign_send / _complete / _rescind`) and the latent `child_parent_update` provider-notification path were all in-tree but exercised only via the live gate. A coverage report would have surfaced the un-exercised provider-notification branch in `consent_esign_complete` before the live failure. Re-evaluate the install when Y2 work starts; the package gets added the moment its absence costs another debugging round.
+
+## Phase 3 follow-ups — parked items (2026-06-05)
+
+Recorded with the Compliance Engine Phase 3 merge (`b6dd1d5` →
+migration 037 → `feature/compliance-engine-phase-3`). None are
+blockers.
+
+### Dead `program_settings.licensed_compliance` key from migration 004
+
+Confirmed during the Phase 3 live gate (Finding #1 / loading-race
+diagnosis): the JSON key `program_settings.licensed_compliance`
+declared in `supabase/migrations/004_provider_program_settings.sql`
+lines 11 + 27 is **read by zero production code**. The actual
+module gate keys directly on `profiles.license_type IN
+('family_home', 'group_home')` per `src/lib/modules.js:125-128`.
+The key has been functionally obsolete since PR #14 made
+`license_type` the compliance source of truth (per
+`docs/pr-14-license-type-foundation-scope.md:573` which flagged
+it as known-obsolete at the time).
+
+Live state today: every existing provider's profile has
+`program_settings.licensed_compliance = null` (the seed value).
+The Phase 3 gate works correctly anyway because nothing reads it.
+
+Cleanup, when desired:
+
+- A small future PR can either (a) drop the key from new profile
+  rows on signup + run a one-shot UPDATE to remove it from
+  existing rows' JSON blobs, or (b) just leave it — the JSON cost
+  is negligible and the field doesn't interfere.
+
+Recommendation: leave it for now; revisit if a future contributor
+mistakenly assumes it gates the module (a real risk — Seth read
+this key as suspicious during the live gate diagnosis). A
+defensive in-code comment near `MODULE_KEYS.LICENSED_COMPLIANCE`
+in `modules.js` saying "do not gate on
+`program_settings.licensed_compliance`" would be the cheapest
+mitigation; the migration 004 seed can stay until the next
+profile-shape migration touches `program_settings` for an
+unrelated reason.
+
+### Phase 3 test data on provider 35a6d4dd
+
+The Phase 3 live gate created residue on a real provider's account
+that should be cleared before it matters:
+
+- Applicability override rows in
+  `compliance_applicability_overrides` for some subset of the
+  three Phase 3 questions (water = applies set during the gate,
+  animals toggled, transport — plus a console-inserted row from
+  the diagnosis pass).
+- `profiles.program_settings.compliance_checklist_enabled = true`
+  was flipped during gate testing.
+
+The override rows are harmless (they're just answers to the "What
+applies to my program?" questions; the engine treats them as
+provider-declared applicability state). They are LIVE state and
+will affect the provider's checklist content. Clean before it
+matters by either:
+
+- Archiving the rows via the BusinessInfo UI ("Skip — ask me
+  later" for each question, which `archived_at = now()`s the
+  active row), OR
+- Direct SQL: `UPDATE public.compliance_applicability_overrides
+  SET archived_at = now() WHERE provider_id = '35a6d4dd-…' AND
+  archived_at IS NULL;`
+
+The opt-in flag (`compliance_checklist_enabled`) is the same
+shape every other provider would set if they opt in — no special
+test residue concern there beyond the principle "test accounts
+should reset their opt-in state if the test was synthetic." Toggle
+off via the BusinessInfo "Show the Compliance Checklist" switch
+if desired.
+
+### Phase 3.1 — actionable guidance + deep-link-to-fix-location
+
+Per Phase 3 decision #6, Phase 3 is read-only. Each row shows
+state ("Missing — needs staff record", "Tell us about this",
+"Tracking ships with PR #19", etc.) but no row carries a "fix
+this now" button or deep-link to the capture surface. The
+recommendation is to land a reusable provider-facing component
+that's adopted by:
+
+- Compliance Checklist (Phase 3 surfaces).
+- Dashboard reminder banners
+  (`src/components/dashboard/ReminderBanners.jsx` + the three
+  legacy bespoke banners).
+- Staff Training (`/staff-training` matrix).
+- MiRegistry (`/miregistry`).
+- iBilling review grid.
+- Funding document vault.
+
+The pattern: a small `<ActionLink>` (or similar) accepting a
+`{ label, to, params }` shape, rendered consistently across
+gap-state rows. Each consumer surface decides what `to` resolves
+to ("Add hire date" → caregiver edit modal,
+"Upload DHS-198" → funding document slot, etc.). Defer until a
+scope doc lands; Phase 3.1 should reuse, not invent.
+
+### `useSearchParams` / deep-link convention on FamiliesPage
+
+The Phase 3 Finding #5 fix gave `FamiliesPage` its first
+`useSearchParams` handler — reading `?family=<id>&tab=<key>` with
+a `KNOWN_TABS` validator, threading `initialTab` into
+`FamilyDetailModal`, clearing params on modal close. **Future
+deep-links into Families should use the same scheme** (and ideally
+the same `KNOWN_TABS` validator + clear-on-close helper) so the
+URL convention doesn't fragment. If a second source of deep-links
+appears, extract the read/clear helpers from `FamiliesPage` into
+a small module rather than letting each consumer reinvent.
+
+### Page-level deep-link / param-handling tests
+
+Phase 3's fix-forward added pure-helper tests
+(`resolveComplianceChecklistGate`, `displayChildName`,
+`classifyUnknownReason`) but not a mount test for `FamiliesPage`
+or `ComplianceChecklistPage` exercising the URL-param round-trip
+end-to-end. The project doesn't yet have a React Testing
+Library / `@testing-library/react` test for any page. Worth
+adding when the next deep-link consumer ships — same posture as
+Phase Y1's parent intake page (`ParentIntakeAcknowledgePage.mount.test.jsx`
+is the lone precedent and a useful template).

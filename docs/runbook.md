@@ -2285,3 +2285,319 @@ formalizes it, the migration would simply be `ALTER TABLE
 public.profiles ADD COLUMN IF NOT EXISTS comped boolean NOT
 NULL DEFAULT false;` plus a corresponding entry in this section
 referencing the production-rows backfill state.
+
+### 2026-06-05 — Migration 037: Compliance Engine Phase 3 — `compliance_applicability_overrides` table
+
+Applied to production on **2026-06-05**, manually via the Supabase
+web SQL Editor. Companion to the Phase 3 build
+(`feature/compliance-engine-phase-3` → merged into `main` at
+commit `b6dd1d5` via `git merge --no-ff`). The data layer for the
+applicability-resolution mechanism the Phase 1 engine
+(`src/lib/complianceState.js`) deliberately left as a seam — Phase 3
+fills the `overrides: Map<requirement_key, 'applies'|'does_not_apply'>`
+parameter that `resolveApplicability` has accepted since Phase 1
+shipped. **Engine API unchanged.**
+
+What the migration does:
+
+- **`compliance_applicability_overrides` table.** Per-provider rows.
+  Twelve columns:
+  - `id uuid PRIMARY KEY` (default `gen_random_uuid()`).
+  - `provider_id uuid NOT NULL` references `public.profiles(id)` on
+    delete cascade.
+  - `requirement_key text NOT NULL` — stable identifier from
+    `REQUIREMENT_REGISTRY` in `src/lib/complianceState.js`. No FK
+    enforcement because the registry lives in code; stale keys here
+    are no-ops in the loader.
+  - `mode text NOT NULL CHECK (mode IN ('applies', 'does_not_apply'))`
+    — the engine's `overrides` Map only accepts these two values.
+    **`UNKNOWN` is represented by the ABSENCE of an active row**
+    (or by `archived_at NOT NULL`); there is no third enum value
+    and there must never be one. The §2a engine invariant requires
+    an explicit affirmative basis for `applies` or `does_not_apply` —
+    silence MUST fall back to the registry's `autoDefault`.
+  - `family_id uuid` (nullable) references `public.families(id)`
+    on delete cascade. **RESERVED for forward-compat — UNUSED in
+    Phase 3.** The Phase 3 UI writes NULL. First future use case:
+    the deferred `consent_religious_objection_emergency_medical`
+    row, which is per-family by R 400.1907(1)(d) and will write
+    `family_id` when its capture flow ships. Per scope decision #2
+    — **do not remove this column as "dead."** Removing it would
+    force a migration when the per-family writer ships; shipping
+    it now is the forward-compat decision recorded in the Phase 3
+    scope doc.
+  - `child_id uuid` (nullable) references `public.children(id)` on
+    delete cascade. **RESERVED for forward-compat — UNUSED in
+    Phase 3.** For rare per-child overrides the current registry
+    doesn't require but the schema accommodates without a future
+    migration. Same "don't remove" rule.
+  - `set_at timestamptz NOT NULL DEFAULT now()`.
+  - `set_by_user_id uuid` references `auth.users(id)` on delete
+    set null.
+  - `notes text`.
+  - `archived_at timestamptz`. Soft-delete per the
+    never-hard-delete rule in `CLAUDE.md`. The UI's "Reset to auto"
+    archives the row; the loader's `WHERE archived_at IS NULL`
+    filter then makes the engine fall back to `autoDefault`.
+  - `archived_by uuid` references `auth.users(id)` on delete set null.
+  - `created_at timestamptz NOT NULL DEFAULT now()`,
+    `updated_at timestamptz NOT NULL DEFAULT now()` (the
+    `set_updated_at()` trigger from migration 001 maintains the
+    latter).
+
+- **Partial-unique index** `compliance_overrides_active_unique` on
+  `(provider_id, requirement_key, COALESCE(family_id, '0000…0000'::uuid),
+   COALESCE(child_id, '0000…0000'::uuid)) WHERE archived_at IS NULL`.
+  The `COALESCE`-to-sentinel-UUID pattern is the load-bearing
+  detail: a plain unique index would treat two NULL `family_id`
+  values as distinct (per the SQL standard), letting two active
+  provider-wide rows for the same `(provider_id, requirement_key)`
+  coexist. Coalescing both nullable scope columns to the same
+  well-known sentinel UUID closes that hole. Mirrors the
+  active-unique-index pattern from `consent_templates_active_unique`
+  + `acknowledgments_active_unique`.
+
+- **Loader index** `compliance_overrides_by_provider` on
+  `(provider_id) WHERE archived_at IS NULL` — supports the loader's
+  by-provider fetch.
+
+- **`updated_at` trigger** wires the existing `public.set_updated_at()`
+  function from migration 001.
+
+- **RLS.** Enabled (`relrowsecurity = true`). Three policies:
+  - `SELECT` for `authenticated` USING `provider_id = auth.uid()`.
+  - `INSERT` for `authenticated` WITH CHECK `provider_id = auth.uid()`.
+  - `UPDATE` for `authenticated` USING + WITH CHECK
+    `provider_id = auth.uid()`.
+  - **No DELETE policy.** Soft-delete only via `archived_at` per
+    `CLAUDE.md`.
+  - Nothing granted to `anon` or `public`.
+
+- **Zero functions.** This is a pure table + RLS migration, so
+  there is no SECURITY DEFINER trailer to apply (the canonical
+  `revoke all / revoke from anon / grant to authenticated` triplet
+  is for functions; this migration creates none). The recurring
+  anon-grant-on-CREATE trap that bit 033/034/035 does not apply
+  here.
+
+Dependencies — sequential after migration 036. No data dependency
+beyond `auth.users` (FKs on `set_by_user_id` + `archived_by`),
+`public.profiles` (FK on `provider_id`), `public.families` and
+`public.children` (FKs on the reserved scope columns).
+
+Editor note — single-file migration, ~340 lines including the
+verbose header carrying the verification queries. No long seed
+INSERTs. The web SQL Editor long-statement bug did not bite.
+
+Verification — the five header queries (a)-(e) run by Seth in the
+Supabase web SQL Editor on **2026-06-05**, all passed:
+
+1. **(a) Table + columns** — `information_schema.columns` returned
+   the 12 columns with the expected types and nullability
+   (including the two reserved forward-compat ones).
+2. **(b) CHECK constraint** — `pg_get_constraintdef(oid)` for
+   `compliance_overrides_mode_check` returned
+   `CHECK ((mode = ANY (ARRAY['applies'::text, 'does_not_apply'::text])))`.
+3. **(c) Indexes** — both indexes present with the expected
+   `WHERE archived_at IS NULL` predicates.
+4. **(d) RLS policies** — `pg_policy` returned three rows
+   (SELECT/INSERT/UPDATE for `authenticated`); no DELETE policy.
+5. **(e) RLS enforced** — `pg_class.relrowsecurity = true`.
+
+What ships with the migration (the Phase 3 feature build —
+`feature/compliance-engine-phase-3` + the three fix-forward commits
+below, merged at `b6dd1d5`):
+
+- **The applicability input surface.** New "What applies to my
+  program?" section in `BusinessInfoPage`
+  (`src/components/compliance/ApplicabilityQuestionsSection.jsx`).
+  Registry-driven question list — three questions today (the rows
+  in `REQUIREMENT_REGISTRY` whose `applicability.autoDefault ===
+  APPLICABILITY_RESULT.UNKNOWN`):
+  - **Do you routinely transport children?** →
+    `consent_transportation_routine_annual` (R 400.1952(1)(a)).
+  - **Do you have a pool, kiddie pool, or other water feature on
+    your premises?** →
+    `consent_water_activities_on_premises_seasonal`
+    (R 400.1934(10)(b)).
+  - **Do you have any animals on the premises?** →
+    `property_animal_notification` (R 400.1937). Asked NOW even
+    though the substrate ships with PR #21 — the answer pre-resolves
+    applicability for when the property substrate lands.
+  Three answers per question: **Yes** (writes `mode='applies'`),
+  **No** (writes `mode='does_not_apply'`), **Skip — ask me later**
+  (archives the active row; NEVER translates to `does_not_apply`
+  — explicit code comment cites §2a).
+- **Provider-wide checklist** at the new `/compliance` route
+  (`src/pages/ComplianceChecklistPage.jsx`). Module-gated by
+  `MODULE_KEYS.LICENSED_COMPLIANCE` + the opt-in flag.
+  Provider-level categories + per-child rollup summary.
+  Browser-print supported for inspection prep.
+- **Per-family Compliance tab** in the Families modal
+  (`src/components/compliance/FamilyComplianceTab.jsx`). Per-child
+  category cards. Same gates.
+- **Shared rendering** — `ChecklistRow.jsx` +
+  `ChecklistCategoryCard.jsx`. Pattern-E `not_yet_modelled` rows
+  render the Option A "Tracking ships with PR #N — keep paper
+  records for now. An auditor will ask to see them." treatment
+  (informational gray, 🔧 icon — distinct from `awaiting-provider-
+  input` amber + "Tell us about this" deep-link).
+- **Sidebar entry.** New "Compliance Checklist" item under the
+  Compliance section. Hidden when the opt-in flag is off OR when
+  the provider isn't a licensed home (LEPs see nothing).
+- **Opt-in storage** — `profiles.program_settings.compliance_checklist_enabled`
+  (boolean JSONB key). Default OFF (key absent) for existing
+  providers during rollout; flipped via the Business Info toggle.
+
+Phase 3 live verification gate — the two principle-bearing checks
+both passed against a real `group_home` provider's account:
+
+1. **§2a invariant (unresolved-stays-unknown).** Walked every
+   category. Unanswered applicability questions surfaced the
+   corresponding requirement as `unknown` reason
+   `'awaiting-provider-input'` (amber, "Tell us about this", deep-
+   link to BusinessInfo). **No row resolved to `not_applicable`
+   without an explicit affirmative basis** (regulatory-universal
+   exclusion, data-inferred negative, or `mode='does_not_apply'`
+   override).
+2. **§4 Option A (tracking-not-yet-shipped presentation).** Drill
+   rows, property rows, and the three staff-file-gap rows all
+   render with the 🔧 "Tracking ships with PR #N — keep paper
+   records for now. An auditor will ask to see them." treatment.
+   Not hidden. Not red. Not "Tell us about this."
+
+Four bugs the live gate caught + the same PR fixed (these are the
+load-bearing record of "what we learned from the gate"):
+
+**Bug 1 — loading-race redirect** (commit `430f96b`). `/compliance`
+redirected an opted-in `group_home` provider to `/dashboard`
+because the page destructured `{ modules, profile }` from
+`useActiveModules` but ignored `loading`. On the first render
+`modules = Set(['core'])` (the placeholder) and `profile = null`,
+so the gate evaluated `!modules.has(LICENSED_COMPLIANCE) → true`
+and fired `<Navigate to="/dashboard" replace />` synchronously —
+the page never re-rendered with the loaded data.
+
+Fix: extracted the gate logic into
+`src/lib/complianceChecklistVisibility.js` —
+`resolveComplianceChecklistGate({ loading, modules, profile }) →
+'loading' | 'redirect_dashboard' | 'redirect_optin' | 'allowed'`
+plus the boolean convenience `isComplianceChecklistVisible(...)`.
+Safe-failure default `loading = true`. The page renders a Loading…
+state for `'loading'` and only navigates for `redirect_*`. Sidebar
+adopts the same helper so the three surfaces (sidebar / page /
+per-family tab) share one source of truth.
+
+**Root-cause confirmation worth recording:** the gate keys on
+`profiles.license_type IN ('family_home', 'group_home')` directly
+per `modules.js:125-128` — NOT on `program_settings.licensed_compliance`,
+which is a vestigial JSON key from migration 004's seed read by
+zero production code. The feature activates correctly for all real
+licensed providers; `license_type` is set via the onboarding wizard
+(`src/lib/onboarding.js:510-517` → `getWriteTargets('license_status',
+…)`), the BusinessInfo Licensing tab
+(`BusinessInfoPage.jsx:344` → `saveLicenseStatus`), or the
+`LicenseStatusPromptModal` (PR #5 fallback). The
+`licensed_compliance` key in `program_settings` is now confirmed
+dead code; flagged in `docs/tech_debt.md` for future cleanup.
+
+Secondary bug 1.5 found while diagnosing: `FamiliesPage`'s
+`licenseeProfile` SELECT at line ~115 was missing `program_settings`,
+so the per-family Compliance tab's opt-in check
+(`licenseeProfile?.program_settings?.compliance_checklist_enabled
+=== true`) always evaluated `undefined === true` → false. Tab never
+appeared even after the page redirect was fixed. One-word fix in
+the same commit (`430f96b`); test in
+`complianceChecklistVisibility.test.js` named "the FamiliesPage
+SELECT bug — fixed in same PR" so the regression is named.
+
+**Bug 2 — per-child rollup raw UUIDs** (commit `7d8c61e`,
+Finding #4). `/compliance` per-child rollup rendered
+"Child b4cab3d3…" instead of the child's name — the loader's
+children SELECT didn't include `first_name` / `last_name` (the
+pure engine doesn't need them) and the convenience wrappers
+discarded the children list entirely.
+
+Fix: loader's children SELECT now includes `first_name, last_name`.
+Convenience wrappers return `{ state, children }` (provider) /
+`{ state, child }` (per-child) so consumers can render names from
+the same fetch. New `displayChildName(child)` +
+`findChildDisplayName(children, childId)` in `src/lib/children.js`,
+mirroring the `first_name last_name` convention used across
+`FamiliesPage` cards. `FamilyComplianceTab` dropped its inline
+`findChildName` and adopted the shared helper.
+
+**Bug 3 — "contact support" for self-fixable causes** (commit
+`7d8c61e`, Finding #3). The staff "New-hire 14-topic training"
+row showed "Data anomaly — please contact support" with reason
+`'caregiver-missing-date-of-hire'` — misleading; the provider can
+add the hire date themselves. Root cause: `classifyUnknownReason`
+only special-cased `'awaiting-provider-input'` and
+`'feature-not-yet-shipped'`; every other reason fell through to
+`data_anomaly` → "contact support" copy.
+
+Fix: full reason-code audit done across every `reason:` literal in
+`complianceState.js`. New exported frozen Set
+`NEEDS_PROVIDER_DATA_REASONS` (catalog of self-fixable reasons:
+`'caregiver-missing-date-of-hire'` +
+`'no-authorization-end-on-funding-source'`).
+`classifyUnknownReason` returns a new `'needs_provider_data'`
+bucket for any reason in that Set. `ChecklistRow.jsx` renders the
+bucket with reason-specific actionable copy from
+`NEEDS_PROVIDER_DATA_COPY` ("Needs hire date on the staff record"
+/ "Needs authorization end date on the funding source") in the
+same red/`bad`-color voice as `MISSING_REQUIRED` rows. **Genuine
+data anomalies (unparseable dates, dev bugs, completion dates in
+future, etc.) correctly still say "contact support"** — that's the
+right copy for "the data on the underlying record is corrupt." Tests
+exercise every reason code the engine actually emits, plus the
+catalog-frozen invariant.
+
+**Bug 4 — "Open child's compliance tab →" deep-link opened
+nothing** (commit `b771e56`, Finding #5). On both ends of the wire:
+(a) the link emitted `/families?child=<id>&tab=compliance`, but
+`FamiliesPage` opens its modal per FAMILY, not per child — without
+`family_id` the page has no way to resolve which family modal to
+open; (b) `FamiliesPage` had **zero query-param handling** (grep
+for `useSearchParams` / `URLSearchParams` / `location.search` /
+`searchParams` / `useLocation` returned 0 matches), so the link
+sent params the page never read.
+
+Fix: link in `PerChildSummary` now resolves `child_id → family_id`
+from the loaded children list and emits
+`/families?family=<fid>&child=<cid>&tab=compliance`. `FamiliesPage`
+gained its first `useSearchParams` handler — reads `?family=<id>`
+after families load, opens the matching modal via
+`setSelectedFamily(match)`, reads `?tab=<key>`, validates against a
+`KNOWN_TABS` Set (unknown values fall back to `'overview'`), threads
+as `initialTab` prop into `FamilyDetailModal`. The modal's `onClose`
+clears the deep-link params via `clearDeepLinkParams()` — refreshing
+after close doesn't re-trigger the deep-link. Gates respected
+end-to-end: a deep-link to a non-eligible family lands gracefully
+on an empty modal body (button + content both gated).
+
+Tests — Phase 3 added 28 new tests across the build; the four
+fix-forward commits added 23, 17, and (commit `b771e56`) zero
+additional pure-logic tests for the page-level param handler.
+Total: **1204 → 1272 (+68 across the Phase 3 arc)**. Critical
+proofs:
+- §2a invariant: empty overrides on each of the three
+  provider-declared rows → applicability = UNKNOWN, never
+  `DOES_NOT_APPLY`.
+- Override round-trip exercised for all three rows × all three
+  modes (`applies`, `does_not_apply`, absent/archived).
+- Pattern E + override = applies: `property_animal_notification`
+  with `mode='applies'` correctly returns `state.kind='unknown'`,
+  `reason='feature-not-yet-shipped'` (the registry row's resolver
+  IS Pattern E, so the applicability override doesn't unblock the
+  state until the substrate ships).
+- `resolveComplianceChecklistGate`: explicit named "LOADING:
+  returns 'loading' while useActiveModules is loading (the Phase 3
+  bug)" test case.
+- `classifyUnknownReason`: every reason code the engine actually
+  emits is covered; catalog-frozen invariant locked.
+
+Post-merge — `feature/compliance-engine-phase-3` merged into `main`
+at commit `b6dd1d5` via `git merge --no-ff`, pushed
+**2026-06-05**. Vercel production deploy triggered by the push.
+No rollback executed.
