@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useRole } from '@/hooks/useRole'
 import { useActiveModules } from '@/hooks/useActiveModules'
 import { MODULE_KEYS } from '@/lib/modules'
+import { isComplianceChecklistVisible } from '@/lib/complianceChecklistVisibility'
 import { supabase } from '@/lib/supabase'
 import { InstallLink } from '@/components/ui/InstallBanner'
 import {
@@ -46,14 +47,18 @@ function getInitials(name) {
 export default function Sidebar({ isOpen = false }) {
   const { user, signOut } = useAuth()
   const { role, isLicensee, licenseeId } = useRole()
-  const { modules, profile } = useActiveModules()
+  const { loading: modulesLoading, modules, profile } = useActiveModules()
   const navigate = useNavigate()
   const [messagingEnabled, setMessagingEnabled] = useState(false)
-  // Phase 3 decision #8 — opt-in flag for the Compliance Checklist
-  // sidebar entry. Absent → OFF (existing-provider default during
-  // rollout); explicit true → ON (provider opted in via Business Info).
-  const complianceChecklistEnabled =
-    profile?.program_settings?.compliance_checklist_enabled === true
+  // Phase 3 — Compliance Checklist sidebar entry. Single source of
+  // truth in src/lib/complianceChecklistVisibility.js so the Sidebar,
+  // the /compliance page, and the per-family Compliance tab all agree.
+  // Returns true ONLY when licensed-home + opted-in + not loading.
+  const complianceChecklistEnabled = isComplianceChecklistVisible({
+    loading: modulesLoading,
+    modules,
+    profile,
+  })
 
   const fullName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'You'
   const email = user?.email || ''

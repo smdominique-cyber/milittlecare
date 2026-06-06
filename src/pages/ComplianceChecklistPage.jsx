@@ -22,9 +22,12 @@ import { Link, Navigate } from 'react-router-dom'
 import { Printer } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useActiveModules } from '@/hooks/useActiveModules'
-import { MODULE_KEYS } from '@/lib/modules'
 import { computeProviderComplianceStateWithOverrides } from '@/lib/complianceStateLoader'
 import { CATEGORIES } from '@/lib/complianceState'
+import {
+  resolveComplianceChecklistGate,
+  CHECKLIST_GATE,
+} from '@/lib/complianceChecklistVisibility'
 import ChecklistCategoryCard from '@/components/compliance/ChecklistCategoryCard'
 
 // Render order — provider-level categories first (the ones surfaced
@@ -48,20 +51,29 @@ const PROVIDER_LEVEL_HIDE = Object.freeze(['child_files', 'consents', 'medicatio
 
 export default function ComplianceChecklistPage() {
   const { user } = useAuth()
-  const { modules, profile } = useActiveModules()
+  // CRITICAL: destructure `loading` from the hook. The Phase 3 live
+  // gate caught this — without it, the very first render evaluates
+  // gates against the not-yet-loaded `modules` Set (just {core}) and
+  // a null `profile`, both of which fail the licensed-home check, and
+  // <Navigate replace /> fires synchronously. The page never gets a
+  // chance to re-render with the loaded profile, so legitimate
+  // licensed-home providers get bounced to /dashboard.
+  const { loading: modulesLoading, modules, profile } = useActiveModules()
   const [state, setState] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  // Module gate — licensed homes only. Sidebar already filters this;
-  // belt-and-suspenders against a direct URL hit.
-  const isLicensedGated = !modules?.has(MODULE_KEYS.LICENSED_COMPLIANCE)
-  // Phase 3 decision #8 — opt-in flag. Sidebar already hides the entry
-  // when off; this redirect catches direct URL navigation.
-  const isOptedIn = profile?.program_settings?.compliance_checklist_enabled === true
+  // Pure gate helper — same logic the Sidebar + FamiliesPage tab
+  // consume. Returns one of: 'loading' | 'redirect_dashboard' |
+  // 'redirect_optin' | 'allowed'.
+  const gate = resolveComplianceChecklistGate({
+    loading: modulesLoading,
+    modules,
+    profile,
+  })
 
   useEffect(() => {
-    if (!user || isLicensedGated || !isOptedIn) return
+    if (!user || gate !== CHECKLIST_GATE.ALLOWED) return
     let cancelled = false
     async function load() {
       setLoading(true)
@@ -81,12 +93,24 @@ export default function ComplianceChecklistPage() {
     }
     load()
     return () => { cancelled = true }
-  }, [user, isLicensedGated, isOptedIn])
+  }, [user, gate])
 
-  if (isLicensedGated) {
+  if (gate === CHECKLIST_GATE.LOADING) {
+    return (
+      <div style={{ padding: 'var(--space-4)' }}>
+        <h1 style={{
+          fontFamily: 'var(--font-display)',
+          fontSize: '1.5rem',
+          fontWeight: 500,
+        }}>Compliance Checklist</h1>
+        <p style={{ color: 'var(--clr-ink-mid)' }}>Loading…</p>
+      </div>
+    )
+  }
+  if (gate === CHECKLIST_GATE.REDIRECT_DASHBOARD) {
     return <Navigate to="/dashboard" replace />
   }
-  if (!isOptedIn) {
+  if (gate === CHECKLIST_GATE.REDIRECT_OPTIN) {
     // Licensed home but hasn't opted in — send to Business Info where
     // the toggle lives. Avoids a "broken page" for someone who
     // bookmarked /compliance before opting in.
@@ -227,10 +251,11 @@ export default function ComplianceChecklistPage() {
       </p>
     </div>
   )
-  // Silence unused-import warning in code-only style; CATEGORIES is
-  // referenced symbolically in ChecklistCategoryCard's lookup.
+  // CATEGORIES is referenced symbolically inside ChecklistCategoryCard;
+  // imported here so consumers see one canonical import surface.
+  // (The void expression that used to live here was stale lint-
+  // suppression scaffolding — removed on the Phase 3 redirect-race fix.)
   void CATEGORIES   // eslint-disable-line no-unused-expressions
-  void profile      // eslint-disable-line no-unused-expressions
 }
 
 function Totals({ state }) {

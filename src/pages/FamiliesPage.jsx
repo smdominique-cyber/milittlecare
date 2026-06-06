@@ -112,7 +112,12 @@ export default function FamiliesPage() {
       supabase.from('children').select('*').eq('user_id', licenseeId),
       supabase.from('guardians').select('*').eq('user_id', licenseeId).is('archived_at', null),
       supabase.from('emergency_contacts').select('*').eq('user_id', licenseeId),
-      supabase.from('profiles').select('id, license_type, home_built_before_1978, firearms_on_premises').eq('id', licenseeId).maybeSingle(),
+      // Phase 3 fix-forward (2026-06-05) — `program_settings` was missing
+      // from this SELECT, so the per-family Compliance tab's opt-in
+      // check (`licenseeProfile?.program_settings?.compliance_checklist_enabled`)
+      // always evaluated `undefined === true` → false. Caught during the
+      // Phase 3 live gate.
+      supabase.from('profiles').select('id, license_type, home_built_before_1978, firearms_on_premises, program_settings').eq('id', licenseeId).maybeSingle(),
     ])
     setFamilies(f.data || [])
     setChildren(c.data || [])
@@ -420,7 +425,15 @@ function FamilyDetailModal({ userId, family, licenseeProfile, children: initialC
             </button>
             {/* Phase 3 — per-family Compliance tab. Licensed homes
                 only AND opt-in (decision #8: default OFF during
-                rollout; provider enables in Business Info). */}
+                rollout; provider enables in Business Info).
+                Logically equivalent to
+                isComplianceChecklistVisible() — kept inline because
+                FamiliesPage doesn't use useActiveModules and the
+                license_type check is the direct underlying signal
+                the module activation in modules.js:125-128 keys on.
+                FamiliesPage's own loadAll has resolved by the time
+                a family modal is interactable, so there's no
+                loading race here. */}
             {(licenseeProfile?.license_type === 'family_home' ||
               licenseeProfile?.license_type === 'group_home') &&
              licenseeProfile?.program_settings?.compliance_checklist_enabled === true && (
