@@ -1413,7 +1413,13 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   caregiver_discipline_policy_ack_at_hire: Object.freeze({
     key: 'caregiver_discipline_policy_ack_at_hire',
     category: 'staff_files',
-    rule_citation: 'R 400.1923',
+    // Was 'R 400.1923' — that's the new-hire training rule, NOT the
+    // staff discipline policy acknowledgment. Corrected 2026-06-06
+    // per Seth's verification pass against the 2026 sources. The
+    // staff acknowledgment of the home's discipline policy at hire
+    // is governed by R 400.1906(1)(e)(iii); the rule on which the
+    // PR #17 capture surface will be built.
+    rule_citation: 'R 400.1906(1)(e)(iii)',
     label: 'Staff acknowledgment of discipline policy (at hire)',
     subject_type: 'caregiver',
     data_authority: 'milittlecare',
