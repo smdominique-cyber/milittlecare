@@ -118,8 +118,14 @@ function makeSourceRows(overrides = {}) {
 // -----------------------------------------------------------------------------
 
 describe('REQUIREMENT_REGISTRY — structural', () => {
-  it('has exactly 52 rows (row 19 religious-objection deferred)', () => {
-    expect(REGISTRY_ROW_COUNT).toBe(52)
+  it('has exactly 51 rows (row 19 religious-objection deferred; funding_dhs_198_on_file removed 2026-06-06)', () => {
+    // Pre-correction-pass count was 52. The CDC-layer correctness
+    // pass (docs/Compliance Corrections.md Part 2) removed
+    // funding_dhs_198_on_file because the DHS-198 is MDHHS's
+    // authorization notice TO the provider, not a document the
+    // provider fulfills — it never belonged on a compliance
+    // checklist.
+    expect(REGISTRY_ROW_COUNT).toBe(51)
   })
 
   it('every row has the required shape', () => {
@@ -661,7 +667,12 @@ describe('Pattern C — CDC fingerprint reprint currency', () => {
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
   })
 
-  it('licensed home → does_not_apply (LEP-only)', () => {
+  // CORRECTED 2026-06-06 per docs/Compliance Corrections.md Part 6
+  // — the 5-year reprint cycle is NOT LEP-only. Licensed
+  // Family/Group Home providers with CDC are equally subject.
+  // Was: licensed home + CDC → not_applicable.
+  // Now: licensed home + CDC → on_file/expired/etc. per fingerprint date.
+  it('licensed home with CDC + recent fingerprint → on_file (Part 6 correction)', () => {
     const state = getRequirementState({
       requirement,
       provider: makeLicensedProvider({ fingerprint_date: '2024-01-01' }),
@@ -670,7 +681,41 @@ describe('Pattern C — CDC fingerprint reprint currency', () => {
       }),
       now: FIXED_NOW,
     })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+  })
+
+  it('licensed home with CDC + fingerprint 6 years ago → expired (Part 6 correction)', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider({ fingerprint_date: '2020-01-01' }),
+      sourceRows: makeSourceRows({
+        funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.EXPIRED)
+  })
+
+  it('licensed home without CDC → not_applicable (CDC-gated, not LEP-gated)', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider({ fingerprint_date: '2024-01-01' }),
+      sourceRows: makeSourceRows({ funding_sources: [] }),
+      now: FIXED_NOW,
+    })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
+  })
+
+  it('unanswered license_type AND is_license_exempt → unknown (§2a)', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: { id: 'p-1', license_type: null, is_license_exempt: null, fingerprint_date: '2024-01-01' },
+      sourceRows: makeSourceRows({
+        funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
   })
 
   it('LEP with CDC + missing fingerprint → missing_required', () => {
@@ -1089,43 +1134,16 @@ describe('Staff files category', () => {
 // -----------------------------------------------------------------------------
 
 describe('Funding docs + CDC compliance', () => {
-  it('funding_dhs_198_on_file — no CDC source → not_applicable', () => {
-    const requirement = REQUIREMENT_REGISTRY.funding_dhs_198_on_file
-    const state = getRequirementState({
-      requirement,
-      provider: makeLicensedProvider(),
-      sourceRows: makeSourceRows({ funding_sources: [] }),
-      now: FIXED_NOW,
-    })
-    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
-  })
+  // funding_dhs_198_on_file tests REMOVED 2026-06-06 per
+  // docs/Compliance Corrections.md Part 2 — the registry row was
+  // deleted because the DHS-198 is MDHHS's authorization notice TO
+  // the provider, not an obligation the provider fulfills.
 
-  it('funding_dhs_198_on_file — CDC source + doc → on_file', () => {
-    const requirement = REQUIREMENT_REGISTRY.funding_dhs_198_on_file
-    const state = getRequirementState({
-      requirement,
-      provider: makeLicensedProvider(),
-      sourceRows: makeSourceRows({
-        funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
-        funding_documents: [{ id: 'doc-1', funding_source_id: 'fs-1', document_type: 'dhs_198', archived_at: null, retention_until: '2030-01-01' }],
-      }),
-      now: FIXED_NOW,
-    })
-    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
-  })
-
-  it('funding_dhs_198_on_file — CDC source + no doc → missing_required', () => {
-    const requirement = REQUIREMENT_REGISTRY.funding_dhs_198_on_file
-    const state = getRequirementState({
-      requirement,
-      provider: makeLicensedProvider(),
-      sourceRows: makeSourceRows({
-        funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
-        funding_documents: [],
-      }),
-      now: FIXED_NOW,
-    })
-    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+  it('REQUIREMENT_REGISTRY does not contain funding_dhs_198_on_file (regression lock)', () => {
+    // Locks the deletion. If a future contributor re-adds the row
+    // without re-checking the CDC-layer corrections rationale,
+    // this test fails first.
+    expect(REQUIREMENT_REGISTRY.funding_dhs_198_on_file).toBeUndefined()
   })
 
   it('cdc_authorization_currency — future end → on_file', () => {
@@ -1216,6 +1234,27 @@ describe('provider_miregistry_level_2_currency (Blocker 1 resolution)', () => {
       now: FIXED_NOW,
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+  })
+
+  // 2026-06-06 reframe (docs/Compliance Corrections.md Part 4) —
+  // Level 2 is OPTIONAL (pay-rate tier), NOT a compliance
+  // delinquency. When Level 2 "expires," the consequence is a drop
+  // to Level 1 base pay — no compliance violation, no CDC account
+  // closure. The engine has no `advisory` state kind today; the
+  // closest existing knob is severity, so this row uses
+  // severity='low'. The expired STATE_KIND is preserved so the row
+  // accurately reflects "your Level 2 has expired" — but consumers
+  // SHOULD render this row in the soft/subtle treatment per the
+  // Phase 3.1 component contract's severity ladder.
+
+  it('severity is low (advisory tier — 2026-06-06 reframe)', () => {
+    expect(requirement.severity).toBe('low')
+  })
+
+  it('rule citation is the CDC Scholarship Handbook (advisory framing)', () => {
+    expect(requirement.rule_citation).toMatch(/CDC Scholarship Handbook/i)
+    expect(requirement.rule_citation).toMatch(/pay-rate/i)
+    expect(requirement.rule_citation).not.toMatch(/^LEP Handbook/i)
   })
 })
 
