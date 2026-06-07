@@ -1448,13 +1448,34 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   provider_miregistry_annual_ongoing: Object.freeze({
     key: 'provider_miregistry_annual_ongoing',
     category: 'miregistry',
-    rule_citation: 'LEP Handbook p.12 (Dec 16 deadline)',
+    rule_citation: 'CDC Scholarship Handbook for LEP — Annual Ongoing Health & Safety Training (Dec 16 deadline)',
     label: 'MiRegistry annual ongoing training (Dec 16 deadline)',
     subject_type: 'provider',
     data_authority: 'miregistry',  // Type 1 — verify in MiRegistry
     gsq_relevant: false,
     severity: 'critical',
     data_state: 'shipped',
+    // FIRST-YEAR LEP NUANCE (2026-06-06 CDC-layer correctness pass
+    // Part 3). The obligation begins the calendar year AFTER
+    // enrollment/reenrollment — a brand-new LEP is not subject to
+    // the Dec 16 deadline in their first partial year. The engine
+    // CANNOT precisely identify first-year LEPs today: no field on
+    // `profiles` records the LEP enrollment date with MDHHS, and
+    // `profile.created_at` is when the MILittleCare account was
+    // created (a long-time LEP who joined MILC last week would
+    // falsely read as "first year"). Two paths forward, neither
+    // taken in this pass:
+    //   - Add `profiles.lep_enrollment_calendar_year` via a future
+    //     migration + a Business Info question; the applicability
+    //     here would then compare it to the current year.
+    //   - Render the nuance in the in-app GUIDANCE COPY only ("If
+    //     you enrolled this calendar year, the Dec 16 deadline
+    //     begins next year — verify against your records"). The
+    //     consultant worksheet entry for F1 documents this; the
+    //     guidance content map (Phase 3.1) will carry it.
+    // The applicability below stays LEP-gated; the first-year case
+    // is handled in guidance, not in engine state, until a
+    // migration is approved.
     applicability: {
       // License-exempt only.
       inferFromData: ({ provider }) => {
@@ -1487,12 +1508,29 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   provider_miregistry_level_2_currency: Object.freeze({
     key: 'provider_miregistry_level_2_currency',
     category: 'miregistry',
-    rule_citation: 'LEP Handbook p.13 (rolling 10-hour)',
-    label: 'MiRegistry Level 2 currency (rolling expiry)',
+    rule_citation: 'CDC Scholarship Handbook for LEP (Level 2 pay-rate tier)',
+    label: 'MiRegistry Level 2 currency (advisory — pay-rate tier)',
     subject_type: 'provider',
     data_authority: 'miregistry',  // Type 1
     gsq_relevant: false,
-    severity: 'high',
+    // ADVISORY, not a compliance delinquency. Level 2 is OPTIONAL —
+    // an LEP earns the higher pay tier by completing 10 approved
+    // training hours/year. When the Level 2 clock "expires," the
+    // consequence is the provider DROPS TO THE LEVEL 1 (base) PAY
+    // RATE — they have NOT fallen out of compliance, the CDC
+    // account is NOT closed, and they are NOT in violation. The
+    // engine doesn't have an explicit `advisory` state kind today;
+    // the closest existing knob is severity, so this row uses
+    // severity='low' to render in the subtle/link-style treatment
+    // per the Phase 3.1 component contract (§1) rather than the
+    // amber/red of a real delinquency. Re-cited 2026-06-06 from
+    // "LEP Handbook p.13" to the CDC Scholarship Handbook framing
+    // because the obligation is CDC-pay-rate-tier, not a
+    // licensing/compliance rule.
+    //
+    // If a future engine pass adds an explicit `informational` /
+    // `advisory` state kind, this row should adopt it.
+    severity: 'low',
     data_state: 'shipped',
     applicability: {
       // License-exempt AND currently at Level 2.
@@ -1519,44 +1557,15 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
 
   // ─── funding_docs + cdc_compliance (4) ───────────────────────────
 
-  funding_dhs_198_on_file: Object.freeze({
-    key: 'funding_dhs_198_on_file',
-    category: 'funding_docs',
-    rule_citation: 'CDC Handbook',
-    label: 'DHS-198 on file (per CDC funding source)',
-    subject_type: 'funding_source',
-    data_authority: 'milittlecare',
-    gsq_relevant: false,
-    severity: 'high',
-    data_state: 'shipped',
-    applicability: {
-      inferFromData: ({ sourceRows }) => {
-        const fs = (sourceRows.funding_sources || []).filter(f => !f.archived_at && f.type === 'cdc_scholarship')
-        return fs.length > 0 ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
-      },
-    },
-    state_resolver: ({ sourceRows, now }) => {
-      const cdcSources = (sourceRows.funding_sources || []).filter(f => !f.archived_at && f.type === 'cdc_scholarship')
-      const docs = (sourceRows.funding_documents || []).filter(d => !d.archived_at && d.document_type === 'dhs_198')
-      let worst = { kind: REQUIREMENT_STATE_KIND.ON_FILE }
-      const rank = { on_file: 0, expired: 1, missing_required: 2, unknown: 3 }
-      for (const fs of cdcSources) {
-        const doc = docs.find(d => d.funding_source_id === fs.id)
-        let state
-        if (!doc) state = { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED }
-        else {
-          const retentionMs = parseTimestampMs(doc.retention_until + 'T23:59:59Z')
-          if (retentionMs != null && retentionMs <= now.getTime()) {
-            state = { kind: REQUIREMENT_STATE_KIND.EXPIRED, evidence_id: doc.id, expired_at: doc.retention_until }
-          } else {
-            state = { kind: REQUIREMENT_STATE_KIND.ON_FILE, evidence_id: doc.id }
-          }
-        }
-        if ((rank[state.kind] ?? 3) > (rank[worst.kind] ?? 3)) worst = state
-      }
-      return worst
-    },
-  }),
+  // funding_dhs_198_on_file — REMOVED 2026-06-06 per the CDC-layer
+  // correctness pass (docs/Compliance Corrections.md Part 2). The
+  // DHS-198 is MDHHS's authorization NOTICE TO the provider, not a
+  // document the provider fills out, signs, or uploads — it's an
+  // INPUT they receive, not an obligation they fulfill, so it never
+  // belonged on a compliance checklist. The funding-document vault
+  // feature (migration 008 + FundingDocumentSlot UI + funding-docs
+  // reminder catalog rows) still ships and remains valuable; it just
+  // doesn't surface as a compliance-checklist requirement.
 
   funding_enrollment_agreement_on_file: Object.freeze({
     key: 'funding_enrollment_agreement_on_file',
@@ -1637,23 +1646,33 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   cdc_fingerprint_reprint_currency: Object.freeze({
     key: 'cdc_fingerprint_reprint_currency',
     category: 'cdc_compliance',
-    rule_citation: 'CDC Handbook (5-year cycle, LEP)',
-    label: 'CDC fingerprint reprint currency (5-year cycle, LEP only)',
+    rule_citation: 'CDC Scholarship Handbook (5-year cycle, all CDC providers)',
+    label: 'CDC fingerprint reprint currency (5-year cycle)',
     subject_type: 'provider',
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'high',
     data_state: 'shipped',
     applicability: {
+      // CORRECTED 2026-06-06 per CDC-layer correctness pass Part 6.
+      // Pre-correction: this row was LEP-only. That was wrong — per
+      // the CDC Scholarship Handbook, all CDC providers/staff/household
+      // members fingerprinted prior to April 2024 need a 5-year
+      // re-fingerprint. Licensed Family/Group Home providers with CDC
+      // are equally subject; the rule is CDC-tied, not LEP-tied. The
+      // applicability below now gates on CDC enrollment only (plus
+      // license-status being answered, otherwise unknown).
       inferFromData: ({ provider, sourceRows }) => {
         if (!provider) return APPLICABILITY_RESULT.UNKNOWN
-        const isLEP = provider.is_license_exempt === true || provider.license_type === 'license_exempt'
-        if (!isLEP) {
-          if (provider.is_license_exempt === false || LICENSED_HOME_LICENSE_TYPES.includes(provider.license_type)) {
-            return APPLICABILITY_RESULT.DOES_NOT_APPLY
-          }
-          return APPLICABILITY_RESULT.UNKNOWN
-        }
+        // license_type AND is_license_exempt are both unanswered →
+        // we can't tell whether this provider exists in a context
+        // where the obligation applies. §2a: unknown, never silent
+        // does_not_apply.
+        const licenseStatusAnswered =
+             provider.license_type != null
+          || provider.is_license_exempt === true
+          || provider.is_license_exempt === false
+        if (!licenseStatusAnswered) return APPLICABILITY_RESULT.UNKNOWN
         const hasCdc = (sourceRows.funding_sources || []).some(f => !f.archived_at && f.type === 'cdc_scholarship')
         return hasCdc ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
       },
@@ -1678,7 +1697,15 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   attendance_parent_acknowledgment_per_day: Object.freeze({
     key: 'attendance_parent_acknowledgment_per_day',
     category: 'attendance',
-    rule_citation: 'R 400.1906 (audit trail)',
+    // CDC subsidy audit trail, not a R 400 licensing requirement
+    // (re-cited 2026-06-06 from 'R 400.1906' per the Phase 3.1
+    // consultant-worksheet H1 question + the CDC-subsidy-layer
+    // gating audit). The daily-parent-ack obligation derives from
+    // MDHHS's CDC billing audit-trail expectations; it does NOT
+    // apply to private-pay-only families or to LEPs / licensed homes
+    // who have no children on CDC. Gating below now mirrors the
+    // existing G1/G2/G3/G4 CDC-funding-source pattern.
+    rule_citation: 'CDC Handbook (daily attendance audit trail)',
     label: 'Daily attendance parent acknowledgment',
     subject_type: 'attendance_day',
     data_authority: 'milittlecare',
@@ -1686,13 +1713,51 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'medium',
     data_state: 'shipped',
     applicability: {
+      // Gate on existence of ≥1 active CDC funding source. The
+      // CDC-subsidy-layer audit (2026-06-06) found H1 was the only
+      // CDC-derived requirement that wasn't CDC-gated — every other
+      // CDC row (G1-G4) already filters funding_sources by
+      // type='cdc_scholarship'. With this change H1 joins them and
+      // becomes does_not_apply for private-pay-only providers.
+      //
+      // §2a posture: the absence-of-data case (no funding_sources
+      // rows at all) collapses to DOES_NOT_APPLY here, matching
+      // G1/G2/G3 verbatim. A provider who hasn't entered ANY funding
+      // sources reads as "no CDC kids" — affirmative, not unknown —
+      // because the funding-source-entry surface in Families is the
+      // single capture point and absence IS the answer. (This
+      // engine-wide loader-default behavior is consistent across
+      // all four CDC rows; if §2a tightening is wanted, do it once
+      // across all four.)
       inferFromData: ({ sourceRows }) => {
-        const acks = sourceRows.attendance_acks || []
-        return acks.length > 0 ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
+        const cdcSources = (sourceRows.funding_sources || [])
+          .filter(f => !f.archived_at && f.type === 'cdc_scholarship')
+        return cdcSources.length > 0
+          ? APPLICABILITY_RESULT.APPLIES
+          : APPLICABILITY_RESULT.DOES_NOT_APPLY
       },
     },
     state_resolver: ({ sourceRows }) => {
-      const acks = (sourceRows.attendance_acks || []).filter(a => !a.archived_at)
+      // Per-child filter: only attendance acks for children on an
+      // active CDC funding source count toward the verdict. Private-
+      // pay children's attendance acks don't move this requirement's
+      // needle even when present.
+      //
+      // funding_sources.child_id is the hybrid-FK target for every
+      // non-private-pay type per migration 003 lines 71-103 (CHECK
+      // constraint: type='cdc_scholarship' → child_id NOT NULL +
+      // family_id NULL). Confirmed via grep against
+      // supabase/migrations/003_funding_sources.sql before this edit.
+      const cdcChildIds = new Set(
+        (sourceRows.funding_sources || [])
+          .filter(f => !f.archived_at && f.type === 'cdc_scholarship')
+          .map(f => f.child_id)
+          .filter(Boolean)
+      )
+      const acks = (sourceRows.attendance_acks || []).filter(a =>
+           !a.archived_at
+        && cdcChildIds.has(a.child_id)
+      )
       if (acks.length === 0) return { kind: REQUIREMENT_STATE_KIND.NOT_APPLICABLE }
       const SATISFYING = new Set(['parent_portal', 'in_person_paper'])
       let pendingCount = 0
