@@ -50,20 +50,46 @@ const NEEDS_PROVIDER_DATA_COPY = Object.freeze({
     'Needs authorization end date on the funding source',
 })
 
-// Pluggable "tracking ships with PR #N" copy per category. The
-// not_yet_modelled rows in the registry today are: drills (PR #19),
-// property (PR #21), three staff-file gaps (PR #18 mostly; the
-// staff discipline ack is PR #17). The registry's `category` value
-// drives the lookup; rows whose category isn't here get the
-// generic "tracking ships in a future build" fallback.
-const TRACKING_SHIPS_WITH = Object.freeze({
+// Pluggable "tracking ships with PR #N" copy. Lookup precedence:
+//
+//   1. Per-row entry (keyed by req.key) — used when rows in the
+//      same category track to different PRs. The staff_files
+//      category is the exemplar: physician attestation + arrival/
+//      departure ship in PR #18, but discipline policy ack ships in
+//      PR #17. Pre-fix, this resolver keyed only on category and
+//      mashed both PRs into a single string for every staff_files
+//      not_yet_modelled row — so all three rendered identically.
+//      Fixed 2026-06-06.
+//   2. Category fallback — used when every not_yet_modelled row in
+//      a category IS tracked in the same PR. Both drills (all four
+//      rows → PR #19) and property (all eight rows → PR #21) are
+//      uniform.
+//   3. Generic fallback — for any registry row not enumerated
+//      explicitly.
+//
+// Exported so the pure-function lookup is unit-testable without
+// React Testing Library mount-test scaffolding.
+export const TRACKING_SHIPS_WITH = Object.freeze({
+  // Per-row entries — these override the category fallback when
+  // both exist (rule 1 above).
+  caregiver_physician_attestation_annual:  'PR #18 (staff file gaps)',
+  caregiver_discipline_policy_ack_at_hire: 'PR #17 (discipline policy receipt at hire)',
+  caregiver_daily_arrival_departure:       'PR #18 (staff file gaps)',
+  // Category-level fallback (rule 2 above). The staff_files
+  // category is intentionally NOT in this map — its three
+  // not_yet_modelled rows are all enumerated per-key above. If a
+  // future staff_files Pattern E row is added without a per-key
+  // entry, the generic fallback fires (better than re-mashing
+  // both PRs).
   drills:        'PR #19 (drills + emergency response plan)',
   property:      'PR #21 (property records)',
-  staff_files:   'PR #18 (staff file gaps) and PR #17 (discipline policy receipt at hire)',
 })
 
-function trackingCopy(req) {
-  return TRACKING_SHIPS_WITH[req.category] || 'a future MILittleCare build'
+export function trackingCopy(req) {
+  if (!req) return 'a future MILittleCare build'
+  return TRACKING_SHIPS_WITH[req.key]
+      || TRACKING_SHIPS_WITH[req.category]
+      || 'a future MILittleCare build'
 }
 
 function formatYMD(iso) {
