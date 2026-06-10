@@ -75,6 +75,7 @@ function makeSourceRows(overrides = {}) {
     medication_admin_events: [],
     caregivers: [],
     staff_training_records: [],
+    training_requirements: [],
     health_safety_updates: [],
     funding_sources: [],
     funding_documents: [],
@@ -94,6 +95,8 @@ const ALL_LOADED = Object.freeze({
   medication_admin_events:    true,
   health_safety_updates:      true,
   funding_sources:            true,
+  staff_training_records:     true,
+  training_requirements:      true,
 })
 
 // Build a sourceRowsLoaded with one or more tables forced false.
@@ -611,6 +614,19 @@ describe('§2a loader — sourceRowsLoaded signal (loader integration)', () => {
     expect(out.sourceRowsLoaded.medication_admin_events).toBe(true)
     expect(out.sourceRowsLoaded.health_safety_updates).toBe(true)
     expect(out.sourceRowsLoaded.acks).toBe(true)
+    expect(out.sourceRowsLoaded.staff_training_records).toBe(true)
+    expect(out.sourceRowsLoaded.training_requirements).toBe(true)
+  })
+
+  it('PostgREST error on training_requirements → loaded=false; staff_training_records still true', async () => {
+    globalThis.__loaderTestSupabase = makeFakeSupabase({
+      profiles: { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children: { data: [{ id: 'child-1' }], error: null },
+      training_requirements: { data: null, error: { code: 'PGRST116', message: 'RLS' } },
+    })
+    const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
+    expect(out.sourceRowsLoaded.training_requirements).toBe(false)
+    expect(out.sourceRowsLoaded.staff_training_records).toBe(true)
   })
 
   it('PostgREST error on funding_sources → loaded=false; other tables still true', async () => {
@@ -660,6 +676,8 @@ describe('§2a loader — sourceRowsLoaded signal (loader integration)', () => {
       medication_admin_events:    true,
       health_safety_updates:      true,
       funding_sources:            true,
+      staff_training_records:     true,
+      training_requirements:      true,
     })
   })
 })

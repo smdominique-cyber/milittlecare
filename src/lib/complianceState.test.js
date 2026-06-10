@@ -95,6 +95,17 @@ function makeAck(overrides = {}) {
   }
 }
 
+// Mirror of migration 013's professional_development seed rows —
+// the role-based annual minima per R 400.1924(1)-(4) that E5's
+// resolver rolls up via getEffectiveRequirements.
+const PD_CATALOG = Object.freeze([
+  { id: 'tr-1', category: 'professional_development', regulatory_role: 'licensee',                is_required: true, cadence: 'per_calendar_year', required_hours: 10, condition: null, citation: 'R 400.1924(1)' },
+  { id: 'tr-2', category: 'professional_development', regulatory_role: 'child_care_staff_member', is_required: true, cadence: 'per_calendar_year', required_hours: 5,  condition: null, citation: 'R 400.1924(2)' },
+  { id: 'tr-3', category: 'professional_development', regulatory_role: 'child_care_assistant',    is_required: true, cadence: 'per_calendar_year', required_hours: 5,  condition: null, citation: 'R 400.1924(2)' },
+  { id: 'tr-4', category: 'professional_development', regulatory_role: 'unsupervised_volunteer',  is_required: true, cadence: 'per_calendar_year', required_hours: 1,  condition: null, citation: 'R 400.1924(3)' },
+  { id: 'tr-5', category: 'professional_development', regulatory_role: 'driver',                  is_required: true, cadence: 'per_calendar_year', required_hours: 1,  condition: null, citation: 'R 400.1924(4)' },
+])
+
 function makeSourceRows(overrides = {}) {
   return {
     acks: [],
@@ -102,6 +113,7 @@ function makeSourceRows(overrides = {}) {
     medication_admin_events: [],
     caregivers: [],
     staff_training_records: [],
+    training_requirements: [...PD_CATALOG],
     health_safety_updates: [],
     funding_sources: [],
     funding_documents: [],
@@ -1126,6 +1138,173 @@ describe('Staff files category', () => {
       now: FIXED_NOW,
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.EXPIRED)
+  })
+})
+
+// -----------------------------------------------------------------------------
+// E5 — caregiver_professional_development_hours (role-based thresholds)
+//
+// Role-based annual minima per R 400.1924(1)-(4) via the
+// training_requirements catalog (migration 013) + getEffectiveRequirements
+// strictest-wins rollup. Replaced the Phase 1 flat 16-hour placeholder
+// (2026-06-09) — these tests did not exist before, which is how 16
+// survived unasserted.
+// -----------------------------------------------------------------------------
+
+describe('E5 caregiver_professional_development_hours — role-based thresholds', () => {
+  const requirement = REQUIREMENT_REGISTRY.caregiver_professional_development_hours
+
+  function makeCaregiver(roles, overrides = {}) {
+    return { id: 'cg-1', archived_at: null, regulatory_roles: roles, ...overrides }
+  }
+  function pdRecord(hours, overrides = {}) {
+    return {
+      id: 'pd-' + Math.random().toString(16).slice(2),
+      caregiver_id: 'cg-1',
+      category: 'professional_development',
+      completed_on: '2026-02-01',
+      hours,
+      ...overrides,
+    }
+  }
+  function stateFor({ caregivers, records = [], sourceRowsLoaded, sourceRows = {} }) {
+    return getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({
+        caregivers,
+        staff_training_records: records,
+        ...sourceRows,
+      }),
+      ...(sourceRowsLoaded !== undefined ? { sourceRowsLoaded } : {}),
+      now: FIXED_NOW,
+    })
+  }
+
+  it('licensee with 10 logged hours → on_file (was missing_required under flat 16)', () => {
+    const s = stateFor({ caregivers: [makeCaregiver(['licensee'])], records: [pdRecord(10)] })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+  })
+
+  it('licensee with 9 hours → missing_required, reason hours-9-of-10', () => {
+    const s = stateFor({ caregivers: [makeCaregiver(['licensee'])], records: [pdRecord(9)] })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    expect(s.reason).toBe('hours-9-of-10')
+  })
+
+  it('child_care_staff_member with 5 hours → on_file', () => {
+    const s = stateFor({ caregivers: [makeCaregiver(['child_care_staff_member'])], records: [pdRecord(5)] })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+  })
+
+  it('child_care_assistant with 5 hours → on_file', () => {
+    const s = stateFor({ caregivers: [makeCaregiver(['child_care_assistant'])], records: [pdRecord(5)] })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+  })
+
+  it('unsupervised_volunteer with 1 hour → on_file', () => {
+    const s = stateFor({ caregivers: [makeCaregiver(['unsupervised_volunteer'])], records: [pdRecord(1)] })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+  })
+
+  it('driver with 1 hour → on_file', () => {
+    const s = stateFor({ caregivers: [makeCaregiver(['driver'])], records: [pdRecord(1)] })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+  })
+
+  it('child_care_staff_member with 4 hours → missing_required, reason hours-4-of-5', () => {
+    const s = stateFor({ caregivers: [makeCaregiver(['child_care_staff_member'])], records: [pdRecord(4)] })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    expect(s.reason).toBe('hours-4-of-5')
+  })
+
+  it('multi-role licensee+driver → strictest minimum (10) applies', () => {
+    const cg = makeCaregiver(['licensee', 'driver'])
+    const short = stateFor({ caregivers: [cg], records: [pdRecord(9)] })
+    expect(short.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    expect(short.reason).toBe('hours-9-of-10')
+    const met = stateFor({ caregivers: [cg], records: [pdRecord(10)] })
+    expect(met.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+  })
+
+  it('caregiver with no regulatory roles → unknown no-regulatory-roles (never silently passes)', () => {
+    const s = stateFor({ caregivers: [makeCaregiver([])], records: [pdRecord(40)] })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+    expect(s.reason).toBe('no-regulatory-roles')
+    // Provider-fixable on the Staff page — needs_provider_data bucket,
+    // not "contact support."
+    expect(classifyUnknownReason({ state: s })).toBe('needs_provider_data')
+  })
+
+  it('supervised_volunteer only → on_file (the adopted rules are silent — affirmatively no PD obligation)', () => {
+    const s = stateFor({ caregivers: [makeCaregiver(['supervised_volunteer'])], records: [] })
+    // on_file with NO reason — passing states never emit reasons in this
+    // engine, and the role is exempt (spec § 6.2 marks PD "—"), not unknown.
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+    expect(s.reason).toBeUndefined()
+  })
+
+  it('worst-across-caregivers preserved: compliant licensee + short staff member → missing_required', () => {
+    const s = stateFor({
+      caregivers: [
+        makeCaregiver(['licensee'], { id: 'cg-1' }),
+        makeCaregiver(['child_care_staff_member'], { id: 'cg-2' }),
+      ],
+      records: [pdRecord(10, { caregiver_id: 'cg-1' }), pdRecord(2, { caregiver_id: 'cg-2' })],
+    })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    expect(s.reason).toBe('hours-2-of-5')
+  })
+
+  it('prior-calendar-year hours do not count toward the current year', () => {
+    const s = stateFor({
+      caregivers: [makeCaregiver(['licensee'])],
+      records: [pdRecord(10, { completed_on: '2025-06-01' })],
+    })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    expect(s.reason).toBe('hours-0-of-10')
+  })
+
+  it('no active caregivers → missing_required no-active-caregivers (unchanged)', () => {
+    const s = stateFor({ caregivers: [] })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    expect(s.reason).toBe('no-active-caregivers')
+  })
+
+  it('§2a regression-lock: staff_training_records failed to load → unknown, not a false missing/on_file', () => {
+    const s = stateFor({
+      caregivers: [makeCaregiver(['licensee'])],
+      records: [],
+      sourceRowsLoaded: { staff_training_records: false, training_requirements: true },
+    })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+    expect(s.reason).toBe('training-data-load-failure')
+  })
+
+  it('§2a regression-lock: training_requirements catalog failed to load → unknown, not a false on_file', () => {
+    const s = stateFor({
+      caregivers: [makeCaregiver(['licensee'])],
+      records: [pdRecord(10)],
+      sourceRowsLoaded: { staff_training_records: true, training_requirements: false },
+    })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+    expect(s.reason).toBe('training-data-load-failure')
+  })
+
+  it('catalog loaded but empty of PD rows → unknown training-requirements-catalog-empty (never silently passes)', () => {
+    const s = stateFor({
+      caregivers: [makeCaregiver(['licensee'])],
+      records: [pdRecord(10)],
+      sourceRows: { training_requirements: [] },
+      sourceRowsLoaded: { staff_training_records: true, training_requirements: true },
+    })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+    expect(s.reason).toBe('training-requirements-catalog-empty')
+  })
+
+  it('legacy caller — sourceRowsLoaded omitted entirely → resolves normally', () => {
+    const s = stateFor({ caregivers: [makeCaregiver(['licensee'])], records: [pdRecord(10)] })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
   })
 })
 

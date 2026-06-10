@@ -76,12 +76,13 @@ async function safeQuery(label, fn) {
  *  - `loaded: false` — PostgREST returned an error OR an exception
  *                      was thrown. `rows` is always [] in this case.
  *
- * Used only for tables whose resolvers opt into the loaded signal
- * (per the audit, exactly five tables: funding_sources,
+ * Used only for tables whose resolvers opt into the loaded signal:
+ * the original five from the §2a audit (funding_sources,
  * medication_authorizations, medication_admin_events, acks via
- * combined childAcks+medAcks, health_safety_updates). Everything
- * else stays on `safeQuery` to preserve the ~21 non-§2a-violating
- * rows' current behavior exactly.
+ * combined childAcks+medAcks, health_safety_updates), plus
+ * staff_training_records + training_requirements (E5 role-based
+ * thresholds, 2026-06-09). Everything else stays on `safeQuery` to
+ * preserve the non-opted-in rows' current behavior exactly.
  */
 async function safeQueryWithLoaded(label, fn) {
   try {
@@ -254,11 +255,22 @@ export async function loadComplianceSourceRows({
       .filter(Boolean),
   }))
 
-  const staffTraining = await safeQuery('staff_training_records', () =>
+  // staff_training_records + training_requirements carry the loaded
+  // signal (E5 role-based thresholds, 2026-06-09): a failed load of
+  // either must surface as `unknown`, not a false missing/on_file.
+  const staffTrainingResp = await safeQueryWithLoaded('staff_training_records', () =>
     supabase
       .from('staff_training_records')
       .select('*')
       .eq('licensee_id', providerId)
+  )
+
+  // Statewide reference catalog (migration 013) — no provider filter;
+  // SELECT-only RLS for every authenticated user.
+  const trainingRequirementsResp = await safeQueryWithLoaded('training_requirements', () =>
+    supabase
+      .from('training_requirements')
+      .select('*')
   )
 
   const healthSafetyResp = await safeQueryWithLoaded('health_safety_updates', () =>
@@ -329,7 +341,8 @@ export async function loadComplianceSourceRows({
       medication_authorizations: medAuthsResp.rows,
       medication_admin_events: doseEventsResp.rows,
       caregivers: caregiversNormalized,
-      staff_training_records: staffTraining,
+      staff_training_records: staffTrainingResp.rows,
+      training_requirements: trainingRequirementsResp.rows,
       health_safety_updates: healthSafetyResp.rows,
       funding_sources: fundingResp.rows,
       funding_documents: fundingDocuments,
@@ -340,16 +353,21 @@ export async function loadComplianceSourceRows({
       property_records: null,
     },
     // §2a sibling signal (Option B per
-    // docs/pr-compliance-loader-shape-scope.md §2.2). Five tables
-    // opt in; resolvers for the other tables ignore this object and
-    // keep their pre-fix behavior. An absent key (or `undefined`)
-    // never triggers the UNKNOWN branch — only `=== false` does.
+    // docs/pr-compliance-loader-shape-scope.md §2.2). Seven tables
+    // opt in (five from the 2026-06-09 loader-shape change, plus
+    // staff_training_records + training_requirements for E5's
+    // role-based thresholds); resolvers for the other tables ignore
+    // this object and keep their pre-fix behavior. An absent key (or
+    // `undefined`) never triggers the UNKNOWN branch — only
+    // `=== false` does.
     sourceRowsLoaded: {
       acks:                       acksLoaded,
       medication_authorizations:  medAuthsResp.loaded,
       medication_admin_events:    doseEventsResp.loaded,
       health_safety_updates:      healthSafetyResp.loaded,
       funding_sources:            fundingResp.loaded,
+      staff_training_records:     staffTrainingResp.loaded,
+      training_requirements:      trainingRequirementsResp.loaded,
     },
   }
 }
@@ -385,8 +403,11 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
       .map(r => r && r.regulatory_role)
       .filter(Boolean),
   }))
-  const staffTraining = await safeQuery('staff_training_records', () =>
+  const staffTrainingResp = await safeQueryWithLoaded('staff_training_records', () =>
     supabase.from('staff_training_records').select('*').eq('licensee_id', providerId)
+  )
+  const trainingRequirementsResp = await safeQueryWithLoaded('training_requirements', () =>
+    supabase.from('training_requirements').select('*')
   )
   const healthSafetyResp = await safeQueryWithLoaded('health_safety_updates', () =>
     supabase.from('health_safety_updates').select('*').eq('licensee_id', providerId)
@@ -406,7 +427,8 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
       medication_authorizations: [],
       medication_admin_events: [],
       caregivers: caregiversNormalized,
-      staff_training_records: staffTraining,
+      staff_training_records: staffTrainingResp.rows,
+      training_requirements: trainingRequirementsResp.rows,
       health_safety_updates: healthSafetyResp.rows,
       funding_sources: fundingResp.rows,
       funding_documents: fundingDocuments,
@@ -425,6 +447,8 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
       medication_admin_events:    true,
       health_safety_updates:      healthSafetyResp.loaded,
       funding_sources:            fundingResp.loaded,
+      staff_training_records:     staffTrainingResp.loaded,
+      training_requirements:      trainingRequirementsResp.loaded,
     },
   }
 }
@@ -436,6 +460,7 @@ function emptySourceRows() {
     medication_admin_events: [],
     caregivers: [],
     staff_training_records: [],
+    training_requirements: [],
     health_safety_updates: [],
     funding_sources: [],
     funding_documents: [],
@@ -461,6 +486,8 @@ function emptySourceRowsLoaded() {
     medication_admin_events:    true,
     health_safety_updates:      true,
     funding_sources:            true,
+    staff_training_records:     true,
+    training_requirements:      true,
   }
 }
 

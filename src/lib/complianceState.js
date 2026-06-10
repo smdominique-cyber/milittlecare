@@ -50,6 +50,9 @@
 //     the `compliance_applicability_overrides` table.
 
 import { ACK_TYPES, PER_OCCURRENCE_CONSENT_TYPES } from './acknowledgments'
+// staffTraining.js is pure (no Supabase imports — see its header), so
+// unlike childFiles.js it is safe to import from this PURE module.
+import { getEffectiveRequirements } from './staffTraining'
 
 // Channel rule for parent-signed satisfaction. Duplicated from
 // childFiles.js's PARENT_SIGNED_SATISFYING_CHANNELS rather than
@@ -1398,14 +1401,29 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'medium',
     data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: ({ sourceRows, now }) => {
-      // Per-role hour thresholds — for Phase 1 we use a single
-      // conservative threshold (16 hours) since the per-role
-      // mapping isn't exposed via a typed column. The score (Phase 4)
-      // refines this. For now: <16 → missing_required; ≥16 → on_file.
-      const ANNUAL_HOURS = 16
+    state_resolver: ({ sourceRows, sourceRowsLoaded, now }) => {
+      // Role-based annual minima per R 400.1924(1)-(4), read from the
+      // training_requirements catalog (migration 013) through the same
+      // strictest-wins rollup the staff-training matrix uses
+      // (getEffectiveRequirements, staff_training_tracking_spec § 6.3).
+      // Replaces the Phase 1 flat 16-hour placeholder, which matched
+      // none of the licensing minima (licensee 10 / personnel 5 /
+      // volunteer 1 / driver 1).
+      if (sourceRowsLoaded && (
+           sourceRowsLoaded.staff_training_records === false
+        || sourceRowsLoaded.training_requirements  === false
+      )) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'training-data-load-failure' }
+      }
       const caregivers = (sourceRows.caregivers || []).filter(c => !c.archived_at)
       if (caregivers.length === 0) return { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED, reason: 'no-active-caregivers' }
+      const catalog = sourceRows.training_requirements || []
+      if (!catalog.some(r => r && r.category === 'professional_development')) {
+        // The catalog is statewide seed data (migration 013). Without
+        // it no caregiver's minimum is determinable — never silently
+        // pass (§2a asymmetry).
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'training-requirements-catalog-empty' }
+      }
       const records = (sourceRows.staff_training_records || [])
         .filter(r => r.category === 'professional_development')
       const year = now.getUTCFullYear()
@@ -1413,12 +1431,37 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
       let worst = { kind: REQUIREMENT_STATE_KIND.ON_FILE }
       const rank = { on_file: 0, missing_required: 1, expired: 2, unknown: 3 }
       for (const c of caregivers) {
-        const total = records
-          .filter(r => r.caregiver_id === c.id && (parseTimestampMs(r.completed_on) || 0) >= yearStartMs)
-          .reduce((sum, r) => sum + (Number(r.hours) || 0), 0)
-        const state = total >= ANNUAL_HOURS
-          ? { kind: REQUIREMENT_STATE_KIND.ON_FILE }
-          : { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED, reason: `hours-${total}-of-${ANNUAL_HOURS}` }
+        const roleNames = (c.regulatory_roles || []).filter(Boolean)
+        let state
+        if (roleNames.length === 0) {
+          // No regulatory roles recorded — the minimum is
+          // undeterminable. Provider-fixable on the Staff page
+          // (NEEDS_PROVIDER_DATA_REASONS); never silently pass.
+          state = { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'no-regulatory-roles' }
+        } else {
+          const effective = getEffectiveRequirements({
+            regulatoryRoles: roleNames.map(role => ({ regulatory_role: role })),
+            requirements: catalog,
+          })
+          const pd = effective.get('professional_development')
+          const requiredHours = pd && pd.requiredHours != null ? Number(pd.requiredHours) : null
+          if (requiredHours == null) {
+            // Roles recorded, but none carries an hour requirement in
+            // the catalog (supervised_volunteer — the adopted rules
+            // are silent, spec § 6.2/§ 7.3). Affirmatively no PD
+            // obligation for this caregiver. No reason string: passing
+            // states never emit reasons, and worst-across aggregation
+            // would drop it anyway (ties never replace the seed).
+            state = { kind: REQUIREMENT_STATE_KIND.ON_FILE }
+          } else {
+            const total = records
+              .filter(r => r.caregiver_id === c.id && (parseTimestampMs(r.completed_on) || 0) >= yearStartMs)
+              .reduce((sum, r) => sum + (Number(r.hours) || 0), 0)
+            state = total >= requiredHours
+              ? { kind: REQUIREMENT_STATE_KIND.ON_FILE }
+              : { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED, reason: `hours-${total}-of-${requiredHours}` }
+          }
+        }
         if ((rank[state.kind] ?? 3) > (rank[worst.kind] ?? 3)) worst = state
       }
       return worst
@@ -2206,7 +2249,7 @@ export function getRequirementState({
   if (typeof requirement.state_resolver !== 'function') {
     return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'no-state-resolver' }
   }
-  return requirement.state_resolver({ child, provider, sourceRows, now: nowDate })
+  return requirement.state_resolver({ child, provider, sourceRows, sourceRowsLoaded, now: nowDate })
 }
 
 // -----------------------------------------------------------------------------
@@ -2414,6 +2457,7 @@ export { PER_OCCURRENCE_CONSENT_TYPES }
 export const NEEDS_PROVIDER_DATA_REASONS = Object.freeze(new Set([
   'caregiver-missing-date-of-hire',
   'no-authorization-end-on-funding-source',
+  'no-regulatory-roles',
 ]))
 
 /**
