@@ -109,6 +109,11 @@ export default function FamilyComplianceTab({ children: familyChildren }) {
       {(providerState.per_child || []).map(pc => {
         if (!pc) return null
         const name = findChildDisplayName(familyChildren, pc.child_id)
+        const childRow = (familyChildren || []).find(c => c && c.id === pc.child_id)
+        const fixContext = {
+          familyId: childRow?.family_id || null,
+          childId: pc.child_id,
+        }
         return (
           <section
             key={pc.child_id}
@@ -149,7 +154,7 @@ export default function FamilyComplianceTab({ children: familyChildren }) {
                 key={cat}
                 categoryKey={cat}
                 category={pc.per_category?.[cat]}
-                businessInfoApplicabilityHref="/business-info"
+                fixContext={fixContext}
               />
             ))}
           </section>
