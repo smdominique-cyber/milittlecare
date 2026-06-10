@@ -524,18 +524,13 @@ describe('Pattern A — patternAAckOnFile via field_trip_permission', () => {
   })
 })
 
-describe('consent_transportation_routine_annual — non-annual after Pass 2 (2026-06-09)', () => {
-  // Pass 2 dropped the annual expiry from this row: the consent is
-  // once-per-child for the duration of enrollment, not annual. The
-  // inline state_resolver intentionally ignores `expires_at`. Tests
-  // below regression-lock that behavior.
-  //
-  // For these tests we populate overrides so the row applies (Phase 1
-  // default is unknown).
+describe('Pattern A — expiry (transportation_routine_annual)', () => {
+  // For the test, populate overrides so the row applies (Phase 1
+  // default is unknown). Tests the EXPIRY behavior of Pattern A.
   const requirement = REQUIREMENT_REGISTRY.consent_transportation_routine_annual
   const overrides = new Map([[requirement.key, APPLICABILITY_RESULT.APPLIES]])
 
-  it('expires_at in the future → on_file (unchanged)', () => {
+  it('expires_at in the future → on_file', () => {
     const state = getRequirementState({
       requirement,
       child: makeChild(),
@@ -544,19 +539,17 @@ describe('consent_transportation_routine_annual — non-annual after Pass 2 (202
         acks: [makeAck({
           type: ACK_TYPES.TRANSPORTATION_ROUTINE_ANNUAL,
           acknowledged_via: 'in_person_paper',
-          expires_at: '2027-06-15T00:00:00.000Z',
+          expires_at: '2027-06-15T00:00:00.000Z',  // 1 year future
         })],
       }),
       overrides,
       now: FIXED_NOW,
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
-    // expires_at is intentionally NOT surfaced on the verdict envelope
-    // after Pass 2 — the row is not renewable on a calendar.
-    expect(state.expires_at).toBeUndefined()
+    expect(state.expires_at).toBe('2027-06-15T00:00:00.000Z')
   })
 
-  it('expires_at in the past → still on_file (was EXPIRED pre-Pass-2)', () => {
+  it('expires_at in the past → expired', () => {
     const state = getRequirementState({
       requirement,
       child: makeChild(),
@@ -571,37 +564,7 @@ describe('consent_transportation_routine_annual — non-annual after Pass 2 (202
       overrides,
       now: FIXED_NOW,
     })
-    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
-  })
-
-  it('provider_override only → still pending_parent', () => {
-    const state = getRequirementState({
-      requirement,
-      child: makeChild(),
-      provider: makeLicensedProvider(),
-      sourceRows: makeSourceRows({
-        acks: [makeAck({
-          type: ACK_TYPES.TRANSPORTATION_ROUTINE_ANNUAL,
-          acknowledged_via: 'provider_override',
-          expires_at: null,
-        })],
-      }),
-      overrides,
-      now: FIXED_NOW,
-    })
-    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.PENDING_PARENT)
-  })
-
-  it('no ack → missing_required', () => {
-    const state = getRequirementState({
-      requirement,
-      child: makeChild(),
-      provider: makeLicensedProvider(),
-      sourceRows: makeSourceRows({ acks: [] }),
-      overrides,
-      now: FIXED_NOW,
-    })
-    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.EXPIRED)
   })
 })
 
@@ -1675,15 +1638,10 @@ describe('Determinism', () => {
   })
 
   it('different `now` controls expiry boundary deterministically', () => {
-    // Pass 2 (2026-06-09) — this test used to use
-    // consent_transportation_routine_annual as the Pattern-A-expiry
-    // exemplar, but Pass 2 dropped its annual expiry. Switched to
-    // consent_water_activities_on_premises_seasonal, which is the
-    // other Pattern-A row still in TIME_BOUND_TYPES.
-    const requirement = REQUIREMENT_REGISTRY.consent_water_activities_on_premises_seasonal
+    const requirement = REQUIREMENT_REGISTRY.consent_transportation_routine_annual
     const overrides = new Map([[requirement.key, APPLICABILITY_RESULT.APPLIES]])
     const ack = makeAck({
-      type: ACK_TYPES.WATER_ACTIVITIES_ON_PREMISES_SEASONAL,
+      type: ACK_TYPES.TRANSPORTATION_ROUTINE_ANNUAL,
       acknowledged_via: 'in_person_paper',
       expires_at: '2026-06-15T12:00:00.000Z',
     })

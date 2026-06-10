@@ -800,13 +800,8 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   consent_transportation_routine_annual: Object.freeze({
     key: 'consent_transportation_routine_annual',
     category: 'consents',
-    // Verified against the 2026 Family/Group Home TA Manual (May 2026).
-    // Pass 2 (2026-06-09): re-cited from '1952(1)(a)' to '1952(1)'.
-    // The annual-recurrence cadence ALSO removed at the engine layer
-    // (see state_resolver below) — routine transportation consent is
-    // once-per-child for the duration of enrollment, not annual.
     rule_citation: 'R 400.1952(1)',
-    label: 'Routine transportation permission',
+    label: 'Routine transportation permission (annual)',
     subject_type: 'child',
     data_authority: 'milittlecare',
     gsq_relevant: false,
@@ -818,65 +813,13 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
       // = unknown until Phase 3 overrides resolve.
       autoDefault: APPLICABILITY_RESULT.UNKNOWN,
     },
-    // Pass 2 (2026-06-09) — DROP THE ANNUAL EXPIRY. The DB-stored
-    // expires_at on legacy rows is intentionally ignored by this
-    // resolver: a parent-signed satisfying ack remains ON_FILE
-    // regardless of `expires_at`. The DB string value of the ack type
-    // (`'transportation_routine_annual'`) stays as-is to avoid a
-    // migration; the user-visible label drops "(annual)" above.
-    //
-    // What was REMOVED, exactly, vs. patternAAckOnFile:
-    //   - The "currently-valid" check used to skip rows whose
-    //     `expires_at <= now` and fall through to the EXPIRED branch
-    //     below it. The skip is gone — past expires_at no longer
-    //     disqualifies a row from being treated as ON_FILE.
-    //   - The "expired satisfying row" branch (the second loop in
-    //     patternAAckOnFile that returns { kind: EXPIRED, expired_at })
-    //     is omitted entirely. A row can never resolve to EXPIRED
-    //     here anymore.
-    //
-    // What is PRESERVED, exactly:
-    //   - The parent-signed-satisfying-channel requirement (parent
-    //     portal / in_person_paper). provider_override alone still
-    //     resolves to PENDING_PARENT.
-    //   - The MISSING_REQUIRED fallthrough when no ack exists at all.
-    //
-    // Out of this PR's scope, flagged for Seth:
-    //   childFiles.js TIME_BOUND_TYPES still includes
-    //   'transportation_routine_annual', so the family-page audit-state
-    //   (getChildFilesAuditState) and the write-path
-    //   (EnrollmentConsentsModal sets `expires_at = ack_at + 1 year`)
-    //   still treat this type as annual. /compliance verdict and the
-    //   family-page audit-state will disagree until that's reconciled
-    //   in a follow-up PR.
-    state_resolver: ({ child, sourceRows }) => {
-      const acks = (sourceRows.acks || []).filter(a =>
-           a
-        && a.type === ACK_TYPES.TRANSPORTATION_ROUTINE_ANNUAL
-        && a.subject_type === 'child'
-        && a.subject_id === child.id
-        && !a.archived_at
-      )
-      // 1. Any parent-signed satisfying row → ON_FILE (expires_at
-      //    intentionally ignored — see header comment).
-      for (const a of acks) {
-        if (PARENT_SIGNED_SATISFYING_CHANNELS.includes(a.acknowledged_via)) {
-          return {
-            kind: REQUIREMENT_STATE_KIND.ON_FILE,
-            evidence_id: a.id,
-            // expires_at is intentionally NOT surfaced — the row is
-            // not renewable on a calendar, so an expires_at on the
-            // verdict envelope would be misleading.
-          }
-        }
-      }
-      // 2. Provider-override-only row → still pending_parent.
-      const providerOnly = acks.find(a => a.acknowledged_via === 'provider_override')
-      if (providerOnly) {
-        return { kind: REQUIREMENT_STATE_KIND.PENDING_PARENT, evidence_id: providerOnly.id }
-      }
-      return { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED }
-    },
+    state_resolver: ({ child, sourceRows, now }) => patternAAckOnFile({
+      ackType: ACK_TYPES.TRANSPORTATION_ROUTINE_ANNUAL,
+      subjectType: 'child',
+      subjectId: child.id,
+      sourceRows,
+      now,
+    }),
   }),
 
   consent_water_activities_on_premises_seasonal: Object.freeze({
@@ -1529,7 +1472,8 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   caregiver_physician_attestation_annual: Object.freeze({
     key: 'caregiver_physician_attestation_annual',
     category: 'staff_files',
-    rule_citation: 'R 400.1933',
+    // Staff-file copy filed under R 400.1906(1)(c).
+    rule_citation: 'R 400.1933(1)-(2)',
     label: 'Physician attestation of staff health (annual)',
     subject_type: 'caregiver',
     data_authority: 'milittlecare',
