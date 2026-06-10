@@ -90,13 +90,17 @@ function makeSourceRows(overrides = {}) {
 // All-loaded = the post-fix default the loader will actually emit
 // for a clean load.
 const ALL_LOADED = Object.freeze({
-  acks:                       true,
-  medication_authorizations:  true,
-  medication_admin_events:    true,
-  health_safety_updates:      true,
-  funding_sources:            true,
-  staff_training_records:     true,
-  training_requirements:      true,
+  acks:                        true,
+  medication_authorizations:   true,
+  medication_admin_events:     true,
+  caregivers:                  true,
+  health_safety_updates:       true,
+  funding_sources:             true,
+  funding_documents:           true,
+  staff_training_records:      true,
+  training_requirements:       true,
+  miregistry_training_entries: true,
+  attendance_acks:             true,
 })
 
 // Build a sourceRowsLoaded with one or more tables forced false.
@@ -616,6 +620,10 @@ describe('§2a loader — sourceRowsLoaded signal (loader integration)', () => {
     expect(out.sourceRowsLoaded.acks).toBe(true)
     expect(out.sourceRowsLoaded.staff_training_records).toBe(true)
     expect(out.sourceRowsLoaded.training_requirements).toBe(true)
+    expect(out.sourceRowsLoaded.caregivers).toBe(true)
+    expect(out.sourceRowsLoaded.funding_documents).toBe(true)
+    expect(out.sourceRowsLoaded.miregistry_training_entries).toBe(true)
+    expect(out.sourceRowsLoaded.attendance_acks).toBe(true)
   })
 
   it('PostgREST error on training_requirements → loaded=false; staff_training_records still true', async () => {
@@ -671,13 +679,61 @@ describe('§2a loader — sourceRowsLoaded signal (loader integration)', () => {
     // No providerId is a precondition failure, not a load failure;
     // we preserve legacy DOES_NOT_APPLY behavior by reporting true.
     expect(out.sourceRowsLoaded).toEqual({
-      acks:                       true,
-      medication_authorizations:  true,
-      medication_admin_events:    true,
-      health_safety_updates:      true,
-      funding_sources:            true,
-      staff_training_records:     true,
-      training_requirements:      true,
+      acks:                        true,
+      medication_authorizations:   true,
+      medication_admin_events:     true,
+      caregivers:                  true,
+      health_safety_updates:       true,
+      funding_sources:             true,
+      funding_documents:           true,
+      staff_training_records:      true,
+      training_requirements:       true,
+      miregistry_training_entries: true,
+      attendance_acks:             true,
     })
+  })
+
+  it('PostgREST error on caregivers → loaded=false; staff_training_records still true', async () => {
+    globalThis.__loaderTestSupabase = makeFakeSupabase({
+      profiles: { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children: { data: [{ id: 'child-1' }], error: null },
+      caregivers: { data: null, error: { code: 'PGRST116', message: 'RLS' } },
+    })
+    const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
+    expect(out.sourceRowsLoaded.caregivers).toBe(false)
+    expect(out.sourceRowsLoaded.staff_training_records).toBe(true)
+  })
+
+  it('PostgREST error on funding_documents → loaded=false; funding_sources still true', async () => {
+    globalThis.__loaderTestSupabase = makeFakeSupabase({
+      profiles: { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children: { data: [{ id: 'child-1' }], error: null },
+      funding_documents: { data: null, error: { code: 'PGRST116', message: 'RLS' } },
+    })
+    const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
+    expect(out.sourceRowsLoaded.funding_documents).toBe(false)
+    expect(out.sourceRowsLoaded.funding_sources).toBe(true)
+  })
+
+  it('PostgREST error on miregistry_training_entries → loaded=false; caregivers still true', async () => {
+    globalThis.__loaderTestSupabase = makeFakeSupabase({
+      profiles: { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children: { data: [{ id: 'child-1' }], error: null },
+      miregistry_training_entries: { data: null, error: { code: 'PGRST116', message: 'RLS' } },
+    })
+    const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
+    expect(out.sourceRowsLoaded.miregistry_training_entries).toBe(false)
+    expect(out.sourceRowsLoaded.caregivers).toBe(true)
+  })
+
+  it('PostgREST error on attendance_acknowledgments → attendance_acks loaded=false; acks still true', async () => {
+    globalThis.__loaderTestSupabase = makeFakeSupabase({
+      profiles: { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children: { data: [{ id: 'child-1' }], error: null },
+      attendance_acknowledgments: { data: null, error: { code: 'PGRST116', message: 'RLS' } },
+    })
+    const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
+    expect(out.sourceRowsLoaded.attendance_acks).toBe(false)
+    expect(out.sourceRowsLoaded.acks).toBe(true)
   })
 })

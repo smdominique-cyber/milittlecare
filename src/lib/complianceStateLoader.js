@@ -81,7 +81,9 @@ async function safeQuery(label, fn) {
  * medication_authorizations, medication_admin_events, acks via
  * combined childAcks+medAcks, health_safety_updates), plus
  * staff_training_records + training_requirements (E5 role-based
- * thresholds, 2026-06-09). Everything else stays on `safeQuery` to
+ * thresholds, 2026-06-09), plus caregivers, funding_documents,
+ * miregistry_training_entries, and attendance_acks (§2a coverage
+ * completion, 2026-06-09). Everything else stays on `safeQuery` to
  * preserve the non-opted-in rows' current behavior exactly.
  */
 async function safeQueryWithLoaded(label, fn) {
@@ -234,8 +236,11 @@ export async function loadComplianceSourceRows({
   )
 
   // 6. Caregivers + staff training + health-safety updates.
-  //    Provider-level; not gated by childIds.
-  const caregivers = await safeQuery('caregivers', () =>
+  //    Provider-level; not gated by childIds. caregivers carries the
+  //    loaded signal (§2a coverage completion, 2026-06-09): a failed
+  //    load is read by eight staff/medication resolvers and must
+  //    surface as `unknown`, not "no active caregivers."
+  const caregiversResp = await safeQueryWithLoaded('caregivers', () =>
     supabase
       .from('caregivers')
       .select(`
@@ -248,7 +253,7 @@ export async function loadComplianceSourceRows({
 
   // Normalize caregiver roles to a flat array on each row for the
   // pure verdict layer's role-check helper.
-  const caregiversNormalized = caregivers.map(c => ({
+  const caregiversNormalized = caregiversResp.rows.map(c => ({
     ...c,
     regulatory_roles: (c.caregiver_regulatory_roles || [])
       .map(r => r && r.regulatory_role)
@@ -282,9 +287,9 @@ export async function loadComplianceSourceRows({
 
   // 7. Funding sources + documents (provider-level). funding_sources
   //    opts into the loaded signal — this is the originally-motivating
-  //    table (the four CDC rows G2/G3/G4/H1). funding_documents stays
-  //    on safeQuery because no §2a-violating row reads it as its
-  //    applicability gate.
+  //    table (the four CDC rows G2/G3/G4/H1). funding_documents joined
+  //    the signal 2026-06-09 (§2a coverage completion): a failed load
+  //    read the enrollment-agreement row falsely red.
   const fundingResp = await safeQueryWithLoaded('funding_sources', () =>
     supabase
       .from('funding_sources')
@@ -293,7 +298,7 @@ export async function loadComplianceSourceRows({
       .is('archived_at', null)
   )
 
-  const fundingDocuments = await safeQuery('funding_documents', () =>
+  const fundingDocumentsResp = await safeQueryWithLoaded('funding_documents', () =>
     supabase
       .from('funding_documents')
       .select('*')
@@ -302,7 +307,7 @@ export async function loadComplianceSourceRows({
   )
 
   // 8. MiRegistry training entries (provider-level — LEP).
-  const miregistryEntries = await safeQuery('miregistry_training_entries', () =>
+  const miregistryEntriesResp = await safeQueryWithLoaded('miregistry_training_entries', () =>
     supabase
       .from('miregistry_training_entries')
       .select('*')
@@ -316,7 +321,7 @@ export async function loadComplianceSourceRows({
   const cutoff = new Date(Date.now() - attendanceWindowDays * 86400000)
     .toISOString()
     .slice(0, 10)
-  const attendanceAcks = await safeQuery('attendance_acknowledgments', () =>
+  const attendanceAcksResp = await safeQueryWithLoaded('attendance_acknowledgments', () =>
     supabase
       .from('attendance_acknowledgments')
       .select('id, child_id, date, segment_index, acknowledged_via, archived_at')
@@ -345,29 +350,33 @@ export async function loadComplianceSourceRows({
       training_requirements: trainingRequirementsResp.rows,
       health_safety_updates: healthSafetyResp.rows,
       funding_sources: fundingResp.rows,
-      funding_documents: fundingDocuments,
-      miregistry_training_entries: miregistryEntries,
-      attendance_acks: attendanceAcks,
+      funding_documents: fundingDocumentsResp.rows,
+      miregistry_training_entries: miregistryEntriesResp.rows,
+      attendance_acks: attendanceAcksResp.rows,
       // Pattern E slots — sources not yet shipped.
       drill_logs: null,
       property_records: null,
     },
     // §2a sibling signal (Option B per
-    // docs/pr-compliance-loader-shape-scope.md §2.2). Seven tables
-    // opt in (five from the 2026-06-09 loader-shape change, plus
+    // docs/pr-compliance-loader-shape-scope.md §2.2). Eleven tables
+    // opt in (five from the 2026-06-09 loader-shape change,
     // staff_training_records + training_requirements for E5's
-    // role-based thresholds); resolvers for the other tables ignore
-    // this object and keep their pre-fix behavior. An absent key (or
-    // `undefined`) never triggers the UNKNOWN branch — only
-    // `=== false` does.
+    // role-based thresholds, and caregivers + funding_documents +
+    // miregistry_training_entries + attendance_acks from the §2a
+    // coverage-completion pass). An absent key (or `undefined`)
+    // never triggers the UNKNOWN branch — only `=== false` does.
     sourceRowsLoaded: {
-      acks:                       acksLoaded,
-      medication_authorizations:  medAuthsResp.loaded,
-      medication_admin_events:    doseEventsResp.loaded,
-      health_safety_updates:      healthSafetyResp.loaded,
-      funding_sources:            fundingResp.loaded,
-      staff_training_records:     staffTrainingResp.loaded,
-      training_requirements:      trainingRequirementsResp.loaded,
+      acks:                        acksLoaded,
+      medication_authorizations:   medAuthsResp.loaded,
+      medication_admin_events:     doseEventsResp.loaded,
+      caregivers:                  caregiversResp.loaded,
+      health_safety_updates:       healthSafetyResp.loaded,
+      funding_sources:             fundingResp.loaded,
+      funding_documents:           fundingDocumentsResp.loaded,
+      staff_training_records:      staffTrainingResp.loaded,
+      training_requirements:       trainingRequirementsResp.loaded,
+      miregistry_training_entries: miregistryEntriesResp.loaded,
+      attendance_acks:             attendanceAcksResp.loaded,
     },
   }
 }
@@ -379,15 +388,15 @@ export async function loadComplianceSourceRows({
  *
  * Returns `{ sourceRows, sourceRowsLoaded }` (2026-06-09 shape change).
  * In the no-children case the four child-scoped opted-in tables
- * (`acks`, `medication_authorizations`, `medication_admin_events`)
- * are intrinsically empty by precondition — no children means no
- * per-child rows possible — so their loaded flag is `true`. Only
- * `funding_sources` and `health_safety_updates` are actually queried
+ * (`acks`, `medication_authorizations`, `medication_admin_events`,
+ * `attendance_acks`) are intrinsically empty by precondition — no
+ * children means no per-child rows possible — so their loaded flag is
+ * `true`. The provider-level opted-in tables are actually queried
  * here and report their real loaded value.
  */
 async function loadProviderLevelRows(providerId, attendanceWindowDays) {
   // Reuse the main loader's per-table calls but skip child-scoped ones.
-  const caregivers = await safeQuery('caregivers', () =>
+  const caregiversResp = await safeQueryWithLoaded('caregivers', () =>
     supabase
       .from('caregivers')
       .select(`
@@ -397,7 +406,7 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
       .eq('licensee_id', providerId)
       .is('archived_at', null)
   )
-  const caregiversNormalized = caregivers.map(c => ({
+  const caregiversNormalized = caregiversResp.rows.map(c => ({
     ...c,
     regulatory_roles: (c.caregiver_regulatory_roles || [])
       .map(r => r && r.regulatory_role)
@@ -415,10 +424,10 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
   const fundingResp = await safeQueryWithLoaded('funding_sources', () =>
     supabase.from('funding_sources').select('*').eq('user_id', providerId).is('archived_at', null)
   )
-  const fundingDocuments = await safeQuery('funding_documents', () =>
+  const fundingDocumentsResp = await safeQueryWithLoaded('funding_documents', () =>
     supabase.from('funding_documents').select('*').eq('user_id', providerId).is('archived_at', null)
   )
-  const miregistryEntries = await safeQuery('miregistry_training_entries', () =>
+  const miregistryEntriesResp = await safeQueryWithLoaded('miregistry_training_entries', () =>
     supabase.from('miregistry_training_entries').select('*').eq('user_id', providerId).is('archived_at', null)
   )
   return {
@@ -431,24 +440,28 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
       training_requirements: trainingRequirementsResp.rows,
       health_safety_updates: healthSafetyResp.rows,
       funding_sources: fundingResp.rows,
-      funding_documents: fundingDocuments,
-      miregistry_training_entries: miregistryEntries,
+      funding_documents: fundingDocumentsResp.rows,
+      miregistry_training_entries: miregistryEntriesResp.rows,
       attendance_acks: [],
       drill_logs: null,
       property_records: null,
     },
     sourceRowsLoaded: {
-      // No children → these three are empty by precondition, not by
+      // No children → these four are empty by precondition, not by
       // load failure. Treat as loaded so any provider-level §2a-row
       // gated on them resolves the same way it would with an explicit
       // empty result set.
-      acks:                       true,
-      medication_authorizations:  true,
-      medication_admin_events:    true,
-      health_safety_updates:      healthSafetyResp.loaded,
-      funding_sources:            fundingResp.loaded,
-      staff_training_records:     staffTrainingResp.loaded,
-      training_requirements:      trainingRequirementsResp.loaded,
+      acks:                        true,
+      medication_authorizations:   true,
+      medication_admin_events:     true,
+      attendance_acks:             true,
+      caregivers:                  caregiversResp.loaded,
+      health_safety_updates:       healthSafetyResp.loaded,
+      funding_sources:             fundingResp.loaded,
+      funding_documents:           fundingDocumentsResp.loaded,
+      staff_training_records:      staffTrainingResp.loaded,
+      training_requirements:       trainingRequirementsResp.loaded,
+      miregistry_training_entries: miregistryEntriesResp.loaded,
     },
   }
 }
@@ -475,19 +488,23 @@ function emptySourceRows() {
  * Mirrors `emptySourceRows()` for the loaded signal. Used only when
  * `loadComplianceSourceRows` is called without a providerId — a
  * precondition failure path that no production caller exercises. All
- * five opted-in tables read as `true` here because the precondition
+ * eleven opted-in tables read as `true` here because the precondition
  * failure isn't a load failure, and the legacy behavior (empty rows
  * → does_not_apply where applicable) is what we preserve.
  */
 function emptySourceRowsLoaded() {
   return {
-    acks:                       true,
-    medication_authorizations:  true,
-    medication_admin_events:    true,
-    health_safety_updates:      true,
-    funding_sources:            true,
-    staff_training_records:     true,
-    training_requirements:      true,
+    acks:                        true,
+    medication_authorizations:   true,
+    medication_admin_events:     true,
+    caregivers:                  true,
+    health_safety_updates:       true,
+    funding_sources:             true,
+    funding_documents:           true,
+    staff_training_records:      true,
+    training_requirements:       true,
+    miregistry_training_entries: true,
+    attendance_acks:             true,
   }
 }
 

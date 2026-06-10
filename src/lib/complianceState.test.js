@@ -1306,6 +1306,337 @@ describe('E5 caregiver_professional_development_hours — role-based thresholds'
     const s = stateFor({ caregivers: [makeCaregiver(['licensee'])], records: [pdRecord(10)] })
     expect(s.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
   })
+
+  it('§2a: caregivers failed to load → unknown caregivers-load-failure (not a false no-active-caregivers)', () => {
+    const s = stateFor({
+      caregivers: [],
+      records: [],
+      sourceRowsLoaded: { caregivers: false, staff_training_records: true, training_requirements: true },
+    })
+    expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+    expect(s.reason).toBe('caregivers-load-failure')
+  })
+})
+
+// -----------------------------------------------------------------------------
+// §2a load-failure coverage completion (2026-06-09) — every resolver
+// reading caregivers / attendance_acks / miregistry_training_entries /
+// funding_documents (plus the five staff resolvers that read the
+// already-signalled staff_training_records) must resolve UNKNOWN on a
+// table load failure — never a silent not_applicable (the dangerous
+// false pass) and never a misleading red. Each resolver gets BOTH a
+// load-failure test and a regression lock that loaded-true + zero rows
+// keeps its pre-§2a behavior.
+// -----------------------------------------------------------------------------
+
+describe('§2a load-failure guards — resolver coverage completion', () => {
+  function makeCaregiver(roles, overrides = {}) {
+    return { id: 'cg-1', archived_at: null, regulatory_roles: roles, ...overrides }
+  }
+  function stateOf(key, { provider, sourceRows = {}, sourceRowsLoaded } = {}) {
+    return getRequirementState({
+      requirement: REQUIREMENT_REGISTRY[key],
+      provider: provider || makeLicensedProvider(),
+      sourceRows: makeSourceRows(sourceRows),
+      ...(sourceRowsLoaded !== undefined ? { sourceRowsLoaded } : {}),
+      now: FIXED_NOW,
+    })
+  }
+
+  describe('caregiver_background_check_eligibility', () => {
+    const KEY = 'caregiver_background_check_eligibility'
+
+    it('caregivers failed to load → unknown caregivers-load-failure', () => {
+      const s = stateOf(KEY, { sourceRowsLoaded: { caregivers: false, staff_training_records: true } })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('caregivers-load-failure')
+    })
+
+    it('staff_training_records failed to load → unknown staff-training-records-load-failure', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { caregivers: [makeCaregiver(['licensee'])] },
+        sourceRowsLoaded: { caregivers: true, staff_training_records: false },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('staff-training-records-load-failure')
+    })
+
+    it('regression lock: loaded true + zero caregivers → missing no-active-caregivers (unchanged)', () => {
+      const s = stateOf(KEY, { sourceRowsLoaded: { caregivers: true, staff_training_records: true } })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      expect(s.reason).toBe('no-active-caregivers')
+    })
+
+    it('regression lock: loaded true + caregiver with zero records → missing_required (unchanged)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { caregivers: [makeCaregiver(['licensee'])] },
+        sourceRowsLoaded: { caregivers: true, staff_training_records: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      expect(s.reason).toBeUndefined()
+    })
+  })
+
+  describe('caregiver_cpr_first_aid_current', () => {
+    const KEY = 'caregiver_cpr_first_aid_current'
+
+    it('caregivers failed to load → unknown caregivers-load-failure', () => {
+      const s = stateOf(KEY, { sourceRowsLoaded: { caregivers: false, staff_training_records: true } })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('caregivers-load-failure')
+    })
+
+    it('staff_training_records failed to load → unknown staff-training-records-load-failure', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { caregivers: [makeCaregiver(['licensee'])] },
+        sourceRowsLoaded: { caregivers: true, staff_training_records: false },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('staff-training-records-load-failure')
+    })
+
+    it('regression lock: loaded true + zero caregivers → missing no-active-caregivers (unchanged)', () => {
+      const s = stateOf(KEY, { sourceRowsLoaded: { caregivers: true, staff_training_records: true } })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      expect(s.reason).toBe('no-active-caregivers')
+    })
+
+    it('regression lock: loaded true + caregiver with zero records → missing_required (unchanged)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { caregivers: [makeCaregiver(['licensee'])] },
+        sourceRowsLoaded: { caregivers: true, staff_training_records: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+  })
+
+  describe('caregiver_new_hire_training_complete', () => {
+    const KEY = 'caregiver_new_hire_training_complete'
+
+    it('caregivers failed to load → unknown caregivers-load-failure', () => {
+      const s = stateOf(KEY, { sourceRowsLoaded: { caregivers: false, staff_training_records: true } })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('caregivers-load-failure')
+    })
+
+    it('staff_training_records failed to load → unknown staff-training-records-load-failure', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { caregivers: [makeCaregiver(['licensee'])] },
+        sourceRowsLoaded: { caregivers: true, staff_training_records: false },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('staff-training-records-load-failure')
+    })
+
+    it('regression lock: loaded true + zero caregivers → missing no-active-caregivers (unchanged)', () => {
+      const s = stateOf(KEY, { sourceRowsLoaded: { caregivers: true, staff_training_records: true } })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      expect(s.reason).toBe('no-active-caregivers')
+    })
+
+    it('regression lock: loaded true + recent hire with zero records → missing within-90-day-window (unchanged)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { caregivers: [makeCaregiver(['licensee'], { date_of_hire: '2026-06-01' })] },
+        sourceRowsLoaded: { caregivers: true, staff_training_records: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      expect(s.reason).toBe('within-90-day-window')
+    })
+  })
+
+  describe('caregiver_miregistry_account', () => {
+    const KEY = 'caregiver_miregistry_account'
+
+    it('caregivers failed to load → unknown caregivers-load-failure', () => {
+      const s = stateOf(KEY, { sourceRowsLoaded: { caregivers: false, staff_training_records: true } })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('caregivers-load-failure')
+    })
+
+    it('staff_training_records failed to load → unknown staff-training-records-load-failure', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { caregivers: [makeCaregiver(['licensee'])] },
+        sourceRowsLoaded: { caregivers: true, staff_training_records: false },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('staff-training-records-load-failure')
+    })
+
+    it('regression lock: loaded true + zero caregivers → missing no-active-caregivers (unchanged)', () => {
+      const s = stateOf(KEY, { sourceRowsLoaded: { caregivers: true, staff_training_records: true } })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      expect(s.reason).toBe('no-active-caregivers')
+    })
+
+    it('regression lock: loaded true + caregiver with zero records → missing_required (unchanged)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { caregivers: [makeCaregiver(['licensee'])] },
+        sourceRowsLoaded: { caregivers: true, staff_training_records: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+  })
+
+  describe('caregiver_health_safety_update_acked', () => {
+    const KEY = 'caregiver_health_safety_update_acked'
+    const ONE_UPDATE = [{ id: 'hs-1' }]
+
+    it('caregivers failed to load → unknown caregivers-load-failure (NOT a silent not_applicable)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { health_safety_updates: ONE_UPDATE },
+        sourceRowsLoaded: { caregivers: false, staff_training_records: true, health_safety_updates: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('caregivers-load-failure')
+    })
+
+    it('staff_training_records failed to load → unknown staff-training-records-load-failure', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { caregivers: [makeCaregiver(['licensee'])], health_safety_updates: ONE_UPDATE },
+        sourceRowsLoaded: { caregivers: true, staff_training_records: false, health_safety_updates: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('staff-training-records-load-failure')
+    })
+
+    it('regression lock: loaded true + zero caregivers + updates present → not_applicable (unchanged)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { health_safety_updates: ONE_UPDATE },
+        sourceRowsLoaded: { caregivers: true, staff_training_records: true, health_safety_updates: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
+    })
+
+    it('regression lock: loaded true + caregiver + unacked update → missing unacked-update (unchanged)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { caregivers: [makeCaregiver(['licensee'])], health_safety_updates: ONE_UPDATE },
+        sourceRowsLoaded: { caregivers: true, staff_training_records: true, health_safety_updates: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      expect(s.reason).toBe('unacked-update')
+    })
+  })
+
+  describe('medication_role_gate_integrity', () => {
+    const KEY = 'medication_role_gate_integrity'
+    // ≥1 non-OTC dose event makes the row applicable.
+    const NON_OTC_EVENT = [{ id: 'ev-1', authorization_id: 'auth-1', administered_by_caregiver_id: 'cg-9', archived_at: null }]
+
+    it('caregivers failed to load → unknown caregivers-load-failure (not a false anomaly red)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { medication_admin_events: NON_OTC_EVENT },
+        sourceRowsLoaded: { caregivers: false, medication_admin_events: true, medication_authorizations: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('caregivers-load-failure')
+    })
+
+    it('regression lock: loaded true + event whose caregiver is absent → missing ineligible-role red (unchanged)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { medication_admin_events: NON_OTC_EVENT },
+        sourceRowsLoaded: { caregivers: true, medication_admin_events: true, medication_authorizations: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      expect(s.reason).toBe('ineligible-role-administered-non-otc-dose')
+    })
+
+    it('regression lock: loaded true + eligible-role caregiver administered → on_file (unchanged)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: {
+          medication_admin_events: NON_OTC_EVENT,
+          caregivers: [makeCaregiver(['licensee'], { id: 'cg-9' })],
+        },
+        sourceRowsLoaded: { caregivers: true, medication_admin_events: true, medication_authorizations: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+    })
+  })
+
+  describe('attendance_parent_acknowledgment_per_day (H1)', () => {
+    const KEY = 'attendance_parent_acknowledgment_per_day'
+    // ≥1 active CDC funding source makes the row applicable.
+    const CDC_SOURCE = [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null, child_id: 'ch-1' }]
+
+    it('attendance_acks failed to load → unknown attendance-acks-load-failure (NOT a silent not_applicable)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { funding_sources: CDC_SOURCE },
+        sourceRowsLoaded: { attendance_acks: false, funding_sources: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('attendance-acks-load-failure')
+    })
+
+    it('regression lock: loaded true + zero attendance acks → not_applicable (unchanged)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { funding_sources: CDC_SOURCE },
+        sourceRowsLoaded: { attendance_acks: true, funding_sources: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
+    })
+  })
+
+  describe('provider_miregistry_annual_ongoing', () => {
+    const KEY = 'provider_miregistry_annual_ongoing'
+
+    it('miregistry_training_entries failed to load → unknown miregistry-training-entries-load-failure (not a false missed-Dec-16 red)', () => {
+      const s = stateOf(KEY, {
+        provider: makeLepProvider(),
+        sourceRowsLoaded: { miregistry_training_entries: false },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('miregistry-training-entries-load-failure')
+    })
+
+    it('regression lock: loaded true + zero entries → missing_required (unchanged)', () => {
+      const s = stateOf(KEY, {
+        provider: makeLepProvider(),
+        sourceRowsLoaded: { miregistry_training_entries: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+  })
+
+  describe('funding_enrollment_agreement_on_file', () => {
+    const KEY = 'funding_enrollment_agreement_on_file'
+    // Enrollment-billing-basis CDC source makes the row applicable.
+    const ENROLLMENT_SOURCE = [{
+      id: 'fs-1', type: 'cdc_scholarship', archived_at: null, child_id: 'ch-1',
+      details: { billing_basis: 'enrollment' },
+    }]
+
+    it('funding_documents failed to load → unknown funding-documents-load-failure (not a false missing-agreement red)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { funding_sources: ENROLLMENT_SOURCE },
+        sourceRowsLoaded: { funding_documents: false, funding_sources: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(s.reason).toBe('funding-documents-load-failure')
+    })
+
+    it('regression lock: loaded true + zero documents → missing_required (unchanged)', () => {
+      const s = stateOf(KEY, {
+        sourceRows: { funding_sources: ENROLLMENT_SOURCE },
+        sourceRowsLoaded: { funding_documents: true, funding_sources: true },
+      })
+      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+  })
+
+  it('load-failure reasons classify as data_anomaly, not needs_provider_data (not provider-fixable)', () => {
+    // Deliberately NOT added to NEEDS_PROVIDER_DATA_REASONS — a failed
+    // table load is not something the provider can fix from a page in
+    // the app. Same classification as E5's training-data-load-failure.
+    for (const reason of [
+      'caregivers-load-failure',
+      'staff-training-records-load-failure',
+      'miregistry-training-entries-load-failure',
+      'funding-documents-load-failure',
+      'attendance-acks-load-failure',
+    ]) {
+      expect(NEEDS_PROVIDER_DATA_REASONS.has(reason)).toBe(false)
+      expect(classifyUnknownReason({ state: { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason } })).toBe('data_anomaly')
+    }
+  })
 })
 
 // -----------------------------------------------------------------------------
