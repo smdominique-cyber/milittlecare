@@ -446,7 +446,11 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   intake_lead_disclosure: Object.freeze({
     key: 'intake_lead_disclosure',
     category: 'child_files',
-    rule_citation: 'R 400.1907(1)(b)(vi)',
+    // Verified against the 2026 Family/Group Home TA Manual (May 2026)
+    // and CCL-3900. Lead-paint disclosure is both an intake-disclosure
+    // requirement (R 400.1907(1)(b)(vi)) AND a substantive lead-safety
+    // duty (R 400.1932(7)).
+    rule_citation: 'R 400.1907(1)(b)(vi) AND R 400.1932(7)',
     label: 'Lead-based paint disclosure (inform-only)',
     subject_type: 'child',
     data_authority: 'milittlecare',
@@ -476,7 +480,10 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   intake_firearms_disclosure: Object.freeze({
     key: 'intake_firearms_disclosure',
     category: 'child_files',
-    rule_citation: 'R 400.1907(1)(b)(v)',
+    // Verified against the 2026 Family/Group Home TA Manual (May 2026)
+    // and CCL-3900. The intake-disclosure obligation is R 400.1907(1)(b);
+    // the substantive firearms-storage/handling rule is R 400.1935(1)-(2).
+    rule_citation: 'R 400.1907(1)(b) AND R 400.1935(1)-(2)',
     label: 'Firearms-on-premises disclosure',
     subject_type: 'child',
     data_authority: 'milittlecare',
@@ -599,7 +606,11 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   intake_health_condition: Object.freeze({
     key: 'intake_health_condition',
     category: 'child_files',
-    rule_citation: 'R 400.1907(1)(b)(i)',
+    // Verified against the 2026 Family/Group Home TA Manual (May 2026).
+    // Pre-Pass-2: was '(1)(b)(i)' — A8/A9 had been transposed; the
+    // child health-condition disclosure is the (ii) sub-clause, the
+    // discipline-policy receipt is the (i) sub-clause.
+    rule_citation: 'R 400.1907(1)(b)(ii)',
     label: 'Acknowledgment of child health condition',
     subject_type: 'child',
     data_authority: 'milittlecare',
@@ -619,7 +630,10 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   intake_discipline_policy_receipt: Object.freeze({
     key: 'intake_discipline_policy_receipt',
     category: 'child_files',
-    rule_citation: 'R 400.1907(1)(b)(iv)',
+    // Verified against the 2026 Family/Group Home TA Manual (May 2026).
+    // Pre-Pass-2: was '(1)(b)(iv)' — A8/A9 had been transposed; the
+    // discipline-policy receipt is the (i) sub-clause.
+    rule_citation: 'R 400.1907(1)(b)(i)',
     label: 'Discipline policy receipt (parent at intake)',
     subject_type: 'child',
     data_authority: 'milittlecare',
@@ -639,7 +653,11 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   child_immunization_record: Object.freeze({
     key: 'child_immunization_record',
     category: 'child_files',
-    rule_citation: 'R 400.1907',
+    // Verified against the 2026 Family/Group Home TA Manual (May 2026).
+    // The three accepted statuses below correspond to R 400.1907(1)(c)(i),
+    // (ii), and (iii) — completed / in progress / waiver. "in progress"
+    // IS an accepted status; the VALID set preserves all three.
+    rule_citation: 'R 400.1907(1)(c)',
     label: 'Immunization record (or waiver) on file',
     subject_type: 'child',
     data_authority: 'milittlecare',
@@ -782,7 +800,7 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   consent_transportation_routine_annual: Object.freeze({
     key: 'consent_transportation_routine_annual',
     category: 'consents',
-    rule_citation: 'R 400.1952(1)(a)',
+    rule_citation: 'R 400.1952(1)',
     label: 'Routine transportation permission (annual)',
     subject_type: 'child',
     data_authority: 'milittlecare',
@@ -1165,7 +1183,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   medication_original_container_attestation: Object.freeze({
     key: 'medication_original_container_attestation',
     category: 'medication',
-    rule_citation: 'R 400.1931(4)',
+    // Verified against the 2026 Family/Group Home TA Manual (May 2026).
+    // R 400.1931(3) is the original-container + storage + named-child
+    // labeling rule; (4) is the prescription-specific addition of the
+    // pharmacy label (physician name, child's name, instructions,
+    // strength). Cite both since this attestation covers both.
+    rule_citation: 'R 400.1931(3)+(4)',
     label: 'Original container attestation (per non-OTC authorization)',
     subject_type: 'medication_authorization',
     data_authority: 'milittlecare',
@@ -1449,7 +1472,8 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   caregiver_physician_attestation_annual: Object.freeze({
     key: 'caregiver_physician_attestation_annual',
     category: 'staff_files',
-    rule_citation: 'R 400.1933',
+    // Staff-file copy filed under R 400.1906(1)(c).
+    rule_citation: 'R 400.1933(1)-(2)',
     label: 'Physician attestation of staff health (annual)',
     subject_type: 'caregiver',
     data_authority: 'milittlecare',
