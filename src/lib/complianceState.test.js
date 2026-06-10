@@ -24,6 +24,8 @@ import {
   listProviderDeclaredApplicabilityRequirements,
   // Phase 3 fix-forward (2026-06-05).
   NEEDS_PROVIDER_DATA_REASONS,
+  // Phase 3.1 prerequisite (2026-06-10).
+  LOAD_FAILURE_REASONS,
 } from './complianceState'
 import { ACK_TYPES } from './acknowledgments'
 
@@ -1622,10 +1624,12 @@ describe('§2a load-failure guards — resolver coverage completion', () => {
     })
   })
 
-  it('load-failure reasons classify as data_anomaly, not needs_provider_data (not provider-fixable)', () => {
+  it('load-failure reasons classify as load_failure, not needs_provider_data (not provider-fixable)', () => {
     // Deliberately NOT added to NEEDS_PROVIDER_DATA_REASONS — a failed
     // table load is not something the provider can fix from a page in
-    // the app. Same classification as E5's training-data-load-failure.
+    // the app. They get their own 'load_failure' bucket (Phase 3.1
+    // prerequisite) so guidance renders "refresh to retry," not
+    // "contact support."
     for (const reason of [
       'caregivers-load-failure',
       'staff-training-records-load-failure',
@@ -1634,7 +1638,7 @@ describe('§2a load-failure guards — resolver coverage completion', () => {
       'attendance-acks-load-failure',
     ]) {
       expect(NEEDS_PROVIDER_DATA_REASONS.has(reason)).toBe(false)
-      expect(classifyUnknownReason({ state: { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason } })).toBe('data_anomaly')
+      expect(classifyUnknownReason({ state: { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason } })).toBe('load_failure')
     }
   })
 })
@@ -2316,6 +2320,45 @@ describe('Phase 3 — classifyUnknownReason', () => {
       // Set frozen on a Set means no .add() / .delete() succeed silently —
       // a future contributor extending the set must do it in source.
       expect(Object.isFrozen(NEEDS_PROVIDER_DATA_REASONS)).toBe(true)
+    })
+  })
+
+  // Phase 3.1 prerequisite (2026-06-10): load-failure reasons split out
+  // of data_anomaly so guidance can render "couldn't verify — refresh"
+  // instead of "contact support" for a transient table-load failure.
+  describe('load_failure bucket — transient source-table load failures', () => {
+    it('LOAD_FAILURE_REASONS contains exactly the six guard reasons emitted in code', () => {
+      expect([...LOAD_FAILURE_REASONS].sort()).toEqual([
+        'attendance-acks-load-failure',
+        'caregivers-load-failure',
+        'funding-documents-load-failure',
+        'miregistry-training-entries-load-failure',
+        'staff-training-records-load-failure',
+        'training-data-load-failure',
+      ])
+    })
+
+    it('every reason in LOAD_FAILURE_REASONS classifies to load_failure', () => {
+      for (const reason of LOAD_FAILURE_REASONS) {
+        const state = { kind: 'unknown', reason }
+        expect(classifyUnknownReason({ state })).toBe('load_failure')
+      }
+    })
+
+    it('training-requirements-catalog-empty STAYS data_anomaly (loaded-but-empty catalog is a seed/deployment anomaly, not a transient load failure)', () => {
+      expect(LOAD_FAILURE_REASONS.has('training-requirements-catalog-empty')).toBe(false)
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'training-requirements-catalog-empty' } }))
+        .toBe('data_anomaly')
+    })
+
+    it('LOAD_FAILURE_REASONS is frozen (catalog cannot mutate at runtime)', () => {
+      expect(Object.isFrozen(LOAD_FAILURE_REASONS)).toBe(true)
+    })
+
+    it('LOAD_FAILURE_REASONS and NEEDS_PROVIDER_DATA_REASONS are disjoint (a reason has exactly one bucket)', () => {
+      for (const reason of LOAD_FAILURE_REASONS) {
+        expect(NEEDS_PROVIDER_DATA_REASONS.has(reason)).toBe(false)
+      }
     })
   })
 

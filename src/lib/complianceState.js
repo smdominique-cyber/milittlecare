@@ -2524,6 +2524,32 @@ export const NEEDS_PROVIDER_DATA_REASONS = Object.freeze(new Set([
 ]))
 
 /**
+ * Reasons that mean "a source table failed to LOAD" — the resolver
+ * could not see the data, so the state is unknowable this render, not
+ * wrong. These map to the `load_failure` bucket so Phase 3.1 guidance
+ * can render "couldn't verify — refresh to retry" instead of the
+ * data_anomaly bucket's "contact support."
+ *
+ * Membership is the six load-failure guard reasons emitted by the E5
+ * (training-data-load-failure) and §2a coverage-completion resolvers.
+ * NOT included: 'training-requirements-catalog-empty' — that fires
+ * when the statewide catalog LOADED successfully but contained no PD
+ * rows, which is a deployment/seed anomaly (migration 013 missing),
+ * not a transient load failure; it stays data_anomaly.
+ *
+ * If a future resolver adds a '<table>-load-failure' guard, add the
+ * reason here or it will misclassify as data_anomaly.
+ */
+export const LOAD_FAILURE_REASONS = Object.freeze(new Set([
+  'caregivers-load-failure',
+  'staff-training-records-load-failure',
+  'training-data-load-failure',
+  'miregistry-training-entries-load-failure',
+  'funding-documents-load-failure',
+  'attendance-acks-load-failure',
+]))
+
+/**
  * Classify an `unknown` state into a UI surface bucket. The checklist's
  * row renderer reads this to pick a treatment per the Phase 3 scope's
  * §5.4 mapping (plus the §3 live-gate fix-forward):
@@ -2547,9 +2573,15 @@ export const NEEDS_PROVIDER_DATA_REASONS = Object.freeze(new Set([
  *                                date on the staff record" copy.
  *                                NOT "contact support." Reasons live
  *                                in NEEDS_PROVIDER_DATA_REASONS above.
+ *   - 'load_failure'           — a source table failed to load, so the
+ *                                resolver could not see the data
+ *                                (reasons in LOAD_FAILURE_REASONS).
+ *                                Transient, not provider-fixable, not
+ *                                a support case. UI: "couldn't verify
+ *                                — refresh to retry."
  *   - 'data_anomaly'           — every other reason (unparseable-date,
  *                                completion-date-in-future,
- *                                source-not-loaded, no-state-resolver,
+ *                                no-state-resolver,
  *                                or no reason at all). UI: gray,
  *                                "contact support."
  *
@@ -2562,6 +2594,7 @@ export function classifyUnknownReason({ state } = {}) {
   if (reason === 'awaiting-provider-input') return 'awaiting_input'
   if (reason === 'feature-not-yet-shipped') return 'feature_not_yet_shipped'
   if (reason && NEEDS_PROVIDER_DATA_REASONS.has(reason)) return 'needs_provider_data'
+  if (reason && LOAD_FAILURE_REASONS.has(reason)) return 'load_failure'
   return 'data_anomaly'
 }
 
