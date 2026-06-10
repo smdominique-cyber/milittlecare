@@ -124,83 +124,81 @@ compliance-namespaced primitive into their domain.
 Alongside the component (in the same file or a sibling
 `ActionableGap.css` if styles grow): the shared types and exports.
 
-### Public contract
+### Public contract (as shipped in 3.1a)
 
 ```jsx
 import ActionableGap from '@/components/ui/ActionableGap'
 
 <ActionableGap
-  // REQUIRED — the plain-language "how to resolve" copy. Rendered
-  // unconditionally. Free-form text or a short JSX node. Caller's
-  // responsibility to keep it concise (1-3 sentences).
-  guidance="Capture the parent's signature on the child's intake bundle. The intake form includes the lead-paint disclosure, firearms disclosure, food agreement, and safe-sleep acknowledgment."
+  // REQUIRED — the plain-language "how to resolve" copy. A plain
+  // string, 1-3 sentences, matter-of-fact, no marketing voice.
+  // Empty/absent → the component renders nothing (defensive).
+  guidanceText="Capture the parent's signature on the lead-paint disclosure. R 400.1913 requires it for homes built before 1978."
 
-  // OPTIONAL — when present, renders a "Open [destination]" button
-  // that navigates via react-router <Link>. When absent, ONLY the
-  // guidance text shows — no dead button.
+  // OPTIONAL — when present AND fully built (both fields), renders a
+  // react-router <Link> styled as a button. When absent or partial,
+  // ONLY the guidance text shows — there is NEVER a dead or disabled
+  // button. `to` is the COMPLETE destination, query string included;
+  // the caller builds it (checklistGuidance.js owns that for the
+  // compliance checklist).
   fixTarget={{
-    label:  'Open intake for this child',  // button copy; usually "Open X"
-    to:     '/families',                   // base route
-    params: { family: familyId, tab: 'children', child: childId },  // optional query params
+    label: 'Open this child in Families',
+    to:    '/families?family=f1&child=c1&tab=children',
   }}
 
-  // OPTIONAL — drives visual emphasis of the button. Mirrors the
-  // engine's severity ladder so the button tier aligns with the
-  // requirement's regulatory weight. Defaults to 'medium'.
-  severity="critical"  // 'critical' | 'high' | 'medium' | 'low'
-
-  // OPTIONAL — for the Phase 3 'feature_not_yet_shipped' case, which
-  // wants the gray "tracking ships with PR #N" treatment instead of
-  // a colored gap. Set to 'informational' and pass guidance only.
-  variant="informational"  // 'gap' (default) | 'informational' | 'guidance-only'
-
-  // OPTIONAL — render hooks for consumers that want to inject extra
-  // structure (e.g. an icon, an evidence-id chip). Most consumers pass
-  // nothing.
-  prepend={<Icon />}
+  // OPTIONAL — visual weight of the guidance TEXT only. It does not
+  // gate the button or change behavior. Defaults to 'info'; unknown
+  // values fall back to 'info'.
+  severity="critical"  // 'critical' | 'warning' | 'info'
 />
 ```
+
+There is **no citation prop** — the rule citation stays in the
+surrounding row (ChecklistRow), which also keeps its own state color
+and icon. There is no `variant` and no `prepend`: the
+`feature_not_yet_shipped` and `data_anomaly` treatments are just
+`severity='info'` text-only renders; the content map supplies the
+copy, not a component mode.
 
 ### Render shape
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  [optional prepend]                                              │
 │  Plain-language guidance copy here. One to three sentences,      │
-│  matter-of-fact, no marketing voice. Same color as the surface's │
-│  body text.                                                       │
-│  [Open [destination] →]   ← button only when fixTarget present    │
+│  matter-of-fact, no marketing voice.                             │
+│  [Open [destination] →]   ← link only when fixTarget is complete │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Severity tiering
 
-| `severity` | Button visual |
+| `severity` | Guidance text visual |
 |---|---|
-| `critical` | Filled, error-tone (matches `MISSING_REQUIRED` row color) |
-| `high` | Filled, warning-tone (matches `EXPIRED` row color) |
-| `medium` | Outlined, neutral-tone (matches `AWAITING_INPUT` row color) |
-| `low` | Subtle link-style, no fill |
+| `critical` | Ink color, medium weight (500) |
+| `warning` | Ink color, regular weight |
+| `info` | Mid-ink (muted), regular weight |
 
-The same severity values the registry already uses (per Phase 1 §4 —
-`critical | high | medium | low`). Consumers either pass through
-`requirement.severity` from the engine or supply their own (a
-dashboard banner might pass `severity` derived from its own scoring).
+These mirror the three weights the checklist actually distinguishes
+(`missing_required`/`needs_provider_data` → critical;
+`expired`/`pending_parent`/`awaiting_input` → warning; informational
+buckets → info). Per-row overrides exist in the content map (F2's
+expired state renders `info` — the Level 2 pay-tier reframe). The
+container carries `actionable-gap--<severity>` classes for future CSS;
+the registry's own four-level `severity` field is unrelated and is NOT
+consumed by this component.
 
-### Variant — when not a "gap"
+### Content lives in `checklistGuidance.js`, not here
 
-`variant='informational'` produces the Pattern E "Tracking ships with
-PR #19" treatment Phase 3 already renders for `feature_not_yet_shipped`
-rows: gray icon, neutral text, no fix button. The
-existing rendering in `ChecklistRow.jsx` migrates to use
-`<ActionableGap variant="informational" guidance="..." />` —
-removes the inline gray styling, lands the same visual.
-
-`variant='guidance-only'` is the `data_anomaly` case + the
-NEEDS-SETH-REVIEW fallback: text appears in a neutral tone, no button
-even if `fixTarget` is supplied (the variant suppresses it). Used
-when the guidance itself is the action ("Contact support — record
-has a malformed date").
+The compliance adoption resolves all props through
+`actionableGapPropsFor({ requirement, state, context })` in
+`src/components/compliance/checklistGuidance.js` — an importable,
+unit-testable content map (decision #11). It owns the per-row copy,
+the severity overrides, the fixTarget builders (Surfaces 1/2/5 only in
+3.1a), and the unknown-bucket branching via `classifyUnknownReason`
+(load_failure → "refresh to retry"; data_anomaly → "contact support").
+Family/child-scoped targets require the consumer to pass a
+`fixContext` (`{ familyId, childId }`); absent context degrades to
+text-only — never a dead button.
 
 ### Why a primitive, not just an inline render in ChecklistRow
 
@@ -221,13 +219,12 @@ follow when their PRs ship.
 
 ### Accessibility
 
-- `guidance` text is in normal-document tab order; screen readers
-  read the description before the button.
-- Button has an accessible label that includes the guidance context
-  (e.g., `aria-label="Open intake bundle for Audrey — capture the
-  parent signature"`) for users navigating without seeing the
-  surrounding row.
-- Severity color is paired with shape/icon, not color-only.
+- `guidanceText` is normal document content; screen readers read the
+  description before the link.
+- The fix affordance is a real `<Link>` (anchor semantics, keyboard
+  focusable, visible text label) — not a div-button, never `disabled`.
+- Severity is conveyed by the surrounding row's icon + state color,
+  not by the gap's text weight alone.
 
 ---
 
@@ -625,7 +622,7 @@ none larger than the Phase 3 Finding #5 fix.
 
 | # | Surface | New params | What it lets 3.1 do | Estimated size |
 |---|---|---|---|---|
-| **B-1** | **BusinessInfoPage** | `?section=<sectionId>` | Auto-select the named section on mount. Required for Phase 3's `awaiting_input` deep-link to land correctly (today it navigates but the user clicks the tab themselves). | ~10 lines. **STRONGLY RECOMMEND IN-SCOPE.** Tiny + unblocks the Phase 3 link that already promises this behavior. |
+| **B-1** | **BusinessInfoPage** | `?section=<sectionId>` | Auto-select the named section on mount. Required for the `awaiting_input` deep-link to land correctly. **3.1a note (2026-06-10): B-1 needs TWO section ids, not one** — `awaiting_input` rows split between the premises questions (A2 lead / A3 firearms → Premises section) and the applicability questionnaire (C1 field trips etc. → "What applies to my program?"). The KNOWN_SECTIONS validator must accept both. Also: 3.1a REMOVED the old broken `?section=compliance_applicability` link from ChecklistRow (it never landed — BusinessInfoPage doesn't read `?section=`); `awaiting_input` rows render text-only guidance until B-1 ships, at which point checklistGuidance.js adds the BusinessInfo fixTargets. | ~10 lines (+ second section id). **Deferred out of 3.1a; first 3.1b sub-work.** |
 | **B-2** | **FamiliesPage children tab** | `?child=<id>` (scroll/focus a specific child within the tab) | Scrolls the named child into view OR highlights their row when the children tab opens. Useful for every Group A/B/C/D row. | ~15 lines. **RECOMMEND IN-SCOPE.** Single-tab effect; small. |
 | **B-3** | **FamiliesPage children tab** | `?action=intake` / `action=consents` / `action=medication` / `action=edit` | Auto-opens the corresponding modal on mount after the child is selected. Highest-leverage piece: a one-click deep-link from /compliance lands the user inside the intake/consents/medication modal for the right child. | ~30 lines including modal-open effects per action. **CONSIDER IN-SCOPE if Seth wants the full one-click experience; defer to 3.2 if the user clicking through the family modal is acceptable.** Open call. |
 | **B-4** | **FamiliesPage funding tab** | `?funding_source=<id>` (open a specific funding source detail) | Opens the funding source's detail view (where the DHS-198 / Enrollment Agreement uploads live). Lets G-group rows deep-link to the exact source needing the document. | ~15 lines. **Recommend DEFER to 3.2** unless B-3 is in-scope. |

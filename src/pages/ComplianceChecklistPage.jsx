@@ -223,11 +223,13 @@ export default function ComplianceChecklistPage() {
           Provider-level
         </h2>
         {PROVIDER_LEVEL_CATEGORIES.map(cat => (
+          // No fixContext here — the provider-level page has no
+          // family/child scope, so family-scoped fixTargets degrade
+          // to text-only guidance (never a dead button).
           <ChecklistCategoryCard
             key={cat}
             categoryKey={cat}
             category={providerLevel[cat]}
-            businessInfoApplicabilityHref="/business-info"
           />
         ))}
       </section>

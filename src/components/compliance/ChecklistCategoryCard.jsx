@@ -47,12 +47,14 @@ function summaryLine(category) {
  * @param {string} props.categoryKey
  * @param {object} props.category    A CategoryState from the engine
  *                                   (per_category[categoryKey]).
- * @param {string} [props.businessInfoApplicabilityHref]
+ * @param {{familyId: string, childId: string}} [props.fixContext]
+ *                                   Family/child scope threaded to each
+ *                                   ChecklistRow for deep-link buttons.
  */
 export default function ChecklistCategoryCard({
   categoryKey,
   category,
-  businessInfoApplicabilityHref,
+  fixContext,
 }) {
   const [showNotApplicable, setShowNotApplicable] = useState(false)
 
@@ -110,7 +112,7 @@ export default function ChecklistCategoryCard({
           <ChecklistRow
             key={row.state?.requirement_key || idx}
             row={row}
-            businessInfoApplicabilityHref={businessInfoApplicabilityHref}
+            fixContext={fixContext}
           />
         ))}
       </ul>
@@ -151,7 +153,7 @@ export default function ChecklistCategoryCard({
                 <ChecklistRow
                   key={row.state?.requirement_key || idx}
                   row={{ ...row, state: { ...row.state } }}
-                  businessInfoApplicabilityHref={businessInfoApplicabilityHref}
+                  fixContext={fixContext}
                 />
               ))}
             </ul>

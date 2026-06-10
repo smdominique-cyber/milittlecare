@@ -9,11 +9,17 @@
 // data_anomaly).
 //
 // Pure presentational — no Supabase, no fetches. The caller supplies
-// the registry row, the engine state, and (optionally) a callback to
-// navigate to the BusinessInfo applicability section when the row is
-// 'awaiting_input'.
+// the registry row, the engine state, and (optionally) a fixContext
+// ({ familyId, childId }) that lets family/child-scoped gap rows
+// build a working deep-link.
+//
+// Phase 3.1a: gap states (expired / missing_required / pending_parent
+// / the unknown sub-buckets) render an <ActionableGap> beneath the
+// short status line — plain-language guidance plus, where a real
+// addressable route exists, a deep-link button. Content comes from
+// checklistGuidance.js; the rule citation stays HERE, not in
+// ActionableGap.
 
-import { Link } from 'react-router-dom'
 import {
   Check,
   AlertTriangle,
@@ -30,6 +36,13 @@ import {
   DATA_STATE,
   classifyUnknownReason,
 } from '@/lib/complianceState'
+import ActionableGap from '@/components/ui/ActionableGap'
+import { actionableGapPropsFor } from './checklistGuidance'
+
+// trackingCopy / TRACKING_SHIPS_WITH moved to checklistGuidance.js in
+// 3.1a (the content map is their natural home). Re-exported here so
+// existing importers keep working.
+export { trackingCopy, TRACKING_SHIPS_WITH } from './checklistGuidance'
 
 // Per-reason copy for the `needs_provider_data` bucket. The
 // classifier returns the bucket; the renderer picks the right
@@ -51,48 +64,6 @@ const NEEDS_PROVIDER_DATA_COPY = Object.freeze({
   'no-regulatory-roles':
     'Needs regulatory role(s) on the staff record',
 })
-
-// Pluggable "tracking ships with PR #N" copy. Lookup precedence:
-//
-//   1. Per-row entry (keyed by req.key) — used when rows in the
-//      same category track to different PRs. The staff_files
-//      category is the exemplar: physician attestation + arrival/
-//      departure ship in PR #18, but discipline policy ack ships in
-//      PR #17. Pre-fix, this resolver keyed only on category and
-//      mashed both PRs into a single string for every staff_files
-//      not_yet_modelled row — so all three rendered identically.
-//      Fixed 2026-06-06.
-//   2. Category fallback — used when every not_yet_modelled row in
-//      a category IS tracked in the same PR. Both drills (all four
-//      rows → PR #19) and property (all eight rows → PR #21) are
-//      uniform.
-//   3. Generic fallback — for any registry row not enumerated
-//      explicitly.
-//
-// Exported so the pure-function lookup is unit-testable without
-// React Testing Library mount-test scaffolding.
-export const TRACKING_SHIPS_WITH = Object.freeze({
-  // Per-row entries — these override the category fallback when
-  // both exist (rule 1 above).
-  caregiver_physician_attestation_annual:  'PR #18 (staff file gaps)',
-  caregiver_discipline_policy_ack_at_hire: 'PR #17 (discipline policy receipt at hire)',
-  caregiver_daily_arrival_departure:       'PR #18 (staff file gaps)',
-  // Category-level fallback (rule 2 above). The staff_files
-  // category is intentionally NOT in this map — its three
-  // not_yet_modelled rows are all enumerated per-key above. If a
-  // future staff_files Pattern E row is added without a per-key
-  // entry, the generic fallback fires (better than re-mashing
-  // both PRs).
-  drills:        'PR #19 (drills + emergency response plan)',
-  property:      'PR #21 (property records)',
-})
-
-export function trackingCopy(req) {
-  if (!req) return 'a future MILittleCare build'
-  return TRACKING_SHIPS_WITH[req.key]
-      || TRACKING_SHIPS_WITH[req.category]
-      || 'a future MILittleCare build'
-}
 
 function formatYMD(iso) {
   if (!iso) return null
@@ -121,15 +92,13 @@ function describeMissing(req) {
  *                               array: { applicability, state } with
  *                               state.requirement_key populated by the
  *                               engine's tallyState.
- * @param {string} [props.businessInfoApplicabilityHref='/business-info']
- *                               Where to deep-link 'awaiting_input'
- *                               rows. Default points at the BusinessInfo
- *                               page; consumers can override.
+ * @param {{familyId: string, childId: string}} [props.fixContext]
+ *                               Family/child scope for deep-link fix
+ *                               buttons. Absent (provider-level pages)
+ *                               → family-scoped fixTargets degrade to
+ *                               text-only guidance.
  */
-export default function ChecklistRow({
-  row,
-  businessInfoApplicabilityHref = '/business-info',
-}) {
+export default function ChecklistRow({ row, fixContext }) {
   if (!row || !row.state) return null
   const key = row.state.requirement_key
   const req = key ? REQUIREMENT_REGISTRY[key] : null
@@ -138,6 +107,10 @@ export default function ChecklistRow({
   const state = row.state
   const label = req.label || key
   const isType1 = req.data_authority === 'miregistry'
+
+  // Null for on_file / not_applicable — those rows render no gap.
+  const gapProps = actionableGapPropsFor({ requirement: req, state, context: fixContext })
+  const gap = gapProps ? <ActionableGap {...gapProps} /> : null
 
   // Skip not_applicable rows when invisible-by-default. The parent
   // surface (per-category card) renders a "Show rows that don't apply"
@@ -201,6 +174,7 @@ export default function ChecklistRow({
             Expired {formatYMD(state.expired_at)} — renew now
           </span>
         }
+        gap={gap}
         isType1={isType1}
       />
     )
@@ -218,6 +192,7 @@ export default function ChecklistRow({
             Missing — needs {describeMissing(req)}
           </span>
         }
+        gap={gap}
         isType1={isType1}
       />
     )
@@ -235,6 +210,7 @@ export default function ChecklistRow({
             Pending parent signature
           </span>
         }
+        gap={gap}
         isType1={isType1}
       />
     )
@@ -245,6 +221,10 @@ export default function ChecklistRow({
     const bucket = classifyUnknownReason({ state })
 
     if (bucket === 'awaiting_input') {
+      // The old "?section=compliance_applicability" link never landed
+      // anywhere (BusinessInfoPage doesn't read ?section= — 3.1b
+      // sub-work B-1). Honest text-only guidance via ActionableGap
+      // until the section handling ships.
       return (
         <RowShell
           icon={<HelpCircle size={16} aria-hidden style={{ color: 'var(--clr-warn, #c97d2e)' }} />}
@@ -252,20 +232,9 @@ export default function ChecklistRow({
           label={label}
           ruleCitation={req.rule_citation}
           primary={
-            <>
-              <span style={{ color: 'var(--clr-warn, #c97d2e)' }}>Tell us about this</span>
-              <Link
-                to={`${businessInfoApplicabilityHref}?section=compliance_applicability`}
-                style={{
-                  marginLeft: 8,
-                  fontSize: '0.875rem',
-                  color: 'var(--clr-sage-dark, #3e5849)',
-                }}
-              >
-                → answer in Business Info
-              </Link>
-            </>
+            <span style={{ color: 'var(--clr-warn, #c97d2e)' }}>Tell us about this</span>
           }
+          gap={gap}
           isType1={isType1}
         />
       )
@@ -273,8 +242,10 @@ export default function ChecklistRow({
 
     if (bucket === 'feature_not_yet_shipped') {
       // Option A from the scope doc §4 — the load-bearing UX.
-      // Distinct from "missing" red. Informational gray. PR-name
-      // copy from TRACKING_SHIPS_WITH (registry category → PR map).
+      // Distinct from "missing" red. Informational gray. The full
+      // "tracking ships with PR #N — keep paper records" copy now
+      // lives in the gap (checklistGuidance.js); the status line
+      // stays short.
       return (
         <RowShell
           icon={<Wrench size={16} aria-hidden style={{ color: 'var(--clr-ink-mid)' }} />}
@@ -283,10 +254,31 @@ export default function ChecklistRow({
           ruleCitation={req.rule_citation}
           primary={
             <span style={{ color: 'var(--clr-ink-mid)' }}>
-              Tracking ships with {trackingCopy(req)} — keep paper records for
-              now. An auditor will ask to see them.
+              Not tracked in-app yet
             </span>
           }
+          gap={gap}
+          isType1={isType1}
+        />
+      )
+    }
+
+    if (bucket === 'load_failure') {
+      // Transient table-load failure — distinct from data_anomaly
+      // since 3.1 prep: "refresh to retry," not "contact support."
+      return (
+        <RowShell
+          icon={<HelpCircle size={16} aria-hidden style={{ color: 'var(--clr-ink-mid)' }} />}
+          color="muted"
+          label={label}
+          ruleCitation={req.rule_citation}
+          primary={
+            <span style={{ color: 'var(--clr-ink-mid)' }}>
+              Couldn&rsquo;t verify
+            </span>
+          }
+          gap={gap}
+          secondary={state.reason || null}
           isType1={isType1}
         />
       )
@@ -311,6 +303,7 @@ export default function ChecklistRow({
               {message}
             </span>
           }
+          gap={gap}
           isType1={isType1}
         />
       )
@@ -318,9 +311,8 @@ export default function ChecklistRow({
 
     // data_anomaly fallthrough — engine encountered something it
     // genuinely can't classify (unparseable date, completion date in
-    // future, dev-bug "no-state-resolver", etc.). These ARE worth
-    // contacting support over because they imply corrupt data or an
-    // engine misuse — not provider-fixable from the UI.
+    // future, dev-bug "no-state-resolver", etc.). The contact-support
+    // sentence moved to the gap (checklistGuidance.js).
     return (
       <RowShell
         icon={<HelpCircle size={16} aria-hidden style={{ color: 'var(--clr-ink-mid)' }} />}
@@ -329,9 +321,10 @@ export default function ChecklistRow({
         ruleCitation={req.rule_citation}
         primary={
           <span style={{ color: 'var(--clr-ink-mid)' }}>
-            Data anomaly — please contact support
+            Data anomaly
           </span>
         }
+        gap={gap}
         secondary={state.reason || null}
         isType1={isType1}
       />
@@ -357,6 +350,7 @@ function RowShell({
   label,
   ruleCitation,
   primary,
+  gap,
   secondary,
   isType1,
 }) {
@@ -405,6 +399,7 @@ function RowShell({
           )}
         </div>
         <div style={{ marginTop: 2, fontSize: '0.9375rem' }}>{primary}</div>
+        {gap}
         {secondary && (
           <div style={{ marginTop: 2, fontSize: '0.8125rem', color: 'var(--clr-ink-mid)' }}>
             {secondary}
