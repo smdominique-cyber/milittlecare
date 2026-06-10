@@ -48,6 +48,8 @@ const NEEDS_PROVIDER_DATA_COPY = Object.freeze({
     'Needs hire date on the staff record',
   'no-authorization-end-on-funding-source':
     'Needs authorization end date on the funding source',
+  'no-regulatory-roles':
+    'Needs regulatory role(s) on the staff record',
 })
 
 // Pluggable "tracking ships with PR #N" copy. Lookup precedence:
