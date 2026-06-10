@@ -1017,6 +1017,324 @@ Status remains **DRAFT for review** until that next round.
 
 ---
 
-**End of compliance-engine Phase 3.1 scope doc — DRAFT.** No code,
-no migration, no commit-to-main. Halting for Seth's review per
-§11.
+# Part 2 — per-requirement guidance + fix-target table
+
+> Produced 2026-06-09 on `feature/phase-3-1-guidance-table`, verified
+> against the registry on `main` (commit `0c50756` — post Pass-2
+> citation corrections). Scoping artifact only — no code. Where this
+> Part and §2's earlier draft rows conflict, this Part is the
+> verified successor; §2 remains for bucket framing and prior review
+> notes.
+
+## Counts (count discipline)
+
+- **Total registry requirements found: 51.** Earlier scoping notes
+  said "~52" and the `complianceState.js` file header still says 52.
+  The difference is exactly one row: `funding_dhs_198_on_file` (G1),
+  removed 2026-06-06 in the CDC-layer correctness pass (in-file
+  comment in the funding section; §11 of this doc already records
+  "39 was 40 — G1 removed"). The mismatch is stated, not reconciled —
+  no rows were merged or invented. `REGISTRY_ROW_COUNT` is computed
+  from `Object.keys` and locked by test.
+- **Route status across the 51 primary rows: A = 23 · B = 7 ·
+  C = 19 · n/a = 2.** (n/a = D1/D6, whose resolvers cannot produce an
+  actionable gap.)
+- **Secondary `awaiting_input` gap-type rows: 5** (same requirement
+  keys, different gap → different fix surface; Surface 3 below). All
+  route status **B**.
+- **review-me rows: 9** (A7, B1, B2, C2, D4, E5, E7, F1, G4).
+
+## Contract this table feeds (and §1 divergence)
+
+The decided `ActionableGap` contract:
+
+```
+{ guidanceText: string (required),
+  fixTarget?: { label: string, to: string },   // `to` is FULLY BUILT, incl. query string
+  severity: 'critical' | 'warning' | 'info' }  // presentation only, mapped from gap state by the consumer
+```
+
+- **No citation prop.** Citation stays in ChecklistRow. No guidance
+  string below embeds a rule citation.
+- **`fixTarget` optional; no dead-button state.** A row whose route
+  can't be confirmed addressable to the right entity is text-only,
+  full stop.
+- **§1 of this doc diverges from the decided contract** (`guidance`
+  prop name, separate `params` object, 4-level severity, `variant`
+  prop). This table is written to the decided contract; §1 must be
+  updated in the build PR. Open question Q5 covers the `variant`
+  prop's fate.
+
+### Severity mapping (consumer-side)
+
+| gap state | severity |
+|---|---|
+| `missing_required` | `critical` |
+| `unknown` / `needs_provider_data` | `critical` |
+| `expired` | `warning` (exception: F2, advisory by design → `info`) |
+| `pending_parent` | `warning` |
+| `unknown` / `awaiting_input` | `warning` |
+| `unknown` / `feature_not_yet_shipped` | `info` |
+| `unknown` / load failure (`sourceRowsLoaded === false`) | `info` |
+| `unknown` / `data_anomaly` | `info` |
+| `on_file` (incl. `expiring_soon`) / `not_applicable` | ActionableGap does not render (Q10) |
+
+## Global rules (apply to every row; not repeated per-row)
+
+1. **Load-failure unknown.** When the envelope reports
+   `sourceRowsLoaded === false` for a table the row's resolver reads:
+   `guidanceText` = "We couldn't verify this — refresh to retry.",
+   severity `info`, **no fixTarget**. ⚠ Wrinkle (open question Q1):
+   `getRequirementState` (complianceState.js:2200-2202) returns
+   `reason: 'awaiting-provider-input'` for ALL applicability-level
+   unknowns **including** the §2a load-failure path — the load
+   failure is NOT distinguishable by reason code. The consumer must
+   branch on the envelope's `sourceRowsLoaded` BEFORE calling
+   `classifyUnknownReason`, or the engine needs a distinct reason
+   (e.g. `'source-rows-not-loaded'`). Without one of those, a
+   transient load failure renders the `awaiting_input` "Tell us
+   about this" treatment — exactly the misleading state this Part
+   forbids.
+2. **`data_anomaly` unknown.** `guidanceText` = "Something looks
+   wrong with this record — contact support.", severity `info`, no
+   fixTarget. Reserved for genuine anomalies (unparseable dates,
+   completion date in future, no-state-resolver). Never used for a
+   load failure (rule 1) or a provider-fixable gap
+   (`needs_provider_data` rows have their own guidance below).
+3. **Route evidence.** Every category-A `to` was verified by opening
+   the route definition: `src/App.jsx:130-153` (route table) and the
+   deep-link handler `src/pages/FamiliesPage.jsx:150-180` (`?family=`
+   + `?tab=` consumed, `?tab=` validated against `KNOWN_TABS`
+   including `children`/`funding`; `?child=` accepted but
+   informational; `clearDeepLinkParams` clears all three). No route
+   was guessed into A.
+
+### Granularity convention for the Families deep link (Q9)
+
+The Finding #5 scheme is addressable to **family + tab** — not to a
+specific child or modal. `?child=` is accepted-but-informational
+(FamiliesPage.jsx:163-167); there is no `?action=`. The link is
+honest, not dead: it opens the right family's modal at the right
+tab, where the named child is one click away. Surface 1/2 rows are
+therefore marked **A at family+tab granularity**, and every `to`
+already includes `child={child_id}` so the B-2 (scroll/focus) and
+B-3 (modal auto-open) sub-work upgrades them without touching the
+content map. If Seth sets the category-A bar at strict child-level
+addressing, every Surface 1/2 row flips to B until B-2/B-3 land —
+that's a one-line convention change, not a per-row re-audit.
+
+The consumer builds `to` from the loader's children list, which
+carries `family_id` (precedent: ComplianceChecklistPage.jsx:333-336
+builds exactly this link shape today).
+
+---
+
+## Surface 1 — Families modal → Children tab (19 rows, all A)
+
+`to` = `/families?family={family_id}&child={child_id}&tab=children`
+— route `src/App.jsx:135`; params `FamiliesPage.jsx:150-169`.
+fixTarget label: "Open this child's record" (or per-row below).
+
+| requirement key | gap state(s) | plain-language guidance | fix target | route status | confidence |
+|---|---|---|---|---|---|
+| `child_in_care_statement_envelope` (A1) | `missing_required`, `pending_parent` | The Child in Care statement hasn't been signed by a parent yet. Open the child's intake and send (or re-send) the bundle for signature. | `/families?family={family_id}&child={child_id}&tab=children` | A | high |
+| `intake_lead_disclosure` (A2) | `missing_required` (inform-only — Pattern B, no pending_parent) | Your home was built before 1978, so the lead-paint disclosure must be on file for this child. Record it from the child's intake bundle. | same | A | high |
+| `intake_firearms_disclosure` (A3) | `missing_required`, `pending_parent` | The firearms disclosure must be acknowledged by a parent. Send it from the child's intake bundle. | same | A | high |
+| `intake_food_provider_agreement` (A4) | `missing_required`, `pending_parent` | The food-provider agreement hasn't been acknowledged by a parent. Send it from the child's intake bundle. *(Known-wrong citation on this row is a ChecklistRow concern — do not re-derive; it never enters guidanceText.)* | same | A | high |
+| `intake_licensing_notebook_availability` (A5) | `missing_required`, `pending_parent` | The licensing-notebook-availability notice hasn't been acknowledged by a parent. Send it from the child's intake bundle. | same | A | high |
+| `intake_licensing_rules_offered` (A6) | `missing_required`, `pending_parent` | The licensing-rules-offered acknowledgment is missing for this child. Send it from the child's intake bundle. | same | A | high |
+| `intake_infant_safe_sleep` (A7) | `missing_required`, `pending_parent` (child <18 mo); `unknown`/awaiting-input when DOB null | Under 18 months: "This child is under 18 months, so a parent must acknowledge the safe-sleep policy. Send it from the child's intake bundle." DOB missing: "Add this child's date of birth so we can tell whether the safe-sleep acknowledgment applies." (DOB unknown is a child-record gap, **not** a Business-Info question — same fix target.) | same | A | **review-me** (forced): the alternate-sleep trigger ("how does the system know a child needs non-standard sleep?") is UNRESOLVED. Guidance above covers only the standard ack; no alternate-sleep fix flow is invented here. |
+| `intake_health_condition` (A8) | `missing_required`, `pending_parent` | The health-condition disclosure hasn't been acknowledged by a parent. Send it from the child's intake bundle. | same | A | high |
+| `intake_discipline_policy_receipt` (A9) | `missing_required`, `pending_parent` | The parent hasn't acknowledged receipt of your discipline policy for this child. Send it from the child's intake bundle. | same | A | high |
+| `child_in_care_statement_envelope_drift` (B3) | `pending_parent` | This child's information changed after the parent last signed the Child in Care statement. Re-send it for a fresh signature. | same | A | high |
+| `consent_field_trip_permission` (C1) | `missing_required`, `pending_parent` | Capture the parent's field-trip permission from the child's Consents. | same | A | high |
+| `consent_transportation_routine_annual` (C2) | `missing_required`, `pending_parent`, `expired` | Capture — or renew — the parent's routine-transportation permission from the child's Consents. This permission currently expires annually. | same | A | **review-me**: the annual-expiry removal is approved as a separate all-surfaces PR (the logic change was backed out of the Pass-2 citation branch 2026-06-08). When it lands, the `expired` gap state disappears and "annually" comes out of this copy. Do not ship this row's copy without checking that PR's status (Q6). |
+| `consent_water_activities_on_premises_seasonal` (C3) | `missing_required`, `pending_parent`, `expired` | Capture — or renew for the season — the parent's on-premises water-activities permission from the child's Consents. | same | A | high |
+| `consent_transportation_nonroutine_per_trip_recency` (C4) | `pending_parent` (resolver yields on_file/pending only) | A non-routine transportation trip is on record without a parent-signed per-trip permission. Collect the parent's signature for that trip from the child's Consents. | same | A | high |
+| `consent_water_activities_off_premises_per_trip_recency` (C5) | `pending_parent` | An off-premises water-activity trip is on record without a parent-signed per-trip permission. Collect the parent's signature for that trip from the child's Consents. | same | A | high |
+| `consent_photo_sharing` (C6) | `missing_required`, `pending_parent` | Record the parent's photo-sharing choice from the child's Consents — a grant **or** a revocation both put this on file. | same | A | high |
+| `medication_permission_per_authorization` (D2) | `missing_required`, `pending_parent` (incl. `authorization-changed-since-permission` drift) | A medication authorization is missing current parent permission — or the authorization changed after the parent signed. Re-collect permission from the child's Medications. | same | A | high |
+| `medication_permission_otc_blanket` (D3) | `missing_required`, `pending_parent` | Collect the parent's blanket over-the-counter medication permission from the child's Medications. | same | A | high |
+| `medication_original_container_attestation` (D5) | `missing_required` (`original_container_confirmed !== true`) | Confirm on this medication's record that it arrived in its original container with the required labeling. | same | A | high |
+
+## Surface 2 — Families modal → Funding tab (2 rows, both A)
+
+`to` = `/families?family={family_id}&child={child_id}&tab=funding`
+— same handler evidence as Surface 1; `funding` ∈ `KNOWN_TABS`.
+Funding-source-level addressing (the exact document slot) is
+sub-work **B-4** (§4.2) — not required for A at this granularity.
+
+| requirement key | gap state(s) | plain-language guidance | fix target | route status | confidence |
+|---|---|---|---|---|---|
+| `funding_enrollment_agreement_on_file` (G2) | `missing_required` | This CDC funding source bills by enrollment but has no enrollment agreement on file. Upload it in the funding source's Documents. | `/families?family={family_id}&child={child_id}&tab=funding` | A | high |
+| `cdc_authorization_currency` (G3) | `expired`, `missing_required`; `unknown`/`needs_provider_data` (`no-authorization-end-on-funding-source`) | Expired/missing: "This child's CDC authorization has ended or isn't recorded. Update the funding source dates after redetermination." needs_provider_data: "Add the authorization end date to this child's CDC funding source so we can track when it ends." | same | A | high |
+
+## Surface 3 — Business Info (5 secondary `awaiting_input` rows, all B → text-only for now)
+
+Route `/business-info` exists (`src/App.jsx:143`) and the page
+renders `ApplicabilityQuestionsSection` (BusinessInfoPage.jsx:925)
+and the premises-disclosures section (BusinessInfoPage.jsx:931
+comment). **But `?section=` is NOT consumed** — BusinessInfoPage has
+no `useSearchParams`/`useLocation` handler (verified by direct
+search of the file, 2026-06-09). So the section deep link navigates
+but doesn't land → **B — route exists, not addressable**. Per the
+no-dead-button rule these render **text-only for now**; the missing
+param handling is sub-work **B-1** (§4.2, ~10 lines, already
+STRONGLY RECOMMEND).
+
+Two honesty notes:
+
+- **ChecklistRow.jsx:256 already emits**
+  `/business-info?section=compliance_applicability` for
+  `awaiting_input` rows — that shipped link under-delivers today.
+  Recommendation: land B-1 in the same build PR, which flips all
+  five rows here to A.
+- **B-1 needs two section ids, not one.** A2/A3 booleans
+  (`home_built_before_1978`, `firearms_on_premises`) live in the
+  **premises disclosures** section; C2/C3/animal overrides live in
+  **ApplicabilityQuestionsSection**. §4.2's single-id framing is
+  incomplete (Q2).
+
+| requirement key | gap state(s) | plain-language guidance | fix target | route status | confidence |
+|---|---|---|---|---|---|
+| `intake_lead_disclosure` (A2) | `unknown`/`awaiting_input` | Tell us whether your home was built before 1978 — it decides whether the lead-paint disclosure applies. Answer in Business Info → Premises. | text-only (B-1 pending; premises section) | B | high |
+| `intake_firearms_disclosure` (A3) | `unknown`/`awaiting_input` | Tell us whether firearms are present on the premises — it decides whether the firearms disclosure applies. Answer in Business Info → Premises. | text-only (B-1 pending; premises section) | B | high |
+| `consent_transportation_routine_annual` (C2) | `unknown`/`awaiting_input` | Tell us whether you routinely transport children. Answer in Business Info → "What applies to my program?" | text-only (B-1 pending; applicability section) | B | high (wording should mirror `QUESTION_COPY` in ApplicabilityQuestionsSection.jsx:51-82) |
+| `consent_water_activities_on_premises_seasonal` (C3) | `unknown`/`awaiting_input` | Tell us whether you have a pool or other qualifying water feature on the premises. Answer in Business Info → "What applies to my program?" | text-only (B-1 pending; applicability section) | B | high (same `QUESTION_COPY` note) |
+| `property_animal_notification` | `unknown`/`awaiting_input` | Tell us whether animals are present on the premises. Answer in Business Info → "What applies to my program?" *(Even once answered "yes", the record itself is Pattern E — see Surface 7.)* | text-only (B-1 pending; applicability section) | B | high |
+
+## Surface 4 — Staff Training `/staff-training` (6 rows, all B → text-only for now)
+
+Route exists (`src/App.jsx:147`); **StaffTrainingPage consumes no
+params** (no `useSearchParams` in the file — verified 2026-06-09),
+so a specific caregiver is not addressable → **B**, text-only;
+sub-work **C-1** (§4.2, `?caregiver=`).
+
+Correction to §4.2: the `date_of_hire` edit lives on
+**StaffTrainingPage** (write at StaffTrainingPage.jsx:285), not on
+`/staff` — so **C-1 covers E3's hire-date fix and §4.2's C-2 routing
+note is stale** (Q8).
+
+| requirement key | gap state(s) | plain-language guidance | fix target | route status | confidence |
+|---|---|---|---|---|---|
+| `caregiver_background_check_eligibility` (E1) | `missing_required`, `pending_parent` (status `pending`) | This caregiver's comprehensive background check isn't cleared yet. Record their eligibility on Staff Training once the check clears. | text-only (C-1 pending) | B | high |
+| `caregiver_cpr_first_aid_current` (E2) | `expired`, `missing_required` (+`expiring_soon` advisory on on_file — Q10) | Record a current CPR/First Aid certification for this caregiver on Staff Training — renew before the expiration date. | text-only (C-1 pending) | B | high |
+| `caregiver_new_hire_training_complete` (E3) | `missing_required`; `unknown`/`needs_provider_data` (`caregiver-missing-date-of-hire`) | Missing: "Log this caregiver's new-hire training on Staff Training — all 14 topics are due within 90 days of hire." needs_provider_data: "Add this caregiver's hire date on Staff Training so the 90-day window can be tracked." | text-only (C-1 pending) | B | high |
+| `caregiver_miregistry_account` (E4) — **Type 1** | `expired`, `missing_required`; `unknown` `unrecognized-miregistry-status` → currently `data_anomaly` (Q7) | This caregiver's MiRegistry account isn't current. Renew it in MiRegistry, then update the transcribed status on Staff Training. (Auditors verify this in MiRegistry — we mirror it for visibility.) | text-only (C-1 pending) | B | high |
+| `caregiver_professional_development_hours` (E5) — **Type 1** | `missing_required` (reason `hours-N-of-16`) | This caregiver has logged N of 16 annual professional-development hours. Complete approved training in MiRegistry and record the hours on Staff Training. | text-only (C-1 pending) | B | **review-me**: the engine uses a flat conservative 16-hour threshold (`ANNUAL_HOURS = 16` in complianceState.js); R 400.1924 hours vary by role. Copy asserting "16" needs Seth's blessing (Q7). |
+| `caregiver_health_safety_update_acked` (E6) | `missing_required` (`unacked-update`) | A health & safety update hasn't been acknowledged by this caregiver. Collect their acknowledgment on Staff Training. | text-only (C-1 pending) | B | high |
+
+## Surface 5 — MiRegistry tracker `/miregistry` (2 rows, both A)
+
+Route `src/App.jsx:146`. Provider-level — the page is the
+destination; no entity params needed (per §4.2 C-5, "the page itself
+is the destination"). fixTarget label: "Open MiRegistry tracker",
+`to` = `/miregistry`.
+
+⚠ Surface-gating tension (Q4): F1/F2 are LEP-gated in the registry,
+but every compliance surface that exists today gates to licensed
+homes — so on current surfaces these rows resolve `not_applicable`
+and never show a gap. The rows are specified anyway so the content
+map is complete when an LEP-visible surface ships.
+
+| requirement key | gap state(s) | plain-language guidance | fix target | route status | confidence |
+|---|---|---|---|---|---|
+| `provider_miregistry_annual_ongoing` (F1) | `expired`, `missing_required` | Complete the Michigan Ongoing Health & Safety Refresher in MiRegistry before December 16 — missing the deadline closes your CDC account. If you enrolled this calendar year, the December 16 deadline begins next year — verify against your records. | `/miregistry` | A | **review-me** (forced by the registry itself): the first-year-LEP sentence is exactly the nuance the registry comment defers to "Phase 3.1 guidance copy" — Seth confirms wording. |
+| `provider_miregistry_level_2_currency` (F2) | `expired` (+`expiring_soon`) — **advisory**, severity `info` always (registry severity `low`; a pay-rate drop, not a violation) | Your Level 2 status has expired (or expires soon) — your CDC pay rate drops to Level 1 on that date. Log 10 more approved training hours in MiRegistry, then update your transcribed level here. | `/miregistry` | A | high |
+
+## Surface 6 — Parent Acknowledgments `/acknowledgments` (1 row, B → text-only for now)
+
+Route exists (`src/App.jsx:145`) but ProviderAcknowledgmentsPage
+consumes no params (grep of `useSearchParams` across `src/pages`,
+2026-06-09) — a specific child/day is not addressable → **B**.
+**New named sub-work, not in §4.2's inventory: "C-6 —
+ProviderAcknowledgmentsPage `?child=` filter (~15 lines)"** (Q8).
+
+| requirement key | gap state(s) | plain-language guidance | fix target | route status | confidence |
+|---|---|---|---|---|---|
+| `attendance_parent_acknowledgment_per_day` (H1) | `pending_parent` (`N-days-provider-override-only`), `missing_required` (`N-days-missing-ack`) | pending: "N attendance day(s) have only your override on file — the parent hasn't confirmed. Ask them to confirm in their portal, or review the days on Parent Acknowledgments." missing: "N CDC attendance day(s) have no parent acknowledgment. Follow up with the parent, or record an override with a reason." | text-only (C-6 pending) | B | high |
+
+## Surface 7 — No fix surface (19 C rows + 2 n/a)
+
+Pattern E guidance must reuse `trackingCopy()` /
+`TRACKING_SHIPS_WITH` (ChecklistRow.jsx:72-93) rather than duplicate
+PR-name strings.
+
+| requirement key | gap state(s) | plain-language guidance | fix target | route status | confidence |
+|---|---|---|---|---|---|
+| `child_immunization_record` (B1) | `missing_required` (status not in `up_to_date` / `waiver_on_file` / `in_progress`) | Record this child's immunization status — "up to date," "waiver on file," or "in progress" all satisfy the rule. | text-only | **C — no fix surface**: `children.immunization_status` has **no writer anywhere** — no UI component, page, or migration RPC sets it (searched src/ + supabase/migrations, 2026-06-09; column added in 024, read by the loader, written nowhere). The intake bundle's immunization *acknowledgment* does not set this column. | **review-me** (Q3 — capture gap needs an owner) |
+| `child_annual_record_review` (B2) | `expired`, `missing_required`; unparseable date → `data_anomaly` (global rule 2) | Review this child's records and mark the review date — due annually, with first-year tolerance from intake. | text-only | **C — no fix surface**: `children.records_last_reviewed_on` has **no writer anywhere** (same search). The childAnnualReviewScheduler comment says "intake form → updates records_last_reviewed_on," but no code does. | **review-me** (Q3) |
+| `medication_authorization_for_authorization` (D1) | none — resolver always `on_file` (the authorization row IS the evidence); only the global-rule-1 load-failure unknown is possible | n/a — no ActionableGap content | n/a | n/a | high |
+| `medication_role_gate_integrity` (D4) | `missing_required` (`ineligible-role-administered-non-otc-dose`) | A non-OTC dose was recorded by someone not permitted to administer medication (licensee or child care staff member only). Review the dose log entry and your staffing assignments. | text-only | C — interim only | **review-me** (forced): this detection row is being **retired** — the designed fix (dropdown role-gating at capture) is NOT built. Do not write or build fix guidance as if it ships; the copy above is an interim stop-gap pending the retirement decision. |
+| `medication_dose_log_retention` (D6) | none — resolver always `on_file` (retention is DB-enforced) | n/a | n/a | n/a | high |
+| `cdc_fingerprint_reprint_currency` (G4) | `missing_required`, `expired` (5-year cycle, 30-day window — complianceState.js:1778-1785) | Your fingerprint capture is more than 5 years old (or not on record). Schedule a reprint and record the new date. | text-only | **C — no fix surface**: `profiles.fingerprint_date` has **no writer anywhere in src/** (loader reads it; nothing sets it). A capture surface must be named before any fixTarget — Business Info is the natural candidate (Q3). | **review-me** (Q3) |
+| `caregiver_physician_attestation_annual` (E7) | `unknown`/`feature_not_yet_shipped` | Tracking ships with PR #18 (staff file gaps) — keep the signed physician attestation in your paper staff files; an auditor will ask to see it. | text-only | C | **review-me** (forced): the citation is verified, but the **"annual" recurrence is NOT verified** — copy must not assert a cadence until it is (the key name itself says "annual"; flag, don't infer). |
+| `caregiver_discipline_policy_ack_at_hire` (E8) | `unknown`/`feature_not_yet_shipped` | Tracking ships with PR #17 (discipline policy receipt at hire) — keep signed paper acknowledgments for now. | text-only | C | high |
+| `caregiver_daily_arrival_departure` (E9) | `unknown`/`feature_not_yet_shipped` | Tracking ships with PR #18 (staff file gaps). App-user caregivers already have clock records; keep a paper daily log for non-app caregivers meanwhile. | text-only | C | high |
+| `drill_fire_quarterly` | `unknown`/`feature_not_yet_shipped` | Tracking ships with PR #19 (drills + emergency response plan) — keep your written drill log on paper; an auditor will ask to see it. | text-only | C | high |
+| `drill_tornado_seasonal` | `unknown`/`feature_not_yet_shipped` | (same as above) | text-only | C | high |
+| `drill_other_emergencies_annual` | `unknown`/`feature_not_yet_shipped` | (same as above) | text-only | C | high |
+| `emergency_response_plan_on_file` | `unknown`/`feature_not_yet_shipped` | Tracking ships with PR #19 — keep your written emergency response plan on paper for now. | text-only | C | high |
+| `property_radon_test_quadrennial` | `unknown`/`feature_not_yet_shipped` | Tracking ships with PR #21 (property records) — keep the test results / inspection reports on paper for now. | text-only | C | high |
+| `property_heating_inspection_quadrennial` | `unknown`/`feature_not_yet_shipped` | (same as above) | text-only | C | high |
+| `property_co_detectors_per_level` | `unknown`/`feature_not_yet_shipped` | (same as above) | text-only | C | high |
+| `property_smoke_detectors_per_floor` | `unknown`/`feature_not_yet_shipped` | (same as above) | text-only | C | high |
+| `property_fire_extinguishers_per_floor` | `unknown`/`feature_not_yet_shipped` | (same as above) | text-only | C | high |
+| `property_animal_notification` | `unknown`/`feature_not_yet_shipped` (once applicability is answered; the `awaiting_input` gap is Surface 3) | Tracking ships with PR #21 — keep per-family pet notifications on paper for now. | text-only | C | high |
+| `property_smoking_prohibition_posted` | `unknown`/`feature_not_yet_shipped` | (same as the PR #21 rows above) | text-only | C | high |
+| `property_licensing_notebook_archive` | `unknown`/`feature_not_yet_shipped` | (same as above) | text-only | C | high |
+
+---
+
+## Open questions for Seth (Part 2)
+
+1. **Load-failure unknown is reason-indistinguishable from
+   awaiting_input** (complianceState.js:2200-2202 — both yield
+   `'awaiting-provider-input'`). Pick the sub-work: a distinct engine
+   reason code, or a documented consumer-side `sourceRowsLoaded`
+   branch before `classifyUnknownReason`. One of the two must ship
+   with the build.
+2. **B-1 must land with the build** — ChecklistRow.jsx:256 already
+   emits the unconsumed `?section=` link — **and B-1 needs two
+   section ids** (premises disclosures for A2/A3; applicability
+   section for C2/C3/animal). §4.2's single-id framing is incomplete.
+3. **Three columns have no writer anywhere** (UI or migrations):
+   `children.immunization_status` (B1),
+   `children.records_last_reviewed_on` (B2),
+   `profiles.fingerprint_date` (G4). These rows can never leave
+   their gap state from the app today. Pre-existing capture gaps,
+   not 3.1 build items — but they need an owner and a target PR
+   before those three rows get fixTargets.
+4. **F1/F2 gating tension**: LEP-only rows, licensed-only surfaces —
+   today they always resolve `not_applicable`. Ship the guidance now
+   (content map complete for a future LEP surface) or mark deferred?
+5. **§1 contract divergence**: `guidance` → `guidanceText`, `params`
+   folded into fully-built `to`, 4-level → 3-level severity, and the
+   `variant` prop has no equivalent in the decided contract
+   (presumably `feature_not_yet_shipped` just renders text-only at
+   severity `info`). Update §1 in the build PR.
+6. **C2 sequencing**: this Part's C2 copy reflects current `main`
+   (annual expiry ACTIVE). Re-review the row when the separate
+   expiry-removal PR lands.
+7. **Two engine-copy confirmations**: E5's flat 16-hour threshold in
+   user-facing copy; E4's `unrecognized-miregistry-status` currently
+   classifies to `data_anomaly` → "contact support," though it's a
+   provider-fixable transcription — consider adding it to
+   `NEEDS_PROVIDER_DATA_REASONS`.
+8. **§4.2 inventory updates**: add **C-6** (ProviderAcknowledgmentsPage
+   `?child=`, ~15 lines) for H1; **C-2 is stale** — the hire-date
+   edit lives on StaffTrainingPage (line 285), not `/staff`, so C-1
+   covers E3 and C-2 can be demoted/omitted.
+9. **Category-A granularity bar**: family+tab accepted as A (the
+   convention above) — confirm, or Surface 1/2 (21 rows) flip to B
+   pending B-2/B-3.
+10. **`expiring_soon` advisory** (E2/F2/G4 on_file rows): does
+    ActionableGap render a nudge, or is that ChecklistRow-only?
+    Recommend ChecklistRow-only for 3.1.
+
+---
+
+**End of compliance-engine Phase 3.1 scope doc — DRAFT, now
+including Part 2 (2026-06-09).** No code, no migration,
+no commit-to-main. Halting for Seth's review per §11 + Part 2's
+open questions.
