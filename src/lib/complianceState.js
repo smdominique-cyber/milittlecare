@@ -1155,7 +1155,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
         return any ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
       },
     },
-    state_resolver: ({ sourceRows }) => {
+    state_resolver: ({ sourceRows, sourceRowsLoaded }) => {
+      // §2a load-failure guard: a failed caregivers load would make
+      // every non-OTC dose look caregiver-less → false anomaly red.
+      if (sourceRowsLoaded && sourceRowsLoaded.caregivers === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'caregivers-load-failure' }
+      }
       // Defensive: the DB trigger guarantees on_file. We check anyway
       // because the trigger could be bypassed by a future direct
       // write. Anomaly = a non-OTC dose event whose caregiver lacks
@@ -1268,7 +1273,15 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'critical',
     data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: ({ sourceRows }) => {
+    state_resolver: ({ sourceRows, sourceRowsLoaded }) => {
+      // §2a load-failure guards (before the empty-checks, so genuine
+      // empties keep their current behavior).
+      if (sourceRowsLoaded && sourceRowsLoaded.caregivers === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'caregivers-load-failure' }
+      }
+      if (sourceRowsLoaded && sourceRowsLoaded.staff_training_records === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'staff-training-records-load-failure' }
+      }
       // Reports WORST across caregivers.
       const caregivers = (sourceRows.caregivers || []).filter(c => !c.archived_at)
       if (caregivers.length === 0) return { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED, reason: 'no-active-caregivers' }
@@ -1299,7 +1312,14 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'high',
     data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: ({ sourceRows, now }) => {
+    state_resolver: ({ sourceRows, sourceRowsLoaded, now }) => {
+      // §2a load-failure guards.
+      if (sourceRowsLoaded && sourceRowsLoaded.caregivers === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'caregivers-load-failure' }
+      }
+      if (sourceRowsLoaded && sourceRowsLoaded.staff_training_records === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'staff-training-records-load-failure' }
+      }
       const caregivers = (sourceRows.caregivers || []).filter(c => !c.archived_at)
       if (caregivers.length === 0) return { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED, reason: 'no-active-caregivers' }
       const records = sourceRows.staff_training_records || []
@@ -1327,7 +1347,14 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'critical',
     data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: ({ sourceRows, now }) => {
+    state_resolver: ({ sourceRows, sourceRowsLoaded, now }) => {
+      // §2a load-failure guards.
+      if (sourceRowsLoaded && sourceRowsLoaded.caregivers === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'caregivers-load-failure' }
+      }
+      if (sourceRowsLoaded && sourceRowsLoaded.staff_training_records === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'staff-training-records-load-failure' }
+      }
       // 14 topics required (per R 400.1923). Pure: count distinct
       // new_hire_training records per caregiver vs 14. The records'
       // shape carries a `topic` discriminator the dashboard renders;
@@ -1370,7 +1397,14 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'high',
     data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: ({ sourceRows }) => {
+    state_resolver: ({ sourceRows, sourceRowsLoaded }) => {
+      // §2a load-failure guards.
+      if (sourceRowsLoaded && sourceRowsLoaded.caregivers === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'caregivers-load-failure' }
+      }
+      if (sourceRowsLoaded && sourceRowsLoaded.staff_training_records === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'staff-training-records-load-failure' }
+      }
       const OK_STATUSES = new Set(['submitted', 'materials_received', 'awaiting_print', 'current'])
       const caregivers = (sourceRows.caregivers || []).filter(c => !c.archived_at)
       if (caregivers.length === 0) return { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED, reason: 'no-active-caregivers' }
@@ -1409,6 +1443,9 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
       // Replaces the Phase 1 flat 16-hour placeholder, which matched
       // none of the licensing minima (licensee 10 / personnel 5 /
       // volunteer 1 / driver 1).
+      if (sourceRowsLoaded && sourceRowsLoaded.caregivers === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'caregivers-load-failure' }
+      }
       if (sourceRowsLoaded && (
            sourceRowsLoaded.staff_training_records === false
         || sourceRowsLoaded.training_requirements  === false
@@ -1488,7 +1525,16 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
         return updates.length > 0 ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
       },
     },
-    state_resolver: ({ sourceRows }) => {
+    state_resolver: ({ sourceRows, sourceRowsLoaded }) => {
+      // §2a load-failure guards. caregivers especially: the empty-check
+      // below collapses to NOT_APPLICABLE, so a failed caregivers load
+      // would silently vanish this row (the dangerous false pass).
+      if (sourceRowsLoaded && sourceRowsLoaded.caregivers === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'caregivers-load-failure' }
+      }
+      if (sourceRowsLoaded && sourceRowsLoaded.staff_training_records === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'staff-training-records-load-failure' }
+      }
       const caregivers = (sourceRows.caregivers || []).filter(c => !c.archived_at)
       const updates = sourceRows.health_safety_updates || []
       const records = (sourceRows.staff_training_records || [])
@@ -1611,7 +1657,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
         return APPLICABILITY_RESULT.UNKNOWN
       },
     },
-    state_resolver: ({ sourceRows, now }) => {
+    state_resolver: ({ sourceRows, sourceRowsLoaded, now }) => {
+      // §2a load-failure guard: a failed load must not read as a
+      // missed Dec-16 deadline (the scariest false red for an LEP).
+      if (sourceRowsLoaded && sourceRowsLoaded.miregistry_training_entries === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'miregistry-training-entries-load-failure' }
+      }
       const entries = (sourceRows.miregistry_training_entries || [])
         .filter(e => e.source === 'annual_ongoing' && !e.archived_at)
       const latest = entries
@@ -1717,7 +1768,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
         return fs.length > 0 ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
       },
     },
-    state_resolver: ({ sourceRows, now }) => {
+    state_resolver: ({ sourceRows, sourceRowsLoaded, now }) => {
+      // §2a load-failure guard: a failed funding_documents load would
+      // read every enrollment-basis source as missing its agreement.
+      if (sourceRowsLoaded && sourceRowsLoaded.funding_documents === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'funding-documents-load-failure' }
+      }
       const enrollmentSources = (sourceRows.funding_sources || []).filter(f =>
            !f.archived_at
         && f.type === 'cdc_scholarship'
@@ -1885,7 +1941,14 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
           : APPLICABILITY_RESULT.DOES_NOT_APPLY
       },
     },
-    state_resolver: ({ sourceRows }) => {
+    state_resolver: ({ sourceRows, sourceRowsLoaded }) => {
+      // §2a load-failure guard. The empty-check below collapses to
+      // NOT_APPLICABLE, so a failed attendance_acks load would
+      // silently vanish this row from a CDC provider's checklist
+      // (the dangerous false pass).
+      if (sourceRowsLoaded && sourceRowsLoaded.attendance_acks === false) {
+        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'attendance-acks-load-failure' }
+      }
       // Per-child filter: only attendance acks for children on an
       // active CDC funding source count toward the verdict. Private-
       // pay children's attendance acks don't move this requirement's
