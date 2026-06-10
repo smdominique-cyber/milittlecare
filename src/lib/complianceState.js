@@ -840,8 +840,14 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     applicability: {
       // Data-inferred: applies only when ≥1 active per-trip ack exists
       // in the last 12 months. Absence of trips = absence of requirement.
-      inferFromData: ({ child, sourceRows, now }) => {
+      inferFromData: ({ child, sourceRows, sourceRowsLoaded, now }) => {
         if (!child) return APPLICABILITY_RESULT.UNKNOWN
+        // §2a loader-shape guard (2026-06-09). If the acks table
+        // failed to load, "no per-trip ack" is indistinguishable from
+        // "load failed" — we can't safely conclude does_not_apply.
+        if (sourceRowsLoaded && sourceRowsLoaded.acks === false) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const cutoffMs = now.getTime() - 365 * 86400000
         const acks = sourceRows.acks || []
         const any = acks.some(a =>
@@ -884,8 +890,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'medium',
     data_state: 'shipped',
     applicability: {
-      inferFromData: ({ child, sourceRows, now }) => {
+      inferFromData: ({ child, sourceRows, sourceRowsLoaded, now }) => {
         if (!child) return APPLICABILITY_RESULT.UNKNOWN
+        // §2a loader-shape guard. Same shape as C4 above.
+        if (sourceRowsLoaded && sourceRowsLoaded.acks === false) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const cutoffMs = now.getTime() - 365 * 86400000
         const acks = sourceRows.acks || []
         const any = acks.some(a =>
@@ -977,7 +987,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
       // Data-inferred: applies per active medication_authorizations row.
       // The "requirement" is informational — the row IS the
       // requirement. State is on_file whenever an active row exists.
-      inferFromData: ({ sourceRows }) => {
+      inferFromData: ({ sourceRows, sourceRowsLoaded }) => {
+        // §2a loader-shape guard. "No auths" is indistinguishable
+        // from "load failed" without the sibling signal.
+        if (sourceRowsLoaded && sourceRowsLoaded.medication_authorizations === false) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const auths = sourceRows.medication_authorizations || []
         return auths.some(a => !a.archived_at)
           ? APPLICABILITY_RESULT.APPLIES
@@ -1002,7 +1017,11 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
       // rollup expands per non-OTC authorization. Applies when ≥1
       // non-OTC auth exists (the rollup iterates per auth and
       // reports per-auth state).
-      inferFromData: ({ sourceRows }) => {
+      inferFromData: ({ sourceRows, sourceRowsLoaded }) => {
+        // §2a loader-shape guard.
+        if (sourceRowsLoaded && sourceRowsLoaded.medication_authorizations === false) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const auths = sourceRows.medication_authorizations || []
         return auths.some(a => !a.archived_at && !a.is_topical_otc)
           ? APPLICABILITY_RESULT.APPLIES
@@ -1065,8 +1084,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_state: 'shipped',
     applicability: {
       // Applies when this child has ≥1 OTC authorization.
-      inferFromData: ({ child, sourceRows }) => {
+      inferFromData: ({ child, sourceRows, sourceRowsLoaded }) => {
         if (!child) return APPLICABILITY_RESULT.UNKNOWN
+        // §2a loader-shape guard.
+        if (sourceRowsLoaded && sourceRowsLoaded.medication_authorizations === false) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const any = (sourceRows.medication_authorizations || [])
           .some(a => !a.archived_at && a.is_topical_otc && a.child_id === child.id)
         return any ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
@@ -1093,7 +1116,17 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_state: 'shipped',
     applicability: {
       // Applies when there's ≥1 non-OTC dose event for the provider.
-      inferFromData: ({ sourceRows }) => {
+      inferFromData: ({ sourceRows, sourceRowsLoaded }) => {
+        // §2a loader-shape guard. BOTH precondition tables must be
+        // loaded — events alone can't be classified non-OTC without
+        // the auths' is_topical_otc flag, and an unknown auths set
+        // makes the "no non-OTC events" conclusion unsound.
+        if (sourceRowsLoaded && (
+             sourceRowsLoaded.medication_admin_events    === false
+          || sourceRowsLoaded.medication_authorizations  === false
+        )) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const events = sourceRows.medication_admin_events || []
         const auths = sourceRows.medication_authorizations || []
         const otcAuthIds = new Set(auths.filter(a => a.is_topical_otc).map(a => a.id))
@@ -1140,7 +1173,11 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'high',
     data_state: 'shipped',
     applicability: {
-      inferFromData: ({ sourceRows }) => {
+      inferFromData: ({ sourceRows, sourceRowsLoaded }) => {
+        // §2a loader-shape guard.
+        if (sourceRowsLoaded && sourceRowsLoaded.medication_authorizations === false) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const auths = sourceRows.medication_authorizations || []
         return auths.some(a => !a.archived_at && !a.is_topical_otc)
           ? APPLICABILITY_RESULT.APPLIES
@@ -1170,7 +1207,16 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'high',
     data_state: 'shipped',
     applicability: {
-      inferFromData: ({ sourceRows }) => {
+      inferFromData: ({ sourceRows, sourceRowsLoaded }) => {
+        // §2a loader-shape guard. Mirrors D4 — BOTH tables are
+        // precondition; "no non-OTC events" is unsound when either
+        // half failed to load.
+        if (sourceRowsLoaded && (
+             sourceRowsLoaded.medication_admin_events    === false
+          || sourceRowsLoaded.medication_authorizations  === false
+        )) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const auths = sourceRows.medication_authorizations || []
         const events = sourceRows.medication_admin_events || []
         const otcAuthIds = new Set(auths.filter(a => a.is_topical_otc).map(a => a.id))
@@ -1367,7 +1413,11 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'medium',
     data_state: 'shipped',
     applicability: {
-      inferFromData: ({ sourceRows }) => {
+      inferFromData: ({ sourceRows, sourceRowsLoaded }) => {
+        // §2a loader-shape guard.
+        if (sourceRowsLoaded && sourceRowsLoaded.health_safety_updates === false) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const updates = sourceRows.health_safety_updates || []
         return updates.length > 0 ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
       },
@@ -1584,7 +1634,14 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'high',
     data_state: 'shipped',
     applicability: {
-      inferFromData: ({ sourceRows }) => {
+      inferFromData: ({ sourceRows, sourceRowsLoaded }) => {
+        // §2a loader-shape guard. The CDC-funding-source presence
+        // determines whether this licensed CDC-billing-basis row
+        // applies; if funding_sources failed to load, "no CDC sources"
+        // is indistinguishable from a load failure.
+        if (sourceRowsLoaded && sourceRowsLoaded.funding_sources === false) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const fs = (sourceRows.funding_sources || []).filter(f =>
              !f.archived_at
           && f.type === 'cdc_scholarship'
@@ -1629,7 +1686,11 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     severity: 'high',
     data_state: 'shipped',
     applicability: {
-      inferFromData: ({ sourceRows }) => {
+      inferFromData: ({ sourceRows, sourceRowsLoaded }) => {
+        // §2a loader-shape guard.
+        if (sourceRowsLoaded && sourceRowsLoaded.funding_sources === false) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const fs = (sourceRows.funding_sources || []).filter(f => !f.archived_at && f.type === 'cdc_scholarship')
         return fs.length > 0 ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
       },
@@ -1668,7 +1729,7 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
       // are equally subject; the rule is CDC-tied, not LEP-tied. The
       // applicability below now gates on CDC enrollment only (plus
       // license-status being answered, otherwise unknown).
-      inferFromData: ({ provider, sourceRows }) => {
+      inferFromData: ({ provider, sourceRows, sourceRowsLoaded }) => {
         if (!provider) return APPLICABILITY_RESULT.UNKNOWN
         // license_type AND is_license_exempt are both unanswered →
         // we can't tell whether this provider exists in a context
@@ -1679,6 +1740,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
           || provider.is_license_exempt === true
           || provider.is_license_exempt === false
         if (!licenseStatusAnswered) return APPLICABILITY_RESULT.UNKNOWN
+        // §2a loader-shape guard. License status is answered; the
+        // remaining gate is "does this provider have CDC?" — which
+        // depends on funding_sources loading cleanly.
+        if (sourceRowsLoaded && sourceRowsLoaded.funding_sources === false) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const hasCdc = (sourceRows.funding_sources || []).some(f => !f.archived_at && f.type === 'cdc_scholarship')
         return hasCdc ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
       },
@@ -1735,7 +1802,15 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
       // engine-wide loader-default behavior is consistent across
       // all four CDC rows; if §2a tightening is wanted, do it once
       // across all four.)
-      inferFromData: ({ sourceRows }) => {
+      inferFromData: ({ sourceRows, sourceRowsLoaded }) => {
+        // §2a loader-shape guard (2026-06-09). Same shape as G2/G3/G4
+        // above. The H1-specific comment block immediately above
+        // notes the legacy "absence-of-data → DOES_NOT_APPLY" path
+        // and flags it for §2a tightening "once across all four";
+        // this is that tightening.
+        if (sourceRowsLoaded && sourceRowsLoaded.funding_sources === false) {
+          return APPLICABILITY_RESULT.UNKNOWN
+        }
         const cdcSources = (sourceRows.funding_sources || [])
           .filter(f => !f.archived_at && f.type === 'cdc_scholarship')
         return cdcSources.length > 0
@@ -1996,6 +2071,18 @@ export function resolveApplicability({
   child = null,
   provider = null,
   sourceRows = {},
+  // §2a loader-shape change (2026-06-09). Sibling signal indicating
+  // which sourceRows tables loaded cleanly vs. failed. Currently five
+  // tables opt in via the loader: funding_sources,
+  // medication_authorizations, medication_admin_events, acks,
+  // health_safety_updates. Resolvers for those tables' twelve
+  // §2a-violating rows read this to return UNKNOWN on
+  // `sourceRowsLoaded[<table>] === false` instead of silently
+  // resolving to DOES_NOT_APPLY. Resolvers that don't read it behave
+  // exactly as before (`undefined !== false`). Defaults to `{}`,
+  // which preserves pre-fix behavior across the board.
+  // See docs/pr-compliance-loader-shape-scope.md.
+  sourceRowsLoaded = {},
   overrides = new Map(),
   now = new Date(),
 } = {}) {
@@ -2040,7 +2127,7 @@ export function resolveApplicability({
 
   // 3. Data-inferred.
   if (typeof rule.inferFromData === 'function') {
-    const inferred = rule.inferFromData({ child, provider, sourceRows, now: nowDate })
+    const inferred = rule.inferFromData({ child, provider, sourceRows, sourceRowsLoaded, now: nowDate })
     if (inferred === APPLICABILITY_RESULT.APPLIES || inferred === APPLICABILITY_RESULT.DOES_NOT_APPLY) {
       return inferred
     }
@@ -2072,6 +2159,7 @@ export function getRequirementState({
   child = null,
   provider = null,
   sourceRows = {},
+  sourceRowsLoaded = {},
   overrides = new Map(),
   now = new Date(),
 } = {}) {
@@ -2079,7 +2167,7 @@ export function getRequirementState({
     return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'no-requirement-supplied' }
   }
 
-  const applicability = resolveApplicability({ requirement, child, provider, sourceRows, overrides, now })
+  const applicability = resolveApplicability({ requirement, child, provider, sourceRows, sourceRowsLoaded, overrides, now })
 
   if (applicability === APPLICABILITY_RESULT.DOES_NOT_APPLY) {
     return { kind: REQUIREMENT_STATE_KIND.NOT_APPLICABLE, reason: 'not-applicable-by-rule' }
@@ -2150,6 +2238,7 @@ export function getChildComplianceState({
   child,
   provider,
   sourceRows = {},
+  sourceRowsLoaded = {},
   overrides = new Map(),
   now = new Date(),
 } = {}) {
@@ -2168,8 +2257,8 @@ export function getChildComplianceState({
       const auths = (sourceRows.medication_authorizations || []).filter(a => a.child_id === child.id)
       childScopedSourceRows = { ...sourceRows, medication_authorizations: auths }
     }
-    const applicability = resolveApplicability({ requirement: req, child, provider, sourceRows: childScopedSourceRows, overrides, now })
-    const state = getRequirementState({ requirement: req, child, provider, sourceRows: childScopedSourceRows, overrides, now })
+    const applicability = resolveApplicability({ requirement: req, child, provider, sourceRows: childScopedSourceRows, sourceRowsLoaded, overrides, now })
+    const state = getRequirementState({ requirement: req, child, provider, sourceRows: childScopedSourceRows, sourceRowsLoaded, overrides, now })
     const catState = per_category[req.category] || emptyCategoryState()
     per_category[req.category] = catState
     tallyState(catState, totals, applicability, { ...state, requirement_key: req.key })
@@ -2199,6 +2288,7 @@ export function getProviderComplianceState({
   provider,
   children = [],
   sourceRows = {},
+  sourceRowsLoaded = {},
   overrides = new Map(),
   now = new Date(),
 } = {}) {
@@ -2206,7 +2296,7 @@ export function getProviderComplianceState({
 
   // Per-child rollups.
   const per_child = children.map(child =>
-    getChildComplianceState({ child, provider, sourceRows, overrides, now })
+    getChildComplianceState({ child, provider, sourceRows, sourceRowsLoaded, overrides, now })
   )
 
   // Provider-level requirements.
@@ -2219,8 +2309,8 @@ export function getProviderComplianceState({
     if (req.subject_type !== 'provider' && req.subject_type !== 'caregiver' && req.subject_type !== 'funding_source' && req.subject_type !== 'attendance_day') {
       continue
     }
-    const applicability = resolveApplicability({ requirement: req, child: null, provider, sourceRows, overrides, now })
-    const state = getRequirementState({ requirement: req, child: null, provider, sourceRows, overrides, now })
+    const applicability = resolveApplicability({ requirement: req, child: null, provider, sourceRows, sourceRowsLoaded, overrides, now })
+    const state = getRequirementState({ requirement: req, child: null, provider, sourceRows, sourceRowsLoaded, overrides, now })
     const catState = provider_level.per_category[req.category] || emptyCategoryState()
     provider_level.per_category[req.category] = catState
     tallyState(catState, providerTotals, applicability, { ...state, requirement_key: req.key })

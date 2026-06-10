@@ -39,6 +39,16 @@ const DEFAULT_ATTENDANCE_WINDOW_DAYS = 90
 /**
  * Defensive query wrapper. Returns rows array on success, [] on any
  * error (per the loader's defensive contract). Never throws.
+ *
+ * §2a note (2026-06-09 loader-shape change): `safeQuery` returns []
+ * for all three failure modes (genuine empty, PostgREST error, thrown
+ * exception). Resolvers downstream cannot distinguish them. For the
+ * twelve §2a-violating rows whose applicability silently collapses
+ * `[]` to does_not_apply, the loader exposes a sibling
+ * `sourceRowsLoaded` signal via `safeQueryWithLoaded` below — those
+ * specific tables route through that wrapper instead. Other tables
+ * keep using `safeQuery` and their resolvers keep their pre-fix
+ * behavior (Option B from docs/pr-compliance-loader-shape-scope.md).
  */
 async function safeQuery(label, fn) {
   try {
@@ -53,6 +63,34 @@ async function safeQuery(label, fn) {
   } catch (err) {
     // Network / unexpected. Swallow per the defensive contract.
     return []
+  }
+}
+
+/**
+ * §2a loader-shape change (2026-06-09). Variant of `safeQuery` that
+ * additionally reports whether the underlying query succeeded.
+ *
+ * Return shape: `{ rows: Array, loaded: boolean }`.
+ *  - `loaded: true`  — query ran cleanly; `rows` is the real result
+ *                      set (which may legitimately be empty).
+ *  - `loaded: false` — PostgREST returned an error OR an exception
+ *                      was thrown. `rows` is always [] in this case.
+ *
+ * Used only for tables whose resolvers opt into the loaded signal
+ * (per the audit, exactly five tables: funding_sources,
+ * medication_authorizations, medication_admin_events, acks via
+ * combined childAcks+medAcks, health_safety_updates). Everything
+ * else stays on `safeQuery` to preserve the ~21 non-§2a-violating
+ * rows' current behavior exactly.
+ */
+async function safeQueryWithLoaded(label, fn) {
+  try {
+    const result = await fn()
+    if (result && result.error) return { rows: [], loaded: false }
+    const rows = Array.isArray(result.data) ? result.data : (result.data ? [result.data] : [])
+    return { rows, loaded: true }
+  } catch (err) {
+    return { rows: [], loaded: false }
   }
 }
 
@@ -84,7 +122,12 @@ export async function loadComplianceSourceRows({
   attendanceWindowDays = DEFAULT_ATTENDANCE_WINDOW_DAYS,
 } = {}) {
   if (!providerId) {
-    return { provider: null, children: [], sourceRows: emptySourceRows() }
+    return {
+      provider: null,
+      children: [],
+      sourceRows: emptySourceRows(),
+      sourceRowsLoaded: emptySourceRowsLoaded(),
+    }
   }
 
   // 1. Provider profile.
@@ -127,15 +170,19 @@ export async function loadComplianceSourceRows({
 
   if (allChildIds.length === 0 && (!Array.isArray(childIds) || childIds.length === 0)) {
     // No children — provider-level requirements still need to load.
+    const providerLevel = await loadProviderLevelRows(providerId, attendanceWindowDays)
     return {
       provider,
       children: [],
-      sourceRows: await loadProviderLevelRows(providerId, attendanceWindowDays),
+      sourceRows: providerLevel.sourceRows,
+      sourceRowsLoaded: providerLevel.sourceRowsLoaded,
     }
   }
 
-  // 3. Acknowledgments — child-subject rows.
-  const childAcks = await safeQuery('acknowledgments(child)', () =>
+  // 3. Acknowledgments — child-subject rows. Routed through the
+  //    loaded-signal wrapper because acks is one of the five tables
+  //    whose §2a-violating resolvers (C4/C5) opt into the signal.
+  const childAcksResp = await safeQueryWithLoaded('acknowledgments(child)', () =>
     supabase
       .from('acknowledgments')
       .select(
@@ -152,7 +199,7 @@ export async function loadComplianceSourceRows({
   // 4. Acknowledgments — medication_authorization-subject rows.
   //    (subject_id is the auth UUID, not a child UUID, so we can't
   //    .in() them by childIds — fetch by provider_id + subject_type.)
-  const medAcks = await safeQuery('acknowledgments(medication_authorization)', () =>
+  const medAcksResp = await safeQueryWithLoaded('acknowledgments(medication_authorization)', () =>
     supabase
       .from('acknowledgments')
       .select(
@@ -164,8 +211,8 @@ export async function loadComplianceSourceRows({
       .is('archived_at', null)
   )
 
-  // 5. Medication authorizations + dose events.
-  const medAuths = await safeQuery('medication_authorizations', () =>
+  // 5. Medication authorizations + dose events. Both opted-in.
+  const medAuthsResp = await safeQueryWithLoaded('medication_authorizations', () =>
     supabase
       .from('medication_authorizations')
       .select('*')
@@ -174,7 +221,7 @@ export async function loadComplianceSourceRows({
       .is('archived_at', null)
   )
 
-  const doseEvents = await safeQuery('medication_administration_events', () =>
+  const doseEventsResp = await safeQueryWithLoaded('medication_administration_events', () =>
     supabase
       .from('medication_administration_events')
       .select(
@@ -214,15 +261,19 @@ export async function loadComplianceSourceRows({
       .eq('licensee_id', providerId)
   )
 
-  const healthSafetyUpdates = await safeQuery('health_safety_updates', () =>
+  const healthSafetyResp = await safeQueryWithLoaded('health_safety_updates', () =>
     supabase
       .from('health_safety_updates')
       .select('*')
       .eq('licensee_id', providerId)
   )
 
-  // 7. Funding sources + documents (provider-level).
-  const fundingSources = await safeQuery('funding_sources', () =>
+  // 7. Funding sources + documents (provider-level). funding_sources
+  //    opts into the loaded signal — this is the originally-motivating
+  //    table (the four CDC rows G2/G3/G4/H1). funding_documents stays
+  //    on safeQuery because no §2a-violating row reads it as its
+  //    applicability gate.
+  const fundingResp = await safeQueryWithLoaded('funding_sources', () =>
     supabase
       .from('funding_sources')
       .select('*')
@@ -262,23 +313,43 @@ export async function loadComplianceSourceRows({
       .is('archived_at', null)
   )
 
+  // §2a loaded signal — acks is one logical table merged from two
+  //   queries; report loaded only when BOTH halves loaded cleanly.
+  //   If only the medication-subject half failed, C4/C5 (child-acks
+  //   readers) would still be at risk because we can't distinguish
+  //   per-half from the merged array — conservative: any half failed
+  //   ⇒ acks loaded = false.
+  const acksLoaded = childAcksResp.loaded && medAcksResp.loaded
+
   return {
     provider,
     children,
     sourceRows: {
-      acks: [...childAcks, ...medAcks],
-      medication_authorizations: medAuths,
-      medication_admin_events: doseEvents,
+      acks: [...childAcksResp.rows, ...medAcksResp.rows],
+      medication_authorizations: medAuthsResp.rows,
+      medication_admin_events: doseEventsResp.rows,
       caregivers: caregiversNormalized,
       staff_training_records: staffTraining,
-      health_safety_updates: healthSafetyUpdates,
-      funding_sources: fundingSources,
+      health_safety_updates: healthSafetyResp.rows,
+      funding_sources: fundingResp.rows,
       funding_documents: fundingDocuments,
       miregistry_training_entries: miregistryEntries,
       attendance_acks: attendanceAcks,
       // Pattern E slots — sources not yet shipped.
       drill_logs: null,
       property_records: null,
+    },
+    // §2a sibling signal (Option B per
+    // docs/pr-compliance-loader-shape-scope.md §2.2). Five tables
+    // opt in; resolvers for the other tables ignore this object and
+    // keep their pre-fix behavior. An absent key (or `undefined`)
+    // never triggers the UNKNOWN branch — only `=== false` does.
+    sourceRowsLoaded: {
+      acks:                       acksLoaded,
+      medication_authorizations:  medAuthsResp.loaded,
+      medication_admin_events:    doseEventsResp.loaded,
+      health_safety_updates:      healthSafetyResp.loaded,
+      funding_sources:            fundingResp.loaded,
     },
   }
 }
@@ -287,6 +358,14 @@ export async function loadComplianceSourceRows({
  * Sub-loader used when the children list is empty — we still want
  * provider-level requirements (drills, property, staff, miregistry,
  * funding_docs, cdc_compliance) to evaluate.
+ *
+ * Returns `{ sourceRows, sourceRowsLoaded }` (2026-06-09 shape change).
+ * In the no-children case the four child-scoped opted-in tables
+ * (`acks`, `medication_authorizations`, `medication_admin_events`)
+ * are intrinsically empty by precondition — no children means no
+ * per-child rows possible — so their loaded flag is `true`. Only
+ * `funding_sources` and `health_safety_updates` are actually queried
+ * here and report their real loaded value.
  */
 async function loadProviderLevelRows(providerId, attendanceWindowDays) {
   // Reuse the main loader's per-table calls but skip child-scoped ones.
@@ -309,10 +388,10 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
   const staffTraining = await safeQuery('staff_training_records', () =>
     supabase.from('staff_training_records').select('*').eq('licensee_id', providerId)
   )
-  const healthSafetyUpdates = await safeQuery('health_safety_updates', () =>
+  const healthSafetyResp = await safeQueryWithLoaded('health_safety_updates', () =>
     supabase.from('health_safety_updates').select('*').eq('licensee_id', providerId)
   )
-  const fundingSources = await safeQuery('funding_sources', () =>
+  const fundingResp = await safeQueryWithLoaded('funding_sources', () =>
     supabase.from('funding_sources').select('*').eq('user_id', providerId).is('archived_at', null)
   )
   const fundingDocuments = await safeQuery('funding_documents', () =>
@@ -322,18 +401,31 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
     supabase.from('miregistry_training_entries').select('*').eq('user_id', providerId).is('archived_at', null)
   )
   return {
-    acks: [],
-    medication_authorizations: [],
-    medication_admin_events: [],
-    caregivers: caregiversNormalized,
-    staff_training_records: staffTraining,
-    health_safety_updates: healthSafetyUpdates,
-    funding_sources: fundingSources,
-    funding_documents: fundingDocuments,
-    miregistry_training_entries: miregistryEntries,
-    attendance_acks: [],
-    drill_logs: null,
-    property_records: null,
+    sourceRows: {
+      acks: [],
+      medication_authorizations: [],
+      medication_admin_events: [],
+      caregivers: caregiversNormalized,
+      staff_training_records: staffTraining,
+      health_safety_updates: healthSafetyResp.rows,
+      funding_sources: fundingResp.rows,
+      funding_documents: fundingDocuments,
+      miregistry_training_entries: miregistryEntries,
+      attendance_acks: [],
+      drill_logs: null,
+      property_records: null,
+    },
+    sourceRowsLoaded: {
+      // No children → these three are empty by precondition, not by
+      // load failure. Treat as loaded so any provider-level §2a-row
+      // gated on them resolves the same way it would with an explicit
+      // empty result set.
+      acks:                       true,
+      medication_authorizations:  true,
+      medication_admin_events:    true,
+      health_safety_updates:      healthSafetyResp.loaded,
+      funding_sources:            fundingResp.loaded,
+    },
   }
 }
 
@@ -355,14 +447,32 @@ function emptySourceRows() {
 }
 
 /**
+ * Mirrors `emptySourceRows()` for the loaded signal. Used only when
+ * `loadComplianceSourceRows` is called without a providerId — a
+ * precondition failure path that no production caller exercises. All
+ * five opted-in tables read as `true` here because the precondition
+ * failure isn't a load failure, and the legacy behavior (empty rows
+ * → does_not_apply where applicable) is what we preserve.
+ */
+function emptySourceRowsLoaded() {
+  return {
+    acks:                       true,
+    medication_authorizations:  true,
+    medication_admin_events:    true,
+    health_safety_updates:      true,
+    funding_sources:            true,
+  }
+}
+
+/**
  * Convenience: load + compute provider-level state in one call.
  * Phase 2 consumers (e.g., a Compliance dashboard widget) will
  * typically call this.
  */
 export async function computeProviderComplianceState({ providerId, childIds, now = new Date() } = {}) {
-  const { provider, children, sourceRows } = await loadComplianceSourceRows({ providerId, childIds })
+  const { provider, children, sourceRows, sourceRowsLoaded } = await loadComplianceSourceRows({ providerId, childIds })
   if (!provider) return null
-  return getProviderComplianceStatePure({ provider, children, sourceRows, now })
+  return getProviderComplianceStatePure({ provider, children, sourceRows, sourceRowsLoaded, now })
 }
 
 /**
@@ -370,11 +480,11 @@ export async function computeProviderComplianceState({ providerId, childIds, now
  */
 export async function computeChildComplianceState({ providerId, childId, now = new Date() } = {}) {
   if (!providerId || !childId) return null
-  const { provider, children, sourceRows } = await loadComplianceSourceRows({ providerId, childIds: [childId] })
+  const { provider, children, sourceRows, sourceRowsLoaded } = await loadComplianceSourceRows({ providerId, childIds: [childId] })
   if (!provider) return null
   const child = children.find(c => c.id === childId)
   if (!child) return null
-  return getChildComplianceStatePure({ child, provider, sourceRows, now })
+  return getChildComplianceStatePure({ child, provider, sourceRows, sourceRowsLoaded, now })
 }
 
 // -----------------------------------------------------------------------------
@@ -532,13 +642,20 @@ export async function computeProviderComplianceStateWithOverrides({
   now = new Date(),
 } = {}) {
   if (!providerId) return null
-  const [{ provider, children, sourceRows }, overrides] = await Promise.all([
+  const [{ provider, children, sourceRows, sourceRowsLoaded }, overrides] = await Promise.all([
     loadComplianceSourceRows({ providerId, childIds }),
     loadApplicabilityOverrides({ providerId }),
   ])
   if (!provider) return null
-  const state = getProviderComplianceStatePure({ provider, children, sourceRows, overrides, now })
-  return { state, children: children || [] }
+  const state = getProviderComplianceStatePure({ provider, children, sourceRows, sourceRowsLoaded, overrides, now })
+  // §2a loader-shape change (2026-06-09): expose the per-table loaded
+  // signal on the envelope per docs/pr-compliance-loader-shape-scope.md
+  // §2.5 decision #2. Existing UI consumers
+  // (ComplianceChecklistPage, FamilyComplianceTab) ignore the new
+  // field and gate rendering on their own React `loading` state — so
+  // their behavior is unchanged. Future non-page consumers can
+  // branch on this signal to avoid reintroducing flicker.
+  return { state, children: children || [], sourceRowsLoaded }
 }
 
 /**
@@ -553,13 +670,13 @@ export async function computeChildComplianceStateWithOverrides({
   now = new Date(),
 } = {}) {
   if (!providerId || !childId) return null
-  const [{ provider, children, sourceRows }, overrides] = await Promise.all([
+  const [{ provider, children, sourceRows, sourceRowsLoaded }, overrides] = await Promise.all([
     loadComplianceSourceRows({ providerId, childIds: [childId] }),
     loadApplicabilityOverrides({ providerId }),
   ])
   if (!provider) return null
   const child = children.find(c => c.id === childId)
   if (!child) return null
-  const state = getChildComplianceStatePure({ child, provider, sourceRows, overrides, now })
-  return { state, child }
+  const state = getChildComplianceStatePure({ child, provider, sourceRows, sourceRowsLoaded, overrides, now })
+  return { state, child, sourceRowsLoaded }
 }
