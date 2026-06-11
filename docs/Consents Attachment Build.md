@@ -1,0 +1,38 @@
+Task: Consent Attachments — PART 1 of 2: data layer + Edge Function (the privacy boundary). Build per docs/pr-consent-attachments-scope.md. NO UI in this pass. Branch off main, build, push, halt for the cross-tenant denial verification against real rows. Migration written but NOT applied — Seth applies manually. Do NOT merge.
+Authoritative spec: docs/pr-consent-attachments-scope.md (the FINAL doc just written). Read it fully. Follow every locked decision. If anything here conflicts with the doc, halt and flag rather than guess.
+Branch: git checkout main, git pull, create feature/consent-attachments-data off main. Confirm before editing.
+Build — DATA LAYER + EDGE FUNCTION ONLY (no React, no modal hooks):
+
+Migration 029_consent_attachments.sql (write, do NOT apply — confirm 029 is next free on disk first). Per the scope doc:
+
+public.consent_attachments table: id, provider_id (FK auth.users), target_type text NOT NULL CHECK (target_type IN ('acknowledgment','medication_authorization')), target_id uuid NOT NULL, storage_path text NOT NULL, original_filename text NOT NULL, content_type text NOT NULL, file_size_bytes bigint NOT NULL CHECK (file_size_bytes > 0), uploaded_at, uploaded_by_user_id (FK), retention_until date (default per funding-docs convention), soft-delete archived_at/archived_by, standard timestamps. Model columns on funding_documents (migration 008).
+Indexes: hot-path (target_type, target_id) WHERE archived_at IS NULL; (provider_id) WHERE archived_at IS NULL; retention helper (retention_until) WHERE archived_at IS NOT NULL.
+Provider RLS: SELECT/INSERT/UPDATE only, NO DELETE (soft-delete via archived_at — never-hard-delete). Provider-gated auth.uid() = provider_id.
+Parent metadata RLS (the §12 sub-decision — scrutinize this): a parent SELECT-only policy so the parent UI can list attachment metadata (filename, date) for THEIR children's consents. This policy MUST use the same parent?child linkage check as the Edge Function — a parent must NOT be able to list attachments for a child they aren't linked to, even though they can't open the content. Resolve the parent?parent_family_links?children?consent linkage in the policy, mirroring migration 024's parent-side acknowledgments SELECT policy. This is a second cross-tenant boundary alongside the Edge Function — get it as tight as the function.
+Storage bucket consent-attachments: private, RLS template from migrations 002/008 — INSERT/SELECT/DELETE, no UPDATE, path enforcement auth.uid()::text = (storage.foldername(name))[1] (owner/provider-only at the storage level; parent content-read does NOT go through storage RLS — it goes through the Edge Function).
+Header comment in migration 024/008 style, commented down-migration, runbook "Pending Application" entry with verification queries INCLUDING the cross-tenant tests below.
+
+
+The Edge Function api/consent-attachment-url.js (the privacy boundary — service-role). Per decision 3, exactly as the scope doc spells out:
+
+Takes the parent's authenticated JWT ? auth.uid(). Takes an attachment_id. Trusts NOTHING client-supplied beyond the attachment_id — re-derives target_type, target_id, storage_path, and the child from the database.
+Resolves the attachment ? its consent ? the child_id, via the three paths the doc specifies (ack-on-child ? subject_id is child_id; ack-on-medication_authorization ? join through medication_authorizations.child_id; target_type='medication_authorization' ? direct child_id). Any other subject_type (caregiver/family/provider/null) ? 403.
+The cross-tenant check: EXISTS(parent_family_links pfl JOIN children c ON c.family_id = pfl.family_id WHERE pfl.parent_id = auth.uid() AND pfl.status='active' AND c.id = <resolved_child_id>). On false ? deny. This is THE boundary.
+Only on full success ? mint a 15-min signed URL (match funding-docs TTL).
+Match the existing api/ Edge Function conventions (auth handling, error shape, how other functions read the JWT and use service-role). Read an existing api/ function first to match the pattern.
+Decide 403-vs-404 for the deny case per the doc's anti-enumeration note (collapsing to a single "not found" shape avoids leaking whether an attachment exists) — pick one, justify it briefly.
+
+
+Shared storage lib (decision 10): extract the domain-agnostic parts of src/lib/fundingDocuments.js (validateFile, path-building, signed-URL helper) to src/lib/storage.js, and have BOTH funding-documents and the new consent-attachments code import from there. Then add src/lib/consentAttachments.js with the data-layer helpers: upload-then-insert with orphan cleanup (mirror FundingDocumentSlot's atomic pattern), soft-delete via archived_at, list-attachments-for-consent, the provider-side signed-URL (direct, owner-only). Do NOT change funding-documents' behavior — the extraction must be behavior-preserving (run its existing tests to confirm).
+Tests: the data-layer helpers (upload/insert/orphan-cleanup, soft-delete, list, validation via the shared lib); the polymorphic target validation; that the funding-documents extraction didn't regress (its existing tests still pass). The Edge Function's auth logic — test the resolution-to-child-id and the cross-tenant check where the test harness allows (the function itself runs against real auth, so the live test is the gate, but unit-test the pure resolution logic if it's extractable). Build clean, vitest green.
+
+Constraints: migration NOT applied (Seth pastes). All storage writes through the shared lib — no inline Supabase storage calls duplicating it. The funding-docs extraction must be behavior-preserving. Don't touch the untracked junk. No UI in this pass.
+Commit + push, halt. Do NOT merge, do NOT build UI. Commit msg: feat(consent-attachments): data layer + Edge Function — table, bucket, parent-read boundary.
+Verification gate — the cross-tenant denial is the whole point, and it must be proven against real rows on BOTH access paths. Green tests do NOT prove the Edge Function or the parent metadata RLS — they run against real auth. Your halt report must set Seth up to verify:
+
+Migration apply + confirm: table exists with columns, both RLS policy sets present (provider + parent-metadata), storage bucket + its RLS exist, indexes present, table empty. Give the exact SQL.
+Provider path (must work): SQL/setup to insert a consent_attachments row (a fake scan metadata row) for a test child's consent under the provider, and confirm the provider can read it.
+Parent path — POSITIVE (must work): the parent LINKED to that child can (a) see the attachment in the metadata list (parent RLS returns the row) and (b) get a signed URL from the Edge Function. Give Seth the steps to test as the linked parent.
+Parent path — CROSS-TENANT DENIAL (must be DENIED — the privacy boundary): a DIFFERENT parent (linked to a different child, NOT to this one) must (a) NOT see the attachment in their metadata list (parent RLS returns zero rows) AND (b) be DENIED by the Edge Function (403/404, no URL) when requesting that attachment_id. Both sub-checks must deny. This is the test that proves the feature is safe — a parent cannot see another family's signed documents, by either path. Give Seth the exact setup (a second test parent + child) and the exact requests to run.
+
+Test 4 is the gate. If either sub-check leaks (the other family's attachment shows in the list, OR the Edge Function returns a URL), the boundary is broken — halt, do not proceed to UI. Do not claim the boundary works on tests alone; set up the live cross-tenant check.
