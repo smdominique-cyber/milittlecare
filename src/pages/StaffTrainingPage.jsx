@@ -10,7 +10,8 @@
 // data loading by useStaffTraining. This file orchestrates the surfaces
 // and owns the modal state.
 
-import { useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { AlertCircle, Info, Plus, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
@@ -40,6 +41,7 @@ export default function StaffTrainingPage() {
   const { loading, error, isLicensee, roster, records, requirements, updates, refresh } =
     useStaffTraining()
 
+  const [params, setParams] = useSearchParams()
   const [selectedId, setSelectedId] = useState(null)
   const [entryForm, setEntryForm] = useState(null)   // { caregiver, record }
   const [roleModal, setRoleModal] = useState(null)   // caregiver
@@ -49,6 +51,27 @@ export default function StaffTrainingPage() {
     () => new Map(roster.map(c => [c.id, c])),
     [roster]
   )
+
+  // 3.1b-2 — ?caregiver=<id> deep-link from the compliance checklist.
+  // Validated against the loaded roster (the FamiliesPage ?family=
+  // precedent): an unknown or absent id leaves the default roster
+  // view, never errors. Licensee-only — the staff self-view ignores
+  // selectedId entirely.
+  useEffect(() => {
+    if (loading || !isLicensee) return
+    const requested = params.get('caregiver')
+    if (!requested) return
+    if (rosterById.has(requested)) setSelectedId(requested)
+  }, [loading, isLicensee, params, rosterById])
+
+  function clearDeepLinkParams() {
+    // Tidy the URL when the drill-in closes so refreshing doesn't
+    // re-trigger the deep-link, and forward/back navigation behaves.
+    if (!params.get('caregiver')) return
+    const next = new URLSearchParams(params)
+    next.delete('caregiver')
+    setParams(next, { replace: true })
+  }
 
   // Active roster, self first, then alphabetical (spec § 3.2 mock).
   const activeRoster = useMemo(() => {
@@ -176,7 +199,10 @@ export default function StaffTrainingPage() {
           onAddRecord={openAdd}
           onEditRecord={openEdit}
           onAssignRoles={c => setRoleModal(c)}
-          onBack={() => setSelectedId(null)}
+          onBack={() => {
+            setSelectedId(null)
+            clearDeepLinkParams()
+          }}
         />
       ) : (
         <>

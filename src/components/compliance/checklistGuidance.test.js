@@ -154,16 +154,93 @@ describe('category B/C rows render text-only (no fixTarget)', () => {
     expect(gap.fixTarget).toBeUndefined()
   })
 
-  it('E2 CPR/first-aid (StaffTraining surface is 3.1b C-1) → no fixTarget', () => {
-    const gap = gapFor('caregiver_cpr_first_aid_current', { kind: 'missing_required' }, CTX)
-    expect(gap.guidanceText).toContain('CPR')
-    expect(gap.fixTarget).toBeUndefined()
-  })
-
-  it('H1 attendance ack per day → no fixTarget', () => {
+  it('H1 attendance acks (/acknowledgments ?child= is 3.1b-3+) → no fixTarget', () => {
     const gap = gapFor('attendance_parent_acknowledgment_per_day', { kind: 'missing_required' }, CTX)
     expect(gap.guidanceText).toContain('acknowledg')
     expect(gap.fixTarget).toBeUndefined()
+  })
+})
+
+// -----------------------------------------------------------------------------
+// 3.1b-2 — Staff Training surface (E1-E6)
+// -----------------------------------------------------------------------------
+
+describe('staff rows — /staff-training fixTargets (3.1b-2)', () => {
+  const STAFF_ROWS = [
+    'caregiver_background_check_eligibility',
+    'caregiver_cpr_first_aid_current',
+    'caregiver_new_hire_training_complete',
+    'caregiver_miregistry_account',
+    'caregiver_professional_development_hours',
+    'caregiver_health_safety_update_acked',
+  ]
+  const PAGE_LEVEL = { label: 'Open Staff Training', to: '/staff-training' }
+
+  it.each(STAFF_ROWS)('%s missing → PAGE-LEVEL link (engine aggregates worst-across-caregivers; no caregiver id at render)', (key) => {
+    // CTX carries familyId/childId only — exactly what real consumers
+    // supply today. No caregiverId → no ?caregiver= param.
+    const gap = gapFor(key, { kind: 'missing_required' }, CTX)
+    expect(gap.fixTarget).toEqual(PAGE_LEVEL)
+  })
+
+  it.each(STAFF_ROWS)('%s missing + NO context at all → still the page-level link', (key) => {
+    const gap = gapFor(key, { kind: 'missing_required' })
+    expect(gap.fixTarget).toEqual(PAGE_LEVEL)
+  })
+
+  it('a context that DOES carry caregiverId upgrades to ?caregiver=<id>', () => {
+    const gap = gapFor('caregiver_cpr_first_aid_current', { kind: 'missing_required' },
+      { caregiverId: 'cg-1' })
+    expect(gap.fixTarget).toEqual({
+      label: 'Open this caregiver in Staff Training',
+      to: '/staff-training?caregiver=cg-1',
+    })
+  })
+
+  it('caregiverId is URI-encoded in the built target', () => {
+    const gap = gapFor('caregiver_cpr_first_aid_current', { kind: 'missing_required' },
+      { caregiverId: 'cg/1&x' })
+    expect(gap.fixTarget.to).toBe('/staff-training?caregiver=cg%2F1%26x')
+  })
+
+  it('E1 pending background check stays guidance-only (pending_parent never links)', () => {
+    const gap = gapFor('caregiver_background_check_eligibility',
+      { kind: 'pending_parent' }, { caregiverId: 'cg-1' })
+    expect(gap.fixTarget).toBeUndefined()
+  })
+
+  it("E3 needs_provider_data 'caregiver-missing-date-of-hire' → hire-date copy + staff link", () => {
+    const gap = gapFor('caregiver_new_hire_training_complete',
+      { kind: 'unknown', reason: 'caregiver-missing-date-of-hire' }, CTX)
+    expect(gap.severity).toBe('critical')
+    expect(gap.guidanceText).toContain('date_of_hire')
+    expect(gap.fixTarget).toEqual(PAGE_LEVEL)
+  })
+
+  it('E7-E9 feature_not_yet_shipped rows still get NO fixTarget', () => {
+    for (const key of [
+      'caregiver_physician_attestation_annual',
+      'caregiver_discipline_policy_ack_at_hire',
+      'caregiver_daily_arrival_departure',
+    ]) {
+      const gap = gapFor(key, { kind: 'unknown', reason: 'feature-not-yet-shipped' }, CTX)
+      expect(gap.fixTarget, key).toBeUndefined()
+    }
+  })
+
+  it('ONLY the six E-rows ever link to /staff-training (registry-wide)', () => {
+    const staff = new Set(STAFF_ROWS)
+    const kinds = ['missing_required', 'expired', 'pending_parent']
+    for (const key of Object.keys(REQUIREMENT_REGISTRY)) {
+      for (const kind of kinds) {
+        const gap = gapFor(key, { kind }, { ...CTX, caregiverId: 'cg-1' })
+        const to = gap && gap.fixTarget ? gap.fixTarget.to : ''
+        if (to.includes('/staff-training')) {
+          expect(staff.has(key), `${key}/${kind} must not link to /staff-training`).toBe(true)
+          expect(kind, `${key} pending_parent must not link`).not.toBe('pending_parent')
+        }
+      }
+    }
   })
 })
 
@@ -235,12 +312,12 @@ describe('E5 — caregiver professional development hours', () => {
     expect(gap.guidanceText).not.toMatch(/\b16\b/)
   })
 
-  it("unknown 'no-regulatory-roles' → needs_provider_data role copy, critical", () => {
+  it("unknown 'no-regulatory-roles' → needs_provider_data role copy, critical, staff page link (3.1b-2)", () => {
     const gap = gapFor('caregiver_professional_development_hours',
       { kind: 'unknown', reason: 'no-regulatory-roles' })
     expect(gap.severity).toBe('critical')
     expect(gap.guidanceText).toContain('regulatory role')
-    expect(gap.fixTarget).toBeUndefined()
+    expect(gap.fixTarget).toEqual({ label: 'Open Staff Training', to: '/staff-training' })
   })
 })
 
@@ -277,6 +354,47 @@ describe('pending_parent rows', () => {
   it('H1 pending → override-on-file copy', () => {
     const gap = gapFor('attendance_parent_acknowledgment_per_day', { kind: 'pending_parent' })
     expect(gap.guidanceText).toContain('usually clears')
+  })
+})
+
+// -----------------------------------------------------------------------------
+// 3.1b-2 — H1 copy reads the aggregated N-days reasons
+// -----------------------------------------------------------------------------
+
+describe('H1 — aggregated attendance-ack copy (per-day copy was wrong)', () => {
+  const KEY = 'attendance_parent_acknowledgment_per_day'
+
+  it("missing '3-days-missing-ack' → plural multi-day phrasing, no fixTarget", () => {
+    const gap = gapFor(KEY, { kind: 'missing_required', reason: '3-days-missing-ack' }, CTX)
+    expect(gap.guidanceText).toContain('3 days of attendance')
+    expect(gap.guidanceText).toContain('haven’t been acknowledged')
+    expect(gap.guidanceText).not.toContain('This day’s')
+    expect(gap.fixTarget).toBeUndefined()
+  })
+
+  it("missing '1-days-missing-ack' → singular phrasing", () => {
+    const gap = gapFor(KEY, { kind: 'missing_required', reason: '1-days-missing-ack' }, CTX)
+    expect(gap.guidanceText).toContain('1 day of attendance')
+    expect(gap.guidanceText).toContain('hasn’t been acknowledged')
+  })
+
+  it("pending '2-days-provider-override-only' → plural override phrasing, no fixTarget", () => {
+    const gap = gapFor(KEY, { kind: 'pending_parent', reason: '2-days-provider-override-only' }, CTX)
+    expect(gap.guidanceText).toContain('overrides are on file for 2 days')
+    expect(gap.guidanceText).toContain('usually clears')
+    expect(gap.fixTarget).toBeUndefined()
+  })
+
+  it("pending '1-days-provider-override-only' → singular override phrasing", () => {
+    const gap = gapFor(KEY, { kind: 'pending_parent', reason: '1-days-provider-override-only' }, CTX)
+    expect(gap.guidanceText).toContain('on file for 1 day but')
+  })
+
+  it('reason without a parseable count → count-free fallback, never crashes', () => {
+    const gap = gapFor(KEY, { kind: 'missing_required' }, CTX)
+    expect(gap.guidanceText).toContain('Some days of attendance')
+    const pendingGap = gapFor(KEY, { kind: 'pending_parent' }, CTX)
+    expect(pendingGap.guidanceText).toContain('usually clears')
   })
 })
 

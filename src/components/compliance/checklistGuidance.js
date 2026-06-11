@@ -26,14 +26,19 @@
 //   Surface 5  /miregistry
 //   3.1b-1     /business-info?section=premises
 //   3.1b-1     /business-info?section=compliance_applicability
+//   3.1b-2     /staff-training (+ ?caregiver=<id> when context has one)
 //
 // The two BusinessInfo surfaces are provider-level (no context
 // needed) and serve ONLY the awaiting_input bucket — they answer
 // "does this requirement apply to me?", not "fix this gap".
-// Remaining category B/C surfaces (StaffTraining / Team
-// ?caregiver=, per-row /acknowledgments) render text-only until
-// their query-param handling ships (3.1b-2+). Family/child-scoped
-// targets additionally require the consumer to supply context
+// The StaffTraining surface is page-level TODAY: the six staff
+// E-rows aggregate worst-across-caregivers in the engine, so no
+// caregiver id exists at render time. buildFixTarget upgrades to
+// ?caregiver=<id> (the page consumes it since 3.1b-2) whenever a
+// future context supplies caregiverId — do not fabricate one.
+// Remaining category B/C surfaces (per-row /acknowledgments) render
+// text-only until their query-param handling ships. Family/child-
+// scoped targets additionally require the consumer to supply context
 // ({ familyId, childId }); when the context is absent (e.g. the
 // provider-level /compliance page rendering a funding row), the
 // result degrades to text-only. Never a dead button.
@@ -99,6 +104,9 @@ export const SURFACE = Object.freeze({
   // KNOWN_SECTIONS set; both tabs confirmed in BusinessInfoPage.jsx.
   BUSINESS_INFO_PREMISES:      'business_info_premises',
   BUSINESS_INFO_APPLICABILITY: 'business_info_applicability',
+  // 3.1b-2 — StaffTrainingPage drill-in via ?caregiver=<id>;
+  // page-level without a caregiverId in context.
+  STAFF_TRAINING:              'staff_training',
 })
 
 function buildFixTarget(surface, context) {
@@ -117,6 +125,17 @@ function buildFixTarget(surface, context) {
       label: 'Answer in Business Info → What applies to my program?',
       to: '/business-info?section=compliance_applicability',
     }
+  }
+  if (surface === SURFACE.STAFF_TRAINING) {
+    if (ctx.caregiverId) {
+      return {
+        label: 'Open this caregiver in Staff Training',
+        to: `/staff-training?caregiver=${encodeURIComponent(ctx.caregiverId)}`,
+      }
+    }
+    // Staff rows aggregate worst-across-caregivers — no caregiver id
+    // at render. Page-level is honest: the matrix shows who's behind.
+    return { label: 'Open Staff Training', to: '/staff-training' }
   }
   if (surface === SURFACE.FAMILIES_CHILDREN) {
     if (!ctx.familyId || !ctx.childId) return null
@@ -346,8 +365,15 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
       'contact support.',
   },
 
-  // ── Group E — staff files (category C surface — text-only) ───────
+  // ── Group E — staff files (Staff Training surface, 3.1b-2) ───────
+  //
+  // E1-E6 link page-level (/staff-training): the engine aggregates
+  // worst-across-caregivers so no caregiver id reaches the row.
+  // buildFixTarget upgrades to ?caregiver=<id> if a future context
+  // carries caregiverId. E7-E9 are feature_not_yet_shipped (no
+  // fixTarget by rule).
   caregiver_background_check_eligibility: {
+    surface: SURFACE.STAFF_TRAINING,
     missing:
       'Record this caregiver’s background-check eligibility result. ' +
       'R 400.1919 + R 400.1903(1)(r). An eligible determination is ' +
@@ -360,12 +386,14 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
     },
   },
   caregiver_cpr_first_aid_current: {
+    surface: SURFACE.STAFF_TRAINING,
     missing:
       'Record this caregiver’s current CPR + pediatric first-aid ' +
       'certification (the expiration date printed on their card). ' +
       'R 400.1924(8) + R 400.1920(3) / R 400.1921(3).',
   },
   caregiver_new_hire_training_complete: {
+    surface: SURFACE.STAFF_TRAINING,
     missing:
       'Record completion of the 14 mandated new-hire training topics ' +
       'for this caregiver. R 400.1923. Must be done within 90 days of ' +
@@ -378,6 +406,7 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
     },
   },
   caregiver_miregistry_account: {
+    surface: SURFACE.STAFF_TRAINING,
     missing:
       'Confirm this caregiver’s MiRegistry account status (submitted ' +
       '/ materials_received / awaiting_print / current) — R 400.1922. ' +
@@ -385,6 +414,7 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
       'window from employment.',
   },
   caregiver_professional_development_hours: {
+    surface: SURFACE.STAFF_TRAINING,
     // E5 — per-role hours from the role-based reason string
     // ('hours-<total>-of-<required>'), never a fixed number. Reasons
     // that don't carry hours (e.g. 'no-active-caregivers') fall back
@@ -411,6 +441,7 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
     },
   },
   caregiver_health_safety_update_acked: {
+    surface: SURFACE.STAFF_TRAINING,
     missing:
       'Acknowledge the published health-safety update for this ' +
       'caregiver — R 400.1924(11). MiLEAP publishes notices; each ' +
@@ -517,15 +548,33 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
 
   // ── Group H — attendance acks (category C surface — text-only) ───
   attendance_parent_acknowledgment_per_day: {
-    missing:
-      'This day’s attendance for a CDC-enrolled child hasn’t been ' +
-      'acknowledged by the parent yet. Either prompt the parent (the ' +
-      'existing acknowledgment digest cron sends weekly), or run a ' +
-      'provider override with a documented reason if the parent is ' +
-      'genuinely unreachable. CDC billing audit trail.',
-    pending:
-      'Provider override is on file but the parent hasn’t ' +
-      'acknowledged. This usually clears when they next open the portal.',
+    // 3.1b-2 copy fix: the engine emits AGGREGATED reasons
+    // ('<N>-days-missing-ack' / '<N>-days-provider-override-only',
+    // complianceState.js), never a per-day state — so the copy reads
+    // the day count from the reason, like E5 reads hours. Reasons
+    // without a parseable count fall back to count-free phrasing.
+    missing: (state) => {
+      const m = /^(\d+)-days-missing-ack$/.exec((state && state.reason) || '')
+      const lead = m
+        ? (m[1] === '1'
+            ? '1 day of attendance for a CDC-enrolled child hasn’t been acknowledged by the parent yet. '
+            : `${m[1]} days of attendance for CDC-enrolled children haven’t been acknowledged by a parent yet. `)
+        : 'Some days of attendance for CDC-enrolled children haven’t been acknowledged by a parent yet. '
+      return lead +
+        'Either prompt the parents (the existing acknowledgment digest ' +
+        'cron sends weekly), or run a provider override with a ' +
+        'documented reason where a parent is genuinely unreachable. ' +
+        'CDC billing audit trail.'
+    },
+    pending: (state) => {
+      const m = /^(\d+)-days-provider-override-only$/.exec((state && state.reason) || '')
+      const lead = m
+        ? (m[1] === '1'
+            ? 'A provider override is on file for 1 day but the parent hasn’t acknowledged. '
+            : `Provider overrides are on file for ${m[1]} days but the parents haven’t acknowledged. `)
+        : 'Provider overrides are on file but the parents haven’t acknowledged. '
+      return lead + 'This usually clears when they next open the portal.'
+    },
   },
 })
 
