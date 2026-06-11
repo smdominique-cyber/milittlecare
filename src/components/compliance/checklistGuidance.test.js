@@ -148,7 +148,7 @@ describe('Surface 5 — /miregistry', () => {
 // -----------------------------------------------------------------------------
 
 describe('category B/C rows render text-only (no fixTarget)', () => {
-  it('G4 fingerprint reprint (BusinessInfo surface is 3.1b B-1) → no fixTarget', () => {
+  it('G4 fingerprint reprint (BusinessInfo link deliberately deferred past 3.1b-1) → no fixTarget', () => {
     const gap = gapFor('cdc_fingerprint_reprint_currency', { kind: 'missing_required' }, CTX)
     expect(gap.guidanceText).toContain('5-year cycle')
     expect(gap.fixTarget).toBeUndefined()
@@ -316,26 +316,82 @@ describe('feature_not_yet_shipped bucket', () => {
   })
 })
 
-describe('awaiting_input bucket', () => {
-  it('A2 lead disclosure → per-row premises question copy, warning, NO fixTarget', () => {
-    const gap = gapFor('intake_lead_disclosure',
-      { kind: 'unknown', reason: 'awaiting-provider-input' }, CTX)
+describe('awaiting_input bucket (3.1b-1 — BusinessInfo ?section= fixTargets)', () => {
+  const AWAITING = { kind: 'unknown', reason: 'awaiting-provider-input' }
+
+  const PREMISES_TARGET = {
+    label: 'Answer in Business Info → Premises',
+    to: '/business-info?section=premises',
+  }
+  const APPLICABILITY_TARGET = {
+    label: 'Answer in Business Info → What applies to my program?',
+    to: '/business-info?section=compliance_applicability',
+  }
+
+  // The split is the likely bug: premises rows must NOT point at the
+  // applicability questionnaire, and vice versa.
+  const PREMISES_ROWS = ['intake_lead_disclosure', 'intake_firearms_disclosure']
+  const APPLICABILITY_ROWS = [
+    'consent_transportation_routine_annual',
+    'consent_water_activities_on_premises_seasonal',
+    'property_animal_notification',
+  ]
+
+  it('A2 lead disclosure → per-row premises copy, warning, premises fixTarget', () => {
+    const gap = gapFor('intake_lead_disclosure', AWAITING, CTX)
     expect(gap.severity).toBe('warning')
     expect(gap.guidanceText).toContain('1978')
-    expect(gap.fixTarget).toBeUndefined()
+    expect(gap.fixTarget).toEqual(PREMISES_TARGET)
   })
 
-  it('A3 firearms disclosure → per-row firearms copy', () => {
-    const gap = gapFor('intake_firearms_disclosure',
-      { kind: 'unknown', reason: 'awaiting-provider-input' }, CTX)
+  it('A3 firearms disclosure → per-row firearms copy + premises fixTarget', () => {
+    const gap = gapFor('intake_firearms_disclosure', AWAITING, CTX)
     expect(gap.guidanceText).toContain('firearms')
+    expect(gap.fixTarget).toEqual(PREMISES_TARGET)
   })
 
-  it('row without per-row awaiting copy → generic Business Info sentence', () => {
-    const gap = gapFor('consent_field_trip_permission',
-      { kind: 'unknown', reason: 'awaiting-provider-input' }, CTX)
+  it.each(PREMISES_ROWS)('%s → section=premises, NEVER the applicability id', (key) => {
+    const gap = gapFor(key, AWAITING, CTX)
+    expect(gap.fixTarget.to).toBe('/business-info?section=premises')
+    expect(gap.fixTarget.to).not.toContain('compliance_applicability')
+  })
+
+  it.each(APPLICABILITY_ROWS)('%s → section=compliance_applicability, NEVER the premises id', (key) => {
+    const gap = gapFor(key, AWAITING, CTX)
+    expect(gap.fixTarget).toEqual(APPLICABILITY_TARGET)
+    expect(gap.fixTarget.to).not.toContain('section=premises')
+  })
+
+  it('BusinessInfo fixTargets are provider-level — built with NO context', () => {
+    for (const key of [...PREMISES_ROWS, ...APPLICABILITY_ROWS]) {
+      const gap = gapFor(key, AWAITING)
+      expect(gap.fixTarget, key).toBeTruthy()
+      expect(gap.fixTarget.to, key).toContain('/business-info?section=')
+    }
+  })
+
+  it('ONLY the five questionnaire/premises rows get an awaiting fixTarget (registry-wide)', () => {
+    const linked = new Set([...PREMISES_ROWS, ...APPLICABILITY_ROWS])
+    for (const key of Object.keys(REQUIREMENT_REGISTRY)) {
+      const gap = gapFor(key, AWAITING, CTX)
+      if (linked.has(key)) {
+        expect(gap.fixTarget, key).toBeTruthy()
+      } else {
+        expect(gap.fixTarget, `${key} must stay text-only on awaiting_input`).toBeUndefined()
+      }
+    }
+  })
+
+  it('row without per-row awaiting copy → generic Business Info sentence (C1 — no fixTarget: autoDefault APPLIES)', () => {
+    const gap = gapFor('consent_field_trip_permission', AWAITING, CTX)
     expect(gap.guidanceText).toContain('Business Info')
     expect(gap.fixTarget).toBeUndefined()
+  })
+
+  it('animal notification has no per-row awaiting copy → generic sentence + applicability fixTarget', () => {
+    const gap = gapFor('property_animal_notification', AWAITING, CTX)
+    expect(gap.guidanceText).toContain('What applies to my program?')
+    expect(gap.fixTarget).toEqual(APPLICABILITY_TARGET)
   })
 })
 
@@ -362,6 +418,18 @@ describe('registry-wide invariants', () => {
         if (gap && gap.fixTarget) {
           expect(gap.fixTarget.label, `${key}/${kind}`).toBeTruthy()
           expect(gap.fixTarget.to, `${key}/${kind}`).toBeTruthy()
+        }
+      }
+    }
+  })
+
+  it('no non-awaiting state ever links to /business-info (3.1a map otherwise untouched)', () => {
+    const kinds = ['missing_required', 'expired', 'pending_parent']
+    for (const key of Object.keys(REQUIREMENT_REGISTRY)) {
+      for (const kind of kinds) {
+        const gap = gapFor(key, { kind }, CTX)
+        if (gap && gap.fixTarget) {
+          expect(gap.fixTarget.to, `${key}/${kind}`).not.toContain('/business-info')
         }
       }
     }

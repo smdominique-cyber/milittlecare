@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabase'
 import { notifyStateChange } from '@/lib/notifications'
@@ -9,6 +10,21 @@ import {
 } from 'lucide-react'
 import ApplicabilityQuestionsSection from '@/components/compliance/ApplicabilityQuestionsSection'
 import '@/styles/business-info.css'
+
+// Valid ?section= deep-link targets — must stay in sync with the
+// `sections` tab array inside BusinessInfoPage. An unknown or absent
+// ?section= falls back to the default tab ('hours'), never errors.
+// Mirrors FamiliesPage's KNOWN_TABS validation (Finding #5 precedent).
+const KNOWN_SECTIONS = Object.freeze(new Set([
+  'hours',
+  'closures',
+  'policies',
+  'emergency',
+  'messaging',
+  'licensing',
+  'premises',
+  'compliance_applicability',
+]))
 
 const DAYS = [
   { value: 0, label: 'Sunday', short: 'Sun' },
@@ -132,7 +148,11 @@ function shortDate(d) {
 
 export default function BusinessInfoPage() {
   const { user } = useAuth()
-  const [activeSection, setActiveSection] = useState('hours')
+  const [searchParams] = useSearchParams()
+  const [activeSection, setActiveSection] = useState(() => {
+    const requested = searchParams.get('section')
+    return KNOWN_SECTIONS.has(requested) ? requested : 'hours'
+  })
   const [hours, setHours] = useState({})
   const [closures, setClosures] = useState([])
   const [policies, setPolicies] = useState({})
