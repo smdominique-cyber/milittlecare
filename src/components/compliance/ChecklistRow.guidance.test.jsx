@@ -4,7 +4,8 @@
 // <ActionableGap> beneath the status line; on_file / not_applicable
 // rows render none; the rule citation stays in ChecklistRow either
 // way; fixContext threads through to a working deep-link; and the
-// old broken "?section=compliance_applicability" link is gone.
+// awaiting_input rows link to the real BusinessInfo ?section= targets
+// (3.1b-1 — 3.1a shipped these text-only).
 
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
@@ -63,13 +64,21 @@ describe('ChecklistRow — ActionableGap wiring', () => {
     expect(screen.queryByRole('link')).toBeNull()
   })
 
-  it('awaiting_input → the broken ?section= link is GONE; honest guidance instead', () => {
+  it('awaiting_input premises row → working ?section=premises link (3.1b-1)', () => {
     const { container } = mountRow('intake_lead_disclosure',
       { kind: 'unknown', reason: 'awaiting-provider-input' })
-    expect(screen.queryByRole('link')).toBeNull()
+    const link = screen.getByRole('link')
+    expect(link.getAttribute('href')).toBe('/business-info?section=premises')
     expect(container.innerHTML).not.toContain('section=compliance_applicability')
     expect(screen.getByText('Tell us about this')).toBeTruthy()
     expect(container.querySelector('.actionable-gap').textContent).toContain('1978')
+  })
+
+  it('awaiting_input questionnaire row → ?section=compliance_applicability link, no fixContext needed', () => {
+    mountRow('consent_water_activities_on_premises_seasonal',
+      { kind: 'unknown', reason: 'awaiting-provider-input' })
+    const link = screen.getByRole('link')
+    expect(link.getAttribute('href')).toBe('/business-info?section=compliance_applicability')
   })
 
   it('load_failure unknown → refresh-to-retry guidance, no link', () => {

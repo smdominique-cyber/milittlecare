@@ -18,16 +18,21 @@
 //      worksheet's own A9(b) directive (providers don't care about
 //      the MILittleCare roadmap).
 //
-// fixTarget policy (3.1a): a deep-link button is built ONLY for
-// category-A surfaces — routes that are real and addressable today:
+// fixTarget policy: a deep-link button is built ONLY for surfaces
+// whose routes are real and addressable today:
 //
 //   Surface 1  /families?family=<fid>&child=<cid>&tab=children
 //   Surface 2  /families?family=<fid>&child=<cid>&tab=funding
 //   Surface 5  /miregistry
+//   3.1b-1     /business-info?section=premises
+//   3.1b-1     /business-info?section=compliance_applicability
 //
-// Category B/C surfaces (BusinessInfo ?section=, StaffTraining /
-// Team ?caregiver=, per-row /acknowledgments) render text-only until
-// their query-param handling ships (3.1b+). Family/child-scoped
+// The two BusinessInfo surfaces are provider-level (no context
+// needed) and serve ONLY the awaiting_input bucket — they answer
+// "does this requirement apply to me?", not "fix this gap".
+// Remaining category B/C surfaces (StaffTraining / Team
+// ?caregiver=, per-row /acknowledgments) render text-only until
+// their query-param handling ships (3.1b-2+). Family/child-scoped
 // targets additionally require the consumer to supply context
 // ({ familyId, childId }); when the context is absent (e.g. the
 // provider-level /compliance page rendering a funding row), the
@@ -84,18 +89,34 @@ const GENERIC_NEEDS_PROVIDER_DATA_GUIDANCE =
 const GENERIC_GAP_GUIDANCE =
   'Review this requirement — a required record is missing or out of date.'
 
-// ─── Fix-target surfaces (category A only, this PR) ─────────────────
+// ─── Fix-target surfaces ────────────────────────────────────────────
 
 export const SURFACE = Object.freeze({
   FAMILIES_CHILDREN: 'families_children',  // Surface 1
   FAMILIES_FUNDING:  'families_funding',   // Surface 2
   MIREGISTRY:        'miregistry',         // Surface 5
+  // 3.1b-1 — BusinessInfoPage validates these ids against its
+  // KNOWN_SECTIONS set; both tabs confirmed in BusinessInfoPage.jsx.
+  BUSINESS_INFO_PREMISES:      'business_info_premises',
+  BUSINESS_INFO_APPLICABILITY: 'business_info_applicability',
 })
 
 function buildFixTarget(surface, context) {
   const ctx = context || {}
   if (surface === SURFACE.MIREGISTRY) {
     return { label: 'Open MiRegistry tracker', to: '/miregistry' }
+  }
+  if (surface === SURFACE.BUSINESS_INFO_PREMISES) {
+    return {
+      label: 'Answer in Business Info → Premises',
+      to: '/business-info?section=premises',
+    }
+  }
+  if (surface === SURFACE.BUSINESS_INFO_APPLICABILITY) {
+    return {
+      label: 'Answer in Business Info → What applies to my program?',
+      to: '/business-info?section=compliance_applicability',
+    }
   }
   if (surface === SURFACE.FAMILIES_CHILDREN) {
     if (!ctx.familyId || !ctx.childId) return null
@@ -124,8 +145,12 @@ function buildFixTarget(surface, context) {
 //   pending           — guidance for pending_parent; falls back to `missing`.
 //   pendingByReason   — per-reason pending_parent overrides.
 //   needsProviderData — per-reason copy for the needs_provider_data bucket.
-//   awaiting          — copy for the awaiting_input bucket (text-only —
-//                       BusinessInfo ?section= is 3.1b sub-work B-1).
+//   awaiting          — copy for the awaiting_input bucket.
+//   awaitingSurface   — SURFACE.BUSINESS_INFO_* for the awaiting_input
+//                       fixTarget (3.1b-1). Separate from `surface`
+//                       because the awaiting question ("does this
+//                       apply?") lives in Business Info while the gap
+//                       fix ("capture the ack") lives in Families.
 //   notYetShipped     — copy for feature_not_yet_shipped; falls back to
 //                       the generic trackingCopy() sentence.
 //   dataAnomaly       — per-row data_anomaly copy; falls back to the
@@ -148,6 +173,7 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
   },
   intake_lead_disclosure: {
     surface: SURFACE.FAMILIES_CHILDREN,
+    awaitingSurface: SURFACE.BUSINESS_INFO_PREMISES,
     missing:
       'Capture the parent’s signature on the lead-paint disclosure. ' +
       'R 400.1913 requires it for homes built before 1978.',
@@ -158,6 +184,7 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
   },
   intake_firearms_disclosure: {
     surface: SURFACE.FAMILIES_CHILDREN,
+    awaitingSurface: SURFACE.BUSINESS_INFO_PREMISES,
     missing:
       'Capture the parent’s signature on the firearms disclosure. ' +
       'The copy on the disclosure form varies depending on your ' +
@@ -242,6 +269,12 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
   },
   consent_transportation_routine_annual: {
     surface: SURFACE.FAMILIES_CHILDREN,
+    // C2 (not C1) is the questionnaire-driven consents row: its
+    // applicability autoDefaults to UNKNOWN (complianceState.js §2a)
+    // until the provider answers the routine-transport question. C1
+    // field-trip autoDefaults to APPLIES and never reaches
+    // awaiting_input.
+    awaitingSurface: SURFACE.BUSINESS_INFO_APPLICABILITY,
     // C2 keeps "Annual" — the expiry-removal PR has NOT landed
     // (worksheet Q + task correction 3); current main still expires
     // annually.
@@ -252,6 +285,7 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
   },
   consent_water_activities_on_premises_seasonal: {
     surface: SURFACE.FAMILIES_CHILDREN,
+    awaitingSurface: SURFACE.BUSINESS_INFO_APPLICABILITY,
     missing:
       'Capture the parent’s seasonal signature on the on-premises ' +
       'water-activity permission — R 400.1934(10)(b). Per-trip ' +
@@ -458,14 +492,27 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
     },
   },
   cdc_fingerprint_reprint_currency: {
-    // Fix surface is Business Info → Licensing (?section= is 3.1b
-    // sub-work B-1) — text-only this PR.
+    // Fix surface would be Business Info → Licensing. ?section=
+    // shipped in 3.1b-1 for the awaiting_input rows only; wiring G4's
+    // missing-state link is deliberately deferred — text-only.
     missing:
       'Your fingerprint reprint is on a 5-year cycle. The current state ' +
       'of your fingerprint_date field tells the engine how close you ' +
       'are — update after each reprint. Applies to YOU (the ' +
       'licensee), your STAFF, and HOUSEHOLD MEMBERS who were originally ' +
       'fingerprinted before April 2024.',
+  },
+
+  // ── Property (questionnaire-driven applicability, 3.1b-1) ────────
+  property_animal_notification: {
+    // not_yet_modelled row, but applicability autoDefaults to UNKNOWN
+    // (complianceState.js §2a) and applicability is resolved BEFORE
+    // data_state — so it reaches awaiting_input until the provider
+    // answers the animals question. Awaiting copy stays generic (the
+    // generic sentence already names the questionnaire); the
+    // feature_not_yet_shipped state falls to the `property` category
+    // entry in TRACKING_SHIPS_WITH.
+    awaitingSurface: SURFACE.BUSINESS_INFO_APPLICABILITY,
   },
 
   // ── Group H — attendance acks (category C surface — text-only) ───
@@ -531,9 +578,15 @@ export function actionableGapPropsFor({ requirement, state, context } = {}) {
       return { guidanceText, severity: 'info' }
     }
     if (bucket === 'awaiting_input') {
-      // Text-only: BusinessInfo ?section= handling is 3.1b sub-work
-      // (B-1) — an honest sentence beats a link that doesn't land.
-      return { guidanceText: entry.awaiting || GENERIC_AWAITING_GUIDANCE, severity: 'warning' }
+      // 3.1b-1: BusinessInfo consumes ?section=, so awaiting rows can
+      // link to the question that resolves them. Provider-level — no
+      // context required. Rows without an awaitingSurface stay
+      // text-only (never a dead button).
+      const guidanceText = entry.awaiting || GENERIC_AWAITING_GUIDANCE
+      const fixTarget = buildFixTarget(entry.awaitingSurface, context)
+      return fixTarget
+        ? { guidanceText, severity: 'warning', fixTarget }
+        : { guidanceText, severity: 'warning' }
     }
     if (bucket === 'needs_provider_data') {
       const guidanceText =
