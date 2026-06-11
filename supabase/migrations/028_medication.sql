@@ -274,6 +274,15 @@ begin
 end;
 $$;
 
+-- Engineering Discipline rule 4 (CLAUDE.md): every SECURITY DEFINER
+-- function gets the canonical revoke/grant trailer. A trigger function
+-- (returns trigger) cannot be invoked directly via PostgREST RPC, so
+-- the practical exposure is nil — the trailer is applied uniformly per
+-- the standing rule (added 2026-06-10, before first production apply).
+revoke all     on function public.medication_event_caregiver_role_check() from public;
+revoke execute on function public.medication_event_caregiver_role_check() from anon;
+grant  execute on function public.medication_event_caregiver_role_check() to authenticated;
+
 drop trigger if exists trg_medication_event_caregiver_role_check on public.medication_administration_events;
 create trigger trg_medication_event_caregiver_role_check
   before insert on public.medication_administration_events

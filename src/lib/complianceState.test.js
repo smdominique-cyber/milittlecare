@@ -132,14 +132,20 @@ function makeSourceRows(overrides = {}) {
 // -----------------------------------------------------------------------------
 
 describe('REQUIREMENT_REGISTRY — structural', () => {
-  it('has exactly 51 rows (row 19 religious-objection deferred; funding_dhs_198_on_file removed 2026-06-06)', () => {
+  it('has exactly 50 rows (religious-objection deferred; funding_dhs_198_on_file removed 2026-06-06; D4 role-gate retired 2026-06-10)', () => {
     // Pre-correction-pass count was 52. The CDC-layer correctness
     // pass (docs/Compliance Corrections.md Part 2) removed
     // funding_dhs_198_on_file because the DHS-198 is MDHHS's
     // authorization notice TO the provider, not a document the
     // provider fulfills — it never belonged on a compliance
-    // checklist.
-    expect(REGISTRY_ROW_COUNT).toBe(51)
+    // checklist. medication_role_gate_integrity (D4) was retired
+    // 2026-06-10: R 400.1931(1) is enforced at entry (dropdown gate
+    // + DB trigger) instead of detected after the fact.
+    expect(REGISTRY_ROW_COUNT).toBe(50)
+  })
+
+  it('retirement lock: medication_role_gate_integrity (D4) is NOT in the registry', () => {
+    expect(REQUIREMENT_REGISTRY.medication_role_gate_integrity).toBeUndefined()
   })
 
   it('every row has the required shape', () => {
@@ -918,42 +924,9 @@ describe('Medication category', () => {
     expect(state.reason).toBe('authorization-changed-since-permission')
   })
 
-  it('medication_role_gate_integrity — non-OTC dose by ineligible role → missing_required', () => {
-    const requirement = REQUIREMENT_REGISTRY.medication_role_gate_integrity
-    const auth = { id: 'auth-1', is_topical_otc: false, archived_at: null }
-    const event = { id: 'ev-1', authorization_id: 'auth-1', administered_by_caregiver_id: 'cg-volunteer', archived_at: null }
-    const caregiver = { id: 'cg-volunteer', regulatory_roles: ['supervised_volunteer'] }
-    const state = getRequirementState({
-      requirement,
-      provider: makeLicensedProvider(),
-      sourceRows: makeSourceRows({
-        medication_authorizations: [auth],
-        medication_admin_events: [event],
-        caregivers: [caregiver],
-      }),
-      now: FIXED_NOW,
-    })
-    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
-    expect(state.reason).toBe('ineligible-role-administered-non-otc-dose')
-  })
-
-  it('medication_role_gate_integrity — non-OTC dose by eligible role → on_file', () => {
-    const requirement = REQUIREMENT_REGISTRY.medication_role_gate_integrity
-    const auth = { id: 'auth-1', is_topical_otc: false, archived_at: null }
-    const event = { id: 'ev-1', authorization_id: 'auth-1', administered_by_caregiver_id: 'cg-staff', archived_at: null }
-    const caregiver = { id: 'cg-staff', regulatory_roles: ['child_care_staff_member'] }
-    const state = getRequirementState({
-      requirement,
-      provider: makeLicensedProvider(),
-      sourceRows: makeSourceRows({
-        medication_authorizations: [auth],
-        medication_admin_events: [event],
-        caregivers: [caregiver],
-      }),
-      now: FIXED_NOW,
-    })
-    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
-  })
+  // D4 (medication_role_gate_integrity) retired 2026-06-10 — enforced
+  // at entry (dropdown gate + DB trigger), no detection row. The
+  // retirement lock lives in the registry-shape describe.
 
   it('medication_permission_otc_blanket — OTC auth + ack → on_file', () => {
     const requirement = REQUIREMENT_REGISTRY.medication_permission_otc_blanket
@@ -1516,41 +1489,6 @@ describe('§2a load-failure guards — resolver coverage completion', () => {
       })
       expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
       expect(s.reason).toBe('unacked-update')
-    })
-  })
-
-  describe('medication_role_gate_integrity', () => {
-    const KEY = 'medication_role_gate_integrity'
-    // ≥1 non-OTC dose event makes the row applicable.
-    const NON_OTC_EVENT = [{ id: 'ev-1', authorization_id: 'auth-1', administered_by_caregiver_id: 'cg-9', archived_at: null }]
-
-    it('caregivers failed to load → unknown caregivers-load-failure (not a false anomaly red)', () => {
-      const s = stateOf(KEY, {
-        sourceRows: { medication_admin_events: NON_OTC_EVENT },
-        sourceRowsLoaded: { caregivers: false, medication_admin_events: true, medication_authorizations: true },
-      })
-      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
-      expect(s.reason).toBe('caregivers-load-failure')
-    })
-
-    it('regression lock: loaded true + event whose caregiver is absent → missing ineligible-role red (unchanged)', () => {
-      const s = stateOf(KEY, {
-        sourceRows: { medication_admin_events: NON_OTC_EVENT },
-        sourceRowsLoaded: { caregivers: true, medication_admin_events: true, medication_authorizations: true },
-      })
-      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
-      expect(s.reason).toBe('ineligible-role-administered-non-otc-dose')
-    })
-
-    it('regression lock: loaded true + eligible-role caregiver administered → on_file (unchanged)', () => {
-      const s = stateOf(KEY, {
-        sourceRows: {
-          medication_admin_events: NON_OTC_EVENT,
-          caregivers: [makeCaregiver(['licensee'], { id: 'cg-9' })],
-        },
-        sourceRowsLoaded: { caregivers: true, medication_admin_events: true, medication_authorizations: true },
-      })
-      expect(s.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
     })
   })
 

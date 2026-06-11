@@ -311,38 +311,9 @@ describe('§2a loader-shape — medication group', () => {
     })
   })
 
-  // D4 — medication_role_gate_integrity (TWO precondition tables)
-  describe('D4 medication_role_gate_integrity (two-table gate)', () => {
-    it('loaded + non-OTC event → APPLIES', () => {
-      expect(applicabilityOf('medication_role_gate_integrity', {
-        provider, sourceRows: makeSourceRows({
-          medication_authorizations: [auth],
-          medication_admin_events: [event],
-        }), sourceRowsLoaded: ALL_LOADED,
-      })).toBe(APPLICABILITY_RESULT.APPLIES)
-    })
-    it('loaded + empty → DOES_NOT_APPLY', () => {
-      expect(applicabilityOf('medication_role_gate_integrity', {
-        provider, sourceRows: makeSourceRows(), sourceRowsLoaded: ALL_LOADED,
-      })).toBe(APPLICABILITY_RESULT.DOES_NOT_APPLY)
-    })
-    it('events table failed → UNKNOWN (auths loaded)', () => {
-      expect(applicabilityOf('medication_role_gate_integrity', {
-        provider, sourceRows: makeSourceRows(), sourceRowsLoaded: loadedExcept('medication_admin_events'),
-      })).toBe(APPLICABILITY_RESULT.UNKNOWN)
-    })
-    it('auths table failed → UNKNOWN (events loaded)', () => {
-      expect(applicabilityOf('medication_role_gate_integrity', {
-        provider, sourceRows: makeSourceRows(), sourceRowsLoaded: loadedExcept('medication_authorizations'),
-      })).toBe(APPLICABILITY_RESULT.UNKNOWN)
-    })
-    it('both tables failed → UNKNOWN', () => {
-      expect(applicabilityOf('medication_role_gate_integrity', {
-        provider, sourceRows: makeSourceRows(),
-        sourceRowsLoaded: loadedExcept('medication_admin_events', 'medication_authorizations'),
-      })).toBe(APPLICABILITY_RESULT.UNKNOWN)
-    })
-  })
+  // D4 (medication_role_gate_integrity) retired 2026-06-10 — its
+  // two-table §2a gate left with it. D6 below pins the same
+  // two-table-precondition pattern.
 
   // D5 — medication_original_container_attestation
   describe('D5 medication_original_container_attestation', () => {

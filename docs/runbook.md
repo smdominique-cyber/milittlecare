@@ -356,6 +356,8 @@ drop table if exists public.consent_attachments;
 
 **File:** `supabase/migrations/028_medication.sql`
 
+**2026-06-10 (pre-application edit):** the canonical Engineering Discipline rule-4 revoke/grant trailer was added to the SECURITY DEFINER trigger function `medication_event_caregiver_role_check()` in the migration file. Safe to edit in place because the migration has never been applied; whoever applies 028 gets the trailer automatically.
+
 **What it does:**
 - Creates `public.medication_authorizations` (one row per child × medication; provider's record of the active plan + original-container attestation + OTC vs prescription split).
 - Creates `public.medication_administration_events` (one row per dose; date/time/amount + administering caregiver; FK `on delete restrict` so dose records survive authorization archival).
