@@ -982,3 +982,20 @@ Library / `@testing-library/react` test for any page. Worth
 adding when the next deep-link consumer ships — same posture as
 Phase Y1's parent intake page (`ParentIntakeAcknowledgePage.mount.test.jsx`
 is the lone precedent and a useful template).
+
+## Migration 028 trigger-function trailer drift (2026-06-10)
+
+The live `medication_event_caregiver_role_check()` function in
+production lacks the Engineering Discipline rule-4 revoke/grant
+trailer. The trailer was added to the migration file
+(`supabase/migrations/028_medication.sql`) in commit `50407ff` on
+branch `feature/pr-20-medication-log`, but 028 was already applied
+when the edit landed — and file edits don't re-run an applied
+migration. Practical exposure is nil because a `returns trigger`
+function cannot be called via PostgREST RPC (no `anon`-callable
+RPC surface to lock down). Fix-if-ever: a tiny follow-up migration
+with just `CREATE OR REPLACE FUNCTION
+public.medication_event_caregiver_role_check() ...` + the trailer.
+**Do NOT** re-run all of 028. See runbook entry "Migration 028 —
+APPLIED + trigger live-verified + BACKFILLED ENTRY" for the
+verification record this drift was discovered against.
