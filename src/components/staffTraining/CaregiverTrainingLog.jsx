@@ -4,7 +4,7 @@
 // show-archived toggle.
 
 import { useMemo, useState } from 'react'
-import { ArrowLeft, Plus, UserCog } from 'lucide-react'
+import { ArrowLeft, Pencil, Plus, UserCog } from 'lucide-react'
 import {
   CATEGORY_META,
   REGULATORY_ROLE_META,
@@ -27,12 +27,21 @@ function recordMeta(record) {
   return parts.join(' · ')
 }
 
+// `onEditHireDate` (added 2026-06-14 to close the E3 punch-list hole):
+// the LICENSEE branch passes this prop; the staff self-view does not.
+// When provided, the hire-date line gains an Edit affordance (so an
+// existing caregiver whose date_of_hire is missing or wrong can be
+// fixed without archive+re-add, which would destroy training history).
+// When the prop is absent, the line behaves exactly as before: rendered
+// only if the date is set, no edit control. The actual write lives in
+// the parent's modal (StaffTrainingPage `EditHireDateModal`).
 export default function CaregiverTrainingLog({
   caregiver,
   records,
   onAddRecord,
   onEditRecord,
   onAssignRoles,
+  onEditHireDate,
   onBack,
 }) {
   const [showArchived, setShowArchived] = useState(false)
@@ -75,11 +84,7 @@ export default function CaregiverTrainingLog({
           </span>
         ))}
       </div>
-      {caregiver?.date_of_hire && (
-        <p className="st-record-meta" style={{ margin: 0 }}>
-          Hire date: {formatShortDate(caregiver.date_of_hire)}
-        </p>
-      )}
+      <HireDateLine caregiver={caregiver} onEditHireDate={onEditHireDate} />
 
       <div className="st-actions" style={{ marginTop: 'var(--space-3)' }}>
         <button className="btn-save st-btn-row" onClick={() => onAddRecord?.(caregiver)}>
@@ -118,6 +123,50 @@ export default function CaregiverTrainingLog({
         </div>
       )}
     </div>
+  )
+}
+
+// Hire-date row. Render rules (added 2026-06-14):
+//   self-view (no onEditHireDate):  date set → show it; absent → render nothing.
+//                                   Preserves the pre-edit behavior exactly.
+//   licensee (onEditHireDate set):  date set → show it + Edit affordance.
+//                                   date absent → show "Hire date: not set" + Set affordance.
+// The licensee branch must always offer the Set/Edit affordance — the
+// missing-hire-date case is the WHOLE POINT of this fix; hiding the
+// row when the date is null would reproduce the original integrity hole.
+function HireDateLine({ caregiver, onEditHireDate }) {
+  const hasDate = !!caregiver?.date_of_hire
+  const isLicensee = typeof onEditHireDate === 'function'
+
+  if (!isLicensee) {
+    if (!hasDate) return null
+    return (
+      <p className="st-record-meta" style={{ margin: 0 }}>
+        Hire date: {formatShortDate(caregiver.date_of_hire)}
+      </p>
+    )
+  }
+
+  return (
+    <p
+      className="st-record-meta"
+      style={{ margin: 0, display: 'inline-flex', alignItems: 'center', gap: 8 }}
+    >
+      <span>
+        {hasDate
+          ? `Hire date: ${formatShortDate(caregiver.date_of_hire)}`
+          : 'Hire date: not set'}
+      </span>
+      <button
+        type="button"
+        className="st-link-btn"
+        onClick={() => onEditHireDate(caregiver)}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+      >
+        <Pencil size={12} />
+        {hasDate ? 'Edit' : 'Set hire date'}
+      </button>
+    </p>
   )
 }
 
