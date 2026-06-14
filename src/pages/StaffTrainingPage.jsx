@@ -45,6 +45,7 @@ export default function StaffTrainingPage() {
   const [selectedId, setSelectedId] = useState(null)
   const [entryForm, setEntryForm] = useState(null)   // { caregiver, record }
   const [roleModal, setRoleModal] = useState(null)   // caregiver
+  const [hireDateModal, setHireDateModal] = useState(null)  // caregiver (licensee-only; added 2026-06-14 to close the E3 punch-list hole)
   const [addingCaregiver, setAddingCaregiver] = useState(false)
 
   const rosterById = useMemo(
@@ -111,6 +112,7 @@ export default function StaffTrainingPage() {
   const closeModals = () => {
     setEntryForm(null)
     setRoleModal(null)
+    setHireDateModal(null)
     setAddingCaregiver(false)
   }
   const handleSaved = () => {
@@ -199,6 +201,7 @@ export default function StaffTrainingPage() {
           onAddRecord={openAdd}
           onEditRecord={openEdit}
           onAssignRoles={c => setRoleModal(c)}
+          onEditHireDate={c => setHireDateModal(c)}
           onBack={() => {
             setSelectedId(null)
             clearDeepLinkParams()
@@ -266,6 +269,14 @@ export default function StaffTrainingPage() {
       {addingCaregiver && (
         <AddCaregiverModal
           licenseeId={user?.id}
+          onClose={closeModals}
+          onSaved={handleSaved}
+        />
+      )}
+      {hireDateModal && (
+        <EditHireDateModal
+          licenseeId={user?.id}
+          caregiver={hireDateModal}
           onClose={closeModals}
           onSaved={handleSaved}
         />
@@ -361,6 +372,88 @@ function AddCaregiverModal({ licenseeId, onClose, onSaved }) {
           <button className="btn-save" onClick={save} disabled={saving}
             style={{ flex: 'initial', padding: '0.625rem var(--space-5)' }}>
             {saving ? 'Saving…' : 'Add caregiver'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Page-local: edit-hire-date modal. Added 2026-06-14 to close the E3
+// punch-list hole — date_of_hire was previously written only on CREATE
+// (AddCaregiverModal above), so a caregiver added without a hire date
+// could not have one filled in. The E3 resolver emits
+// `caregiver-missing-date-of-hire` when this field is null on an
+// active caregiver who has incomplete new-hire training; the engine
+// guidance points at /staff-training (page-level — see the audit's
+// classification of staff rows as worst-across-caregivers, no per-row
+// caregiver id at render). Provider arrives at the matrix, clicks the
+// at-risk caregiver, sees "Hire date: not set [Set hire date]" here.
+//
+// Defense-in-depth on the write: the .update is scoped by BOTH id and
+// licensee_id. Migration 012:250-253 RLS already requires
+// licensee_id = auth.uid() (USING + WITH CHECK), so the second .eq
+// is belt-and-suspenders — but it makes intent visible in the call
+// site and stays correct if anyone ever loosens the policy.
+function EditHireDateModal({ licenseeId, caregiver, onClose, onSaved }) {
+  const hireId = useId()
+  const [dateOfHire, setDateOfHire] = useState(caregiver?.date_of_hire || '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  const save = async () => {
+    if (!caregiver?.id) return
+    setSaving(true)
+    setError(null)
+    try {
+      const { error: e } = await supabase
+        .from('caregivers')
+        .update({ date_of_hire: dateOfHire || null })
+        .eq('id', caregiver.id)
+        .eq('licensee_id', licenseeId)
+      if (e) throw e
+      onSaved?.()
+    } catch (err) {
+      console.error('EditHireDateModal: update failed', err)
+      setError('Couldn’t save the hire date. Try again, or email support@milittlecare.com.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-card" onClick={e => e.stopPropagation()} style={{ maxWidth: 460, width: '95%' }}>
+        <div className="modal-header">
+          <span className="modal-title">Edit hire date</span>
+          <button className="modal-close" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+          <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--clr-ink-soft)', lineHeight: 1.5 }}>
+            {caregiver?.full_name
+              ? `Update ${caregiver.full_name}’s hire date.`
+              : 'Update this caregiver’s hire date.'}
+            {' '}Used to track the 30-day MiRegistry deadline and the
+            90-day new-hire training window. Leave blank to clear.
+          </p>
+          <div className="form-field-group">
+            <label htmlFor={hireId} className="field-label">Date of hire</label>
+            <input id={hireId} className="field-input" type="date" max={todayYMD()}
+              value={dateOfHire} onChange={e => setDateOfHire(e.target.value)} />
+          </div>
+          {error && (
+            <div role="alert" style={{ color: 'var(--clr-danger, #b00020)', fontSize: '0.875rem' }}>
+              {error}
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn-discard" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn-save" onClick={save} disabled={saving}
+            style={{ flex: 'initial', padding: '0.625rem var(--space-5)' }}>
+            {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
       </div>
