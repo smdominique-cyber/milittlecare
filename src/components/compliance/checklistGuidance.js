@@ -516,15 +516,24 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
     },
   },
   cdc_fingerprint_reprint_currency: {
-    // Fix surface would be Business Info → Licensing. ?section=
-    // shipped in 3.1b-1 for the awaiting_input rows only; wiring G4's
-    // missing-state link is deliberately deferred — text-only.
+    // G4 ships as honest "keep records" guidance (no fixTarget). The
+    // softening on 2026-06-14 closes the audit's integrity hole: the
+    // prior copy promised an in-app `fingerprint_date` field update
+    // that no UI delivers (grep src/ for .from('profiles').update —
+    // no caller writes fingerprint_date), AND named a HOUSEHOLD
+    // MEMBERS case the schema doesn't model. A real upload surface
+    // for fingerprint-reprint receipts would need a new provider-
+    // level documents store (no suitable existing table; see
+    // Step 0 investigation in commit message). Until that ships,
+    // the copy matches the genuinely-not-built rows in drills /
+    // property — "keep records on file, an auditor will ask" —
+    // without promising a feature that doesn't exist.
     missing:
-      'Your fingerprint reprint is on a 5-year cycle. The current state ' +
-      'of your fingerprint_date field tells the engine how close you ' +
-      'are — update after each reprint. Applies to YOU (the ' +
-      'licensee), your STAFF, and HOUSEHOLD MEMBERS who were originally ' +
-      'fingerprinted before April 2024.',
+      'Keep records of fingerprint reprints on file — an auditor ' +
+      'will ask. The rule is a 5-year cycle that applies to YOU ' +
+      '(the licensee) and any staff or household members originally ' +
+      'fingerprinted before April 2024. MILittleCare does not yet ' +
+      'hold these records in-app; for now they stay on paper.',
   },
 
   // ── Property (questionnaire-driven applicability, 3.1b-1) ────────
