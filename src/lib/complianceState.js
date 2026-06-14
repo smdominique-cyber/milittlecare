@@ -992,7 +992,7 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     },
   }),
 
-  // ─── medication (6) ──────────────────────────────────────────────
+  // ─── medication (5) ──────────────────────────────────────────────
 
   medication_authorization_for_authorization: Object.freeze({
     key: 'medication_authorization_for_authorization',
@@ -1125,68 +1125,15 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     }),
   }),
 
-  medication_role_gate_integrity: Object.freeze({
-    key: 'medication_role_gate_integrity',
-    category: 'medication',
-    rule_citation: 'R 400.1931(1)',
-    label: 'Role-gate integrity (dose-administering staff eligibility)',
-    subject_type: 'provider',
-    data_authority: 'milittlecare',
-    gsq_relevant: false,
-    severity: 'critical',
-    data_state: 'shipped',
-    applicability: {
-      // Applies when there's ≥1 non-OTC dose event for the provider.
-      inferFromData: ({ sourceRows, sourceRowsLoaded }) => {
-        // §2a loader-shape guard. BOTH precondition tables must be
-        // loaded — events alone can't be classified non-OTC without
-        // the auths' is_topical_otc flag, and an unknown auths set
-        // makes the "no non-OTC events" conclusion unsound.
-        if (sourceRowsLoaded && (
-             sourceRowsLoaded.medication_admin_events    === false
-          || sourceRowsLoaded.medication_authorizations  === false
-        )) {
-          return APPLICABILITY_RESULT.UNKNOWN
-        }
-        const events = sourceRows.medication_admin_events || []
-        const auths = sourceRows.medication_authorizations || []
-        const otcAuthIds = new Set(auths.filter(a => a.is_topical_otc).map(a => a.id))
-        const any = events.some(e => !e.archived_at && !otcAuthIds.has(e.authorization_id))
-        return any ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
-      },
-    },
-    state_resolver: ({ sourceRows, sourceRowsLoaded }) => {
-      // §2a load-failure guard: a failed caregivers load would make
-      // every non-OTC dose look caregiver-less → false anomaly red.
-      if (sourceRowsLoaded && sourceRowsLoaded.caregivers === false) {
-        return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'caregivers-load-failure' }
-      }
-      // Defensive: the DB trigger guarantees on_file. We check anyway
-      // because the trigger could be bypassed by a future direct
-      // write. Anomaly = a non-OTC dose event whose caregiver lacks
-      // an eligible regulatory_role.
-      const events = sourceRows.medication_admin_events || []
-      const auths = sourceRows.medication_authorizations || []
-      const caregivers = sourceRows.caregivers || []
-      const ELIGIBLE = new Set(['licensee', 'child_care_staff_member'])
-      const otcAuthIds = new Set(auths.filter(a => a.is_topical_otc).map(a => a.id))
-      for (const ev of events) {
-        if (ev.archived_at) continue
-        if (otcAuthIds.has(ev.authorization_id)) continue
-        const cg = caregivers.find(c => c.id === ev.administered_by_caregiver_id)
-        const roles = (cg && (cg.regulatory_roles || []).map(r => typeof r === 'string' ? r : r.regulatory_role)) || []
-        const hasEligible = roles.some(r => ELIGIBLE.has(r))
-        if (!hasEligible) {
-          return {
-            kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED,
-            reason: 'ineligible-role-administered-non-otc-dose',
-            evidence_id: ev.id,
-          }
-        }
-      }
-      return { kind: REQUIREMENT_STATE_KIND.ON_FILE }
-    },
-  }),
+  // medication_role_gate_integrity (D4) RETIRED 2026-06-10. R 400.1931(1)
+  // is enforced at entry instead of detected after the fact: the
+  // administered-by dropdown filters to eligible roles
+  // (eligibleCaregiversForAdministration, src/lib/medication.js) AND the
+  // DB trigger medication_event_caregiver_role_check() blocks ineligible
+  // INSERTs (migration 028). The detection row evaluated doses against
+  // caregivers' CURRENT roles, so a dose that was legal when administered
+  // would read as a critical violation after a later role reclassification
+  // — a false positive with no role-history table to fix it honestly.
 
   medication_original_container_attestation: Object.freeze({
     key: 'medication_original_container_attestation',

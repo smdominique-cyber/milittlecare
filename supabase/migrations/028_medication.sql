@@ -119,10 +119,13 @@ create table if not exists public.medication_authorizations (
   provider_id              uuid not null references auth.users(id) on delete cascade,
   child_id                 uuid not null references public.children(id) on delete cascade,
 
-  -- Medication identity + plan.
+  -- Medication identity + plan. dose_text and schedule_text are both
+  -- free text (scope OQ1: structured schedule deferred to V2).
+  -- Examples: dose_text "5 mL by mouth"; schedule_text "twice daily,
+  -- 8a + 8p".
   medication_name          text not null,
-  dose_text                text,                    -- "5 mL by mouth" — free text (scope OQ1: structured schedule deferred to V2)
-  schedule_text            text,                    -- "twice daily, 8a + 8p" — free text
+  dose_text                text,
+  schedule_text            text,
 
   -- R 400.1931(8) discriminant: when true, the row's events bypass
   -- the role-gate trigger AND the per-dose log is OPTIONAL (per
@@ -273,6 +276,15 @@ begin
   return new;
 end;
 $$;
+
+-- Engineering Discipline rule 4 (CLAUDE.md): every SECURITY DEFINER
+-- function gets the canonical revoke/grant trailer. A trigger function
+-- (returns trigger) cannot be invoked directly via PostgREST RPC, so
+-- the practical exposure is nil — the trailer is applied uniformly per
+-- the standing rule (added 2026-06-10, before first production apply).
+revoke all     on function public.medication_event_caregiver_role_check() from public;
+revoke execute on function public.medication_event_caregiver_role_check() from anon;
+grant  execute on function public.medication_event_caregiver_role_check() to authenticated;
 
 drop trigger if exists trg_medication_event_caregiver_role_check on public.medication_administration_events;
 create trigger trg_medication_event_caregiver_role_check

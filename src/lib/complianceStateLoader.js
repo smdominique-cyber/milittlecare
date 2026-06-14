@@ -238,7 +238,7 @@ export async function loadComplianceSourceRows({
   // 6. Caregivers + staff training + health-safety updates.
   //    Provider-level; not gated by childIds. caregivers carries the
   //    loaded signal (§2a coverage completion, 2026-06-09): a failed
-  //    load is read by eight staff/medication resolvers and must
+  //    load is read by the staff/medication resolvers and must
   //    surface as `unknown`, not "no active caregivers."
   const caregiversResp = await safeQueryWithLoaded('caregivers', () =>
     supabase

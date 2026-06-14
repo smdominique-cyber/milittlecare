@@ -319,7 +319,11 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
       'this.',
   },
 
-  // ── Group D — medication (Surface 1; D4/D6 text-only) ────────────
+  // ── Group D — medication (Surface 1; D6 text-only) ───────────────
+  //
+  // D4 (medication_role_gate_integrity) retired 2026-06-10 — the rule
+  // is enforced at entry (dropdown gate + DB trigger), so there is no
+  // provider-facing detection row anymore. See complianceState.js.
   medication_permission_per_authorization: {
     surface: SURFACE.FAMILIES_CHILDREN,
     missing:
@@ -338,17 +342,6 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
       '/ repellent / diaper rash cream) — covers all topical OTC ' +
       'collectively per R 400.1931(8) but doesn’t waive the ' +
       'per-medication permission requirement.',
-  },
-  medication_role_gate_integrity: {
-    // HIGH-STAKES, deliberately guidance-only: backwards-looking
-    // historical evidence; there is nothing to "open" that fixes it.
-    missing:
-      'An ineligible caregiver administered a non-OTC dose in the past. ' +
-      'Document the corrective action in your records and confirm only ' +
-      'licensees + child-care staff members administer non-topical-OTC ' +
-      'medication going forward — R 400.1931(1). The DB trigger blocks ' +
-      'new ineligible administrations; this row reflects historical ' +
-      'evidence.',
   },
   medication_original_container_attestation: {
     surface: SURFACE.FAMILIES_CHILDREN,

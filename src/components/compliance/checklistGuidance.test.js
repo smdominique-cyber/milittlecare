@@ -399,19 +399,8 @@ describe('H1 — aggregated attendance-ack copy (per-day copy was wrong)', () =>
 })
 
 // -----------------------------------------------------------------------------
-// D4 — high-stakes guidance-only row
-// -----------------------------------------------------------------------------
-
-describe('D4 — medication role-gate integrity', () => {
-  it('missing → critical, corrective-action copy, NO fixTarget (nothing to open)', () => {
-    const gap = gapFor('medication_role_gate_integrity', { kind: 'missing_required' }, CTX)
-    expect(gap.severity).toBe('critical')
-    expect(gap.guidanceText).toContain('corrective action')
-    expect(gap.guidanceText).toContain('R 400.1931(1)')
-    expect(gap.fixTarget).toBeUndefined()
-  })
-})
-
+// D4 (medication_role_gate_integrity) retired 2026-06-10 — enforced at
+// entry (dropdown gate + DB trigger); no guidance entry remains.
 // -----------------------------------------------------------------------------
 // Unknown buckets — feature_not_yet_shipped + awaiting_input
 // -----------------------------------------------------------------------------

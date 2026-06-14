@@ -482,3 +482,44 @@ consumes);
 
 *No source files modified. No migrations run. No branch other than
 `docs/pr-15-21-scoping`.*
+
+---
+
+## As-built reconciliation (2026-06-10, Phase B closure)
+
+The build shipped earlier than this doc anticipated: data layer
+(migration 028 + `src/lib/medication.js`) and UI (`MedicationModal` on
+FamiliesPage, gated `isLicensed`) are merged on main. Closure changes
+made 2026-06-10:
+
+1. **D4 `medication_role_gate_integrity` RETIRED** from the compliance
+   registry and guidance. R 400.1931(1) is enforced at entry — the
+   administered-by dropdown filters to
+   `ELIGIBLE_ADMINISTERING_ROLES` (`src/lib/medication.js`) AND the
+   `medication_event_caregiver_role_check()` trigger blocks ineligible
+   INSERTs — instead of detected after the fact. The detection row
+   evaluated doses against caregivers' CURRENT roles, so a dose legal
+   when administered would read as a critical violation after a later
+   role reclassification (no role-history table exists to fix this
+   honestly). Trade acknowledged: the registry row was the only
+   after-the-fact detector of trigger bypass; two enforcement layers
+   remain.
+2. **Rule-4 trailer added to migration 028** (still unapplied to
+   production at edit time): the SECURITY DEFINER trigger function now
+   carries the canonical revoke/grant trailer per CLAUDE.md Engineering
+   Discipline rule 4.
+3. **Citation drift FLAGGED, not corrected:** this doc's "Verbatim
+   subsections" section lists (1), (2), (4), (7), (8), (9) and maps the
+   original-container attestation to (4) alone. The post-Pass-2
+   registry cites `R 400.1931(3)+(4)` for the attestation (verified
+   against the 2026 TA Manual) and `R 400.1931(3-6)` for the
+   authorization-on-file row. Resolution requires re-reading the rules
+   PDF — Seth's call; do not reconcile by inference.
+4. **Deferred (not built):** § B.1a `getMedicationLogAuditState()`
+   (PR #22 consumer), § B.4 TodayWidget medications section, § B.6
+   print view. § B.5's reminder catalog entry
+   (`medication_authorization_renewal`) exists in
+   `src/lib/reminderCategories.js`.
+
+Migration 028 remains PENDING production application (with 026 + 027
+before it) — see `docs/runbook.md`.
