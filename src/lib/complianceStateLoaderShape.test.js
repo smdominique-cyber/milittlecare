@@ -541,15 +541,27 @@ vi.mock('./supabase', () => {
 
 // Minimal query-builder stub. Records the table name + last `.from()`
 // call, and per-table queues a result the test pre-installs.
+//
+// 2026-06-13: also records every `.eq` / `.in` / `.gte` / `.is`
+// filter call as `{ table, op, column, value }` on `__filterCalls`,
+// so filter-shape regression tests can assert the loader is NOT
+// filtering on a non-existent column (the staff_training_records
+// `licensee_id` / attendance_acknowledgments `provider_id` bug
+// caught in production 2026-06-13). Existing tests don't inspect
+// `__filterCalls`, so this is purely additive.
 function makeFakeSupabase(perTableResult) {
   const calls = []
+  const filterCalls = []
   function builder(table) {
+    const record = (op, column, value) => {
+      filterCalls.push({ table, op, column, value })
+    }
     const chain = {
       select:  () => chain,
-      eq:      () => chain,
-      in:      () => chain,
-      gte:     () => chain,
-      is:      () => chain,
+      eq:      (column, value) => { record('eq', column, value); return chain },
+      in:      (column, value) => { record('in', column, value); return chain },
+      gte:     (column, value) => { record('gte', column, value); return chain },
+      is:      (column, value) => { record('is', column, value); return chain },
       // PostgREST returns a thenable; the loader awaits the chain.
       // The loader's safeQueryWithLoaded relies on a thrown error to
       // surface as a rejected promise from `await fn()`, so the fake
@@ -586,6 +598,7 @@ function makeFakeSupabase(perTableResult) {
     from: (table) => builder(table),
     auth: { getUser: async () => ({ data: { user: { id: 'prov-1' } } }) },
     __calls: calls,
+    __filterCalls: filterCalls,
   }
 }
 
@@ -693,7 +706,7 @@ describe('§2a loader — sourceRowsLoaded signal (loader integration)', () => {
     })
   })
 
-  it('PostgREST error on caregivers → loaded=false; staff_training_records still true', async () => {
+  it('PostgREST error on caregivers → loaded=false; staff_training_records also propagates false (corrected dependency, 2026-06-13)', async () => {
     globalThis.__loaderTestSupabase = makeFakeSupabase({
       profiles: { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
       children: { data: [{ id: 'child-1' }], error: null },
@@ -701,7 +714,16 @@ describe('§2a loader — sourceRowsLoaded signal (loader integration)', () => {
     })
     const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
     expect(out.sourceRowsLoaded.caregivers).toBe(false)
-    expect(out.sourceRowsLoaded.staff_training_records).toBe(true)
+    // Pre-2026-06-13 behavior: staff_training_records was filtered
+    // independently via `.eq('licensee_id', providerId)` (a column
+    // that does not exist) and the old test asserted loaded=true on
+    // this branch. After the production-bug fix the loader filters
+    // staff_training_records via `.in('caregiver_id', caregiverIds)`
+    // from the loaded caregiver list, so a failed caregivers load
+    // propagates to staff_training_records.loaded — a resolver can't
+    // honestly answer "no records" when the caregiver roster itself
+    // is unknown. This is the §2a guard pattern working correctly.
+    expect(out.sourceRowsLoaded.staff_training_records).toBe(false)
   })
 
   it('PostgREST error on funding_documents → loaded=false; funding_sources still true', async () => {
@@ -735,5 +757,141 @@ describe('§2a loader — sourceRowsLoaded signal (loader integration)', () => {
     const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
     expect(out.sourceRowsLoaded.attendance_acks).toBe(false)
     expect(out.sourceRowsLoaded.acks).toBe(true)
+  })
+})
+
+// -----------------------------------------------------------------------------
+// Filter-shape regression — production-bug lock (2026-06-13)
+// -----------------------------------------------------------------------------
+//
+// Background: production hit 400 errors on /compliance because the
+// loader was filtering `staff_training_records.licensee_id` and
+// `attendance_acknowledgments.provider_id` — NEITHER COLUMN EXISTS.
+//   - staff_training_records reaches the licensee via
+//     caregiver_id → caregivers.licensee_id (its RLS shape).
+//   - attendance_acknowledgments reaches the provider via
+//     child_id → children.user_id (its RLS shape).
+// The §2a guard correctly surfaced both as "couldn't verify," but no
+// test had locked the loader's filter shape against the actual
+// schema, so the bug shipped. These tests lock the corrected shape:
+// the loader must NEVER filter either table on the non-existent
+// column, and MUST filter through the correct relationship.
+
+describe('production-bug regression: loader filter shape vs real schema', () => {
+  let loadComplianceSourceRows
+
+  beforeEach(async () => {
+    const mod = await import('./complianceStateLoader')
+    loadComplianceSourceRows = mod.loadComplianceSourceRows
+  })
+
+  afterEach(() => {
+    globalThis.__loaderTestSupabase = undefined
+  })
+
+  it('staff_training_records: filters .in("caregiver_id", ...), NEVER .eq("licensee_id", ...) — main loader path', async () => {
+    const fake = makeFakeSupabase({
+      profiles:   { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children:   { data: [{ id: 'child-1' }], error: null },
+      caregivers: { data: [{ id: 'careg-1', full_name: 'Test', archived_at: null }], error: null },
+    })
+    globalThis.__loaderTestSupabase = fake
+    await loadComplianceSourceRows({ providerId: 'prov-1' })
+
+    const staffCalls = fake.__filterCalls.filter(c => c.table === 'staff_training_records')
+    // The bug: .eq('licensee_id', ...) on a table with no such column.
+    // PostgREST returns 400; the resolver loses visibility on every
+    // staff-files row. This assertion fails loudly if anyone
+    // reintroduces the licensee_id filter.
+    expect(
+      staffCalls.find(c => c.op === 'eq' && c.column === 'licensee_id')
+    ).toBeUndefined()
+    // The corrected shape: an IN filter through caregiver_id, sourced
+    // from the loaded caregiver list.
+    const inCall = staffCalls.find(c => c.op === 'in' && c.column === 'caregiver_id')
+    expect(inCall).toBeDefined()
+    expect(Array.isArray(inCall.value)).toBe(true)
+    expect(inCall.value).toContain('careg-1')
+  })
+
+  it('staff_training_records: no caregivers ⇒ no query issued; loaded mirrors caregivers.loaded', async () => {
+    const fake = makeFakeSupabase({
+      profiles:   { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children:   { data: [{ id: 'child-1' }], error: null },
+      caregivers: { data: [], error: null },
+    })
+    globalThis.__loaderTestSupabase = fake
+    const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
+
+    // Skip-query shortcut: nothing should have hit the staff table.
+    expect(
+      fake.__calls.find(c => c.table === 'staff_training_records')
+    ).toBeUndefined()
+    // Clean-empty case ⇒ loaded=true (genuine zero, not a failure).
+    expect(out.sourceRowsLoaded.staff_training_records).toBe(true)
+    expect(out.sourceRows.staff_training_records).toEqual([])
+  })
+
+  it('staff_training_records: caregivers failed-to-load ⇒ no query; loaded propagates false', async () => {
+    const fake = makeFakeSupabase({
+      profiles:   { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children:   { data: [{ id: 'child-1' }], error: null },
+      caregivers: { data: null, error: { code: 'PGRST116', message: 'RLS' } },
+    })
+    globalThis.__loaderTestSupabase = fake
+    const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
+
+    // The §2a guard reads sourceRowsLoaded.staff_training_records;
+    // an honest false here resolves the eight staff-files rows to
+    // UNKNOWN. A false-positive `true` would surface them as
+    // "no records ⇒ missing_required" — exactly the failure mode
+    // the production bug produced.
+    expect(out.sourceRowsLoaded.staff_training_records).toBe(false)
+    expect(
+      fake.__calls.find(c => c.table === 'staff_training_records')
+    ).toBeUndefined()
+  })
+
+  it('staff_training_records: filters .in("caregiver_id", ...), NEVER .eq("licensee_id", ...) — sub-loader (no-children path)', async () => {
+    const fake = makeFakeSupabase({
+      profiles:   { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      // No children — the loader falls through to loadProviderLevelRows.
+      children:   { data: [], error: null },
+      caregivers: { data: [{ id: 'careg-2', full_name: 'Test 2', archived_at: null }], error: null },
+    })
+    globalThis.__loaderTestSupabase = fake
+    await loadComplianceSourceRows({ providerId: 'prov-1' })
+
+    const staffCalls = fake.__filterCalls.filter(c => c.table === 'staff_training_records')
+    expect(
+      staffCalls.find(c => c.op === 'eq' && c.column === 'licensee_id')
+    ).toBeUndefined()
+    const inCall = staffCalls.find(c => c.op === 'in' && c.column === 'caregiver_id')
+    expect(inCall).toBeDefined()
+    expect(inCall.value).toContain('careg-2')
+  })
+
+  it('attendance_acknowledgments: filters .in("child_id", ...), NEVER .eq("provider_id", ...) and NEVER .eq("licensee_id", ...)', async () => {
+    const fake = makeFakeSupabase({
+      profiles: { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children: { data: [{ id: 'child-A' }, { id: 'child-B' }], error: null },
+    })
+    globalThis.__loaderTestSupabase = fake
+    await loadComplianceSourceRows({ providerId: 'prov-1' })
+
+    const ackCalls = fake.__filterCalls.filter(c => c.table === 'attendance_acknowledgments')
+    // The bug shape (the loader had .eq('provider_id', ...); the user
+    // task report cited a licensee_id form — neither column exists,
+    // so both filter shapes are wrong and both must stay out).
+    expect(
+      ackCalls.find(c => c.op === 'eq' && c.column === 'provider_id')
+    ).toBeUndefined()
+    expect(
+      ackCalls.find(c => c.op === 'eq' && c.column === 'licensee_id')
+    ).toBeUndefined()
+    // The corrected shape: filter through the loaded children list.
+    const inCall = ackCalls.find(c => c.op === 'in' && c.column === 'child_id')
+    expect(inCall).toBeDefined()
+    expect(inCall.value).toEqual(expect.arrayContaining(['child-A', 'child-B']))
   })
 })
