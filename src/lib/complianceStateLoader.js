@@ -263,12 +263,29 @@ export async function loadComplianceSourceRows({
   // staff_training_records + training_requirements carry the loaded
   // signal (E5 role-based thresholds, 2026-06-09): a failed load of
   // either must surface as `unknown`, not a false missing/on_file.
-  const staffTrainingResp = await safeQueryWithLoaded('staff_training_records', () =>
-    supabase
-      .from('staff_training_records')
-      .select('*')
-      .eq('licensee_id', providerId)
-  )
+  //
+  // Filter shape (2026-06-13 production-bug fix): the table has NO
+  // `licensee_id` column; its licensee relationship is indirect via
+  // `caregiver_id → caregivers.licensee_id` (matching the table's
+  // RLS SELECT policy). The previous `.eq('licensee_id', providerId)`
+  // 400'd for every provider — the §2a guard correctly surfaced this
+  // as "couldn't verify" on all eight staff-files rows. Reuse the
+  // caregiver list already loaded above instead of a relationship
+  // embed — the ids are in hand and a flat `.in()` avoids a
+  // PostgREST relationship dependency. When caregivers loaded cleanly
+  // and is empty, skip the query (no caregivers ⇒ no records, by
+  // precondition); when caregivers failed, propagate the load
+  // failure to `staff_training_records.loaded` so resolvers honestly
+  // resolve to UNKNOWN rather than a false on_file.
+  const staffTrainingCaregiverIds = caregiversNormalized.map(c => c.id)
+  const staffTrainingResp = staffTrainingCaregiverIds.length === 0
+    ? { rows: [], loaded: caregiversResp.loaded }
+    : await safeQueryWithLoaded('staff_training_records', () =>
+        supabase
+          .from('staff_training_records')
+          .select('*')
+          .in('caregiver_id', staffTrainingCaregiverIds)
+      )
 
   // Statewide reference catalog (migration 013) — no provider filter;
   // SELECT-only RLS for every authenticated user.
@@ -321,11 +338,20 @@ export async function loadComplianceSourceRows({
   const cutoff = new Date(Date.now() - attendanceWindowDays * 86400000)
     .toISOString()
     .slice(0, 10)
+  // Filter shape (2026-06-13 production-bug fix): the table has NO
+  // `provider_id` column AND NO `licensee_id` column. Its provider
+  // relationship is indirect via `child_id → children.user_id`
+  // (matching the table's RLS SELECT policy, which goes through
+  // attendance.user_id = auth.uid()). The previous
+  // `.eq('provider_id', providerId)` 400'd for every provider.
+  // Filter through the loaded children list — already in scope, and
+  // `allChildIds` is guaranteed non-empty at this point (the empty
+  // case returned via loadProviderLevelRows above).
   const attendanceAcksResp = await safeQueryWithLoaded('attendance_acknowledgments', () =>
     supabase
       .from('attendance_acknowledgments')
       .select('id, child_id, date, segment_index, acknowledged_via, archived_at')
-      .eq('provider_id', providerId)
+      .in('child_id', allChildIds)
       .gte('date', cutoff)
       .is('archived_at', null)
   )
@@ -412,9 +438,20 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
       .map(r => r && r.regulatory_role)
       .filter(Boolean),
   }))
-  const staffTrainingResp = await safeQueryWithLoaded('staff_training_records', () =>
-    supabase.from('staff_training_records').select('*').eq('licensee_id', providerId)
-  )
+  // Same fix as the main loader (see 2026-06-13 note above):
+  // staff_training_records has no licensee_id column. Filter through
+  // caregiver_id, reusing the just-loaded caregiver list. Skip-query
+  // shortcut on empty caregivers, propagating the caregivers loaded
+  // signal so a failure surfaces as UNKNOWN.
+  const staffTrainingCaregiverIds = caregiversNormalized.map(c => c.id)
+  const staffTrainingResp = staffTrainingCaregiverIds.length === 0
+    ? { rows: [], loaded: caregiversResp.loaded }
+    : await safeQueryWithLoaded('staff_training_records', () =>
+        supabase
+          .from('staff_training_records')
+          .select('*')
+          .in('caregiver_id', staffTrainingCaregiverIds)
+      )
   const trainingRequirementsResp = await safeQueryWithLoaded('training_requirements', () =>
     supabase.from('training_requirements').select('*')
   )
