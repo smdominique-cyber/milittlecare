@@ -43,6 +43,26 @@ assuming a complex migration will land. The `Success. No rows returned`
 message can fire on a fragment that did nothing — verification queries
 against the actual table state are the only reliable confirmation.
 
+### Process — the database is the source of truth for "is this applied?"
+
+⚠️ **Never trust this runbook's Pending/Applied status without verifying
+against production.** The 2026-06-10 detour was caused by migrations
+026 and 028 being applied to production in earlier sessions but never
+promoted from "Pending Application" to "Migration History" — a later
+reader trusted the doc and built a plan to re-apply something already
+live. Two rules going forward:
+
+1. **Before planning any apply, verify the database directly.** Use
+   `to_regclass('public.<table>')`, `pg_trigger` lookups by name, and
+   `pg_policies` queries — not this doc — to answer "is this applied?"
+   Engineering Discipline rule 1 says the live database is the source
+   of truth; the same principle governs migration state.
+2. **Promote in the SAME session as the apply, never "later."** If a
+   migration was applied successfully, edit this runbook in the next
+   step — before closing the terminal, before the next task. "I'll
+   document it after" is how bookkeeping drift accumulates and how
+   the 2026-06-10 detour started.
+
 ## Pending Application
 
 ### Migration 030 — parent metadata SELECT policy `archived_at` parity (Consent Attachments Part 2 hardening)
@@ -349,431 +369,6 @@ drop index if exists public.consent_attachments_provider_active_idx;
 drop index if exists public.consent_attachments_target_active_idx;
 drop table if exists public.consent_attachments;
 ```
-
-### Migration 028 — medication authorizations + administration events + role-gate trigger (PR #20 Part 1)
-
-**Status:** PENDING — written 2026-06-02, not yet applied to production. Awaits Seth's manual application via the Supabase web SQL editor and verification screenshots **including the three trigger tests (Pair A negative + positive, Pair B positive)** before promotion to Migration History below.
-
-**File:** `supabase/migrations/028_medication.sql`
-
-**What it does:**
-- Creates `public.medication_authorizations` (one row per child × medication; provider's record of the active plan + original-container attestation + OTC vs prescription split).
-- Creates `public.medication_administration_events` (one row per dose; date/time/amount + administering caregiver; FK `on delete restrict` so dose records survive authorization archival).
-- Creates the `medication_event_caregiver_role_check()` trigger function and binds it BEFORE INSERT on `medication_administration_events`. The trigger enforces R 400.1931(1) — only `licensee` or `child_care_staff_member` may administer — EXCEPT for `is_topical_otc=true` events per R 400.1931(8)'s exemption.
-- RLS policies: provider-scoped via `provider_id`; parents see their own children's records via `parent_family_links → children` (same shape as migration 024's parent SELECT policy on `acknowledgments`).
-- Indexes: per-child active-authorization unique (`(child_id, lower(medication_name)) WHERE archived_at IS NULL`); event read-paths by child / provider / authorization.
-
-**Dependency:** migration 027 (`acknowledgments_per_occurrence`) must already be applied. PR #20 also relies on PR #8's `public.caregivers` + `public.caregiver_regulatory_roles` (migration 012) for the role-gate trigger's lookup.
-
-**Apply procedure:** open the file on the feature branch, copy the entire contents, paste into the Supabase web SQL editor (production project), run. The migration is short and uses no transaction wrapping (the per-statement DDL is independent — table create, function create, trigger drop+create, policies). If a partial-apply happens mid-script, re-running is safe (IF NOT EXISTS / OR REPLACE / DROP-then-CREATE patterns).
-
-**Verification (paste each into the SQL editor and screenshot):**
-
-```sql
--- (a) Both tables exist with the expected columns.
-select table_name, column_name, data_type, is_nullable
-from information_schema.columns
-where table_schema='public'
-  and table_name in ('medication_authorizations',
-                     'medication_administration_events')
-order by table_name, ordinal_position;
-```
-
-```sql
--- (b) The role-gate trigger exists on the events table.
-select tgname, tgenabled, tgrelid::regclass
-from pg_trigger
-where tgname = 'trg_medication_event_caregiver_role_check';
--- expect 1 row; tgenabled='O' (enabled);
---   tgrelid = public.medication_administration_events.
-```
-
-```sql
--- (c) Authorization partial-unique index exists.
-select indexname, indexdef
-from pg_indexes
-where schemaname='public'
-  and tablename='medication_authorizations'
-  and indexname='idx_med_auth_active_per_child_med';
-```
-
-```sql
--- (d) No existing data affected (the tables are new).
-select count(*) as auths from public.medication_authorizations;
-select count(*) as events from public.medication_administration_events;
--- expect both 0.
-```
-
-### ⚠️ Trigger tests — the legally-consequential verification (must run on real rows)
-
-The vitest suite cannot reach a DB trigger. These three SQL tests prove R 400.1931(1) is enforced AND R 400.1931(8) is honored. Run on a throwaway test child + caregivers.
-
-**Setup queries — find or create caregivers of each role:**
-
-```sql
--- Find an existing caregiver of each role (the schema's regulatory_role
--- values are: licensee, child_care_staff_member, child_care_assistant,
--- unsupervised_volunteer, supervised_volunteer, driver).
-select c.id, c.first_name, c.last_name, crr.regulatory_role
-  from public.caregivers c
-  join public.caregiver_regulatory_roles crr on crr.caregiver_id = c.id
- where c.licensee_id = '<your provider auth.uid()>'
-   and c.archived_at is null
- order by crr.regulatory_role, c.first_name;
-```
-
-If you don't have a caregiver of a given role on the test provider's roster, set one up via the existing PR #8 caregivers UI (or insert via SQL — but the UI flow is safer because it respects the migration-12 enums).
-
-Once you have the IDs, set up a test authorization for each branch (non-OTC + OTC):
-
-```sql
--- Pick an existing test child:
-select id, first_name, last_name from public.children
- where user_id = '<your provider auth.uid()>'
-   and archived_at is null
- order by created_at desc limit 5;
-
--- Create one non-OTC authorization (subject to (1) role-gate):
-insert into public.medication_authorizations (
-  provider_id, child_id, medication_name, is_topical_otc,
-  original_container_confirmed
-) values (
-  '<provider_id>', '<child_id>', 'Pr20-test-Tylenol', false, true
-) returning id;
--- record the returned id as <auth_non_otc>.
-
--- Create one TOPICAL-OTC authorization (R 400.1931(8) exempt):
-insert into public.medication_authorizations (
-  provider_id, child_id, medication_name, is_topical_otc,
-  original_container_confirmed
-) values (
-  '<provider_id>', '<child_id>', 'Pr20-test-Sunscreen', true, true
-) returning id;
--- record the returned id as <auth_topical_otc>.
-```
-
-#### Pair A — Non-OTC authorization, role-gate applies (R 400.1931(1))
-
-**N-A (NEGATIVE — must ERROR):** an assistant CANNOT administer Tylenol.
-
-```sql
-insert into public.medication_administration_events (
-  provider_id, authorization_id, child_id,
-  administered_by_caregiver_id, administered_at, dose_administered_text
-) values (
-  '<provider_id>',
-  '<auth_non_otc>',
-  '<child_id>',
-  '<caregiver_id_assistant>',
-  now(),
-  '5 mL'
-);
--- expect: ERROR — "Only licensee or child care staff member may
---         administer medication (R 400.1931(1))"
---         The ERROR IS THE PASS. The trigger is doing its job.
-```
-
-If the row inserts instead of erroring, the trigger is broken. Halt and investigate before claiming the role-gate works.
-
-**P-A (POSITIVE — must SUCCEED):** a licensee or staff member CAN administer Tylenol.
-
-```sql
-insert into public.medication_administration_events (
-  provider_id, authorization_id, child_id,
-  administered_by_caregiver_id, administered_at, dose_administered_text
-) values (
-  '<provider_id>',
-  '<auth_non_otc>',
-  '<child_id>',
-  '<caregiver_id_licensee_or_staff>',
-  now(),
-  '5 mL'
-);
--- expect: 1 row inserted, no error.
-```
-
-Also try a `supervised_volunteer` caregiver against the same non-OTC authorization — it MUST also error (R 400.1931(1) explicitly prohibits both `child_care_assistant` and `supervised_volunteer`).
-
-#### Pair B — Topical OTC authorization, role-gate EXEMPT (R 400.1931(8))
-
-**P-B (POSITIVE — must SUCCEED):** an assistant CAN apply sunscreen.
-
-```sql
-insert into public.medication_administration_events (
-  provider_id, authorization_id, child_id,
-  administered_by_caregiver_id, administered_at, dose_administered_text
-) values (
-  '<provider_id>',
-  '<auth_topical_otc>',
-  '<child_id>',
-  '<caregiver_id_assistant>',     -- the SAME assistant N-A rejected
-  now(),
-  'Applied to face and arms'
-);
--- expect: 1 row inserted, no error. The trigger detected
---         is_topical_otc=true on the linked authorization and skipped
---         the role-check per R 400.1931(8).
-```
-
-**If P-B errors with the (1) message, the trigger is NOT honoring (8).** That is a rule violation. Halt and investigate.
-
-**Together, the three tests prove the trigger:**
-- Pair A: enforces (1) — assistants/volunteers cannot record having administered prescription or oral OTC.
-- Pair B: honors (8) — assistants/volunteers CAN record having applied topical OTC.
-
-This is the legally-consequential invariant. Tests passing in vitest do NOT prove it; only these three SQL tests do.
-
-#### OTC-exemption sanity check (optional)
-
-```sql
--- The is_topical_otc=true authorization can have its consent
--- recorded via the existing OTC-blanket ack type; no dose log is
--- REQUIRED per (7) — but events MAY be logged (which is what P-B
--- just demonstrated).
-select count(*) from public.acknowledgments
- where provider_id = '<provider_id>'
-   and subject_type = 'child'
-   and subject_id   = '<child_id>'
-   and type         = 'medication_permission_otc_blanket'
-   and archived_at  is null;
--- This is informational — the OTC-blanket ack is recorded via the
--- Part 2 UI (not yet built). Zero rows here doesn't fail the
--- trigger tests above; it just means consent capture hasn't shipped.
-```
-
-**Cleanup:** archive the three test rows (the two authorizations and any events inserted) when done.
-
-```sql
-update public.medication_authorizations
-   set archived_at = now()
- where medication_name in ('Pr20-test-Tylenol', 'Pr20-test-Sunscreen')
-   and provider_id = '<provider_id>';
-
-update public.medication_administration_events
-   set archived_at = now()
- where authorization_id in (
-   select id from public.medication_authorizations
-    where medication_name in ('Pr20-test-Tylenol', 'Pr20-test-Sunscreen')
-      and provider_id = '<provider_id>'
- );
-```
-
-**Rollback (if needed — destructive; preserves no audit data):**
-
-```sql
-drop policy if exists "Parents can view medication events for their children" on public.medication_administration_events;
-drop policy if exists "Providers can update their medication events" on public.medication_administration_events;
-drop policy if exists "Providers can insert their medication events" on public.medication_administration_events;
-drop policy if exists "Providers can view their medication events" on public.medication_administration_events;
-drop policy if exists "Parents can view medication authorizations for their children" on public.medication_authorizations;
-drop policy if exists "Providers can update their medication authorizations" on public.medication_authorizations;
-drop policy if exists "Providers can insert their medication authorizations" on public.medication_authorizations;
-drop policy if exists "Providers can view their medication authorizations" on public.medication_authorizations;
-drop trigger if exists trg_medication_event_caregiver_role_check on public.medication_administration_events;
-drop function if exists public.medication_event_caregiver_role_check();
-drop table if exists public.medication_administration_events;
-drop table if exists public.medication_authorizations;
-```
-
-⚠️ **Do NOT rollback if production dose records exist** — R 400.1931(9) requires 2-year retention. Export the tables first.
-
-### Migration 027 — relax `acknowledgments_active_unique` + add `occurrence_metadata` (Consents Phase C)
-
-**Status:** PENDING — written 2026-06-01, not yet applied to production. Awaits Seth's manual application via the Supabase web SQL editor and verification screenshots (including the two negative tests) before promotion to Migration History below.
-
-**File:** `supabase/migrations/027_acknowledgments_per_occurrence.sql`
-
-**What it does:** two schema changes inside a single transaction — (a) replaces the `acknowledgments_active_unique` partial unique index with one whose WHERE clause exempts the two per-occurrence types (`transportation_nonroutine_per_trip`, `water_activities_off_premises_per_trip`); (b) adds a nullable `occurrence_metadata jsonb` column. Both DDL statements wrapped in BEGIN/COMMIT so other readers see either the old state or the new state, never neither.
-
-**Dependency:** migration 026 (`acknowledgments_expires_at`) must already be applied. If 026 hasn't landed yet, apply 026 first and verify before running 027.
-
-**Why it's needed:** Consents Phase C ships the two per-occurrence licensing-required consent types — one row per trip / outing. Multiple active rows per `(provider, type, child)` are EXPECTED for these types (one per occurrence) but the original `acknowledgments_active_unique` partial index from migration 024 actively blocks them. The relaxation surgically exempts ONLY these two `type` values; every durable type (Phase A `field_trip_permission`, `photo_sharing_consent`/`_revoked`, Phase B `transportation_routine_annual`, `water_activities_on_premises_seasonal`, every R 400.1907 intake type) keeps its one-active-row guarantee.
-
-**Apply procedure:** open the file on the feature branch, copy the entire contents (including the BEGIN/COMMIT), paste into the Supabase web SQL editor for the production project, run. Then run the verification queries below.
-
-**Verification (paste each into the SQL editor and screenshot):**
-
-```sql
--- (a) occurrence_metadata column exists.
-select column_name, data_type, is_nullable
-from information_schema.columns
-where table_schema='public'
-  and table_name='acknowledgments'
-  and column_name='occurrence_metadata';
--- expect 1 row: occurrence_metadata | jsonb | YES
-```
-
-```sql
--- (b) The new partial unique index carries the exclusion clause.
-select indexname, indexdef
-from pg_indexes
-where schemaname='public' and tablename='acknowledgments'
-  and indexname='acknowledgments_active_unique';
--- expect: indexdef WHERE clause contains
---   "type <> ALL (ARRAY['transportation_nonroutine_per_trip'::text,
---                       'water_activities_off_premises_per_trip'::text])"
---   (Postgres normalizes NOT IN to <> ALL in pg_indexes output;
---   semantic identical.)
-```
-
-```sql
--- (c) No existing row was mutated (occurrence_metadata is NULL for
---     every pre-Phase-C row).
-select count(*) as total_rows,
-       count(occurrence_metadata) as rows_with_occurrence_metadata
-from public.acknowledgments
-where archived_at is null;
--- expect: rows_with_occurrence_metadata = 0 immediately after migration.
-```
-
-```sql
--- (d) The provider-level partial unique was NOT touched.
-select indexname, indexdef
-from pg_indexes
-where schemaname='public' and tablename='acknowledgments'
-  and indexname='acknowledgments_active_unique_no_subject';
--- expect: WHERE clause unchanged from migration 024 —
---   "WHERE ((archived_at IS NULL) AND (subject_id IS NULL))"
-```
-
-**Negative tests (the heart of the index relaxation — run these on a throwaway test child):**
-
-```sql
--- N1) Two active rows of a DURABLE type for the same child STILL
---     violate the unique. The SECOND insert must raise a
---     unique-violation error. Replace <provider_id> + <child_id>
---     with real test values from your data.
-insert into public.acknowledgments (
-  provider_id, type, subject_type, subject_id,
-  acknowledged_via, acknowledged_by_label, snapshot_hash
-) values
-  ('<provider_id>', 'field_trip_permission', 'child', '<child_id>',
-   'in_person_paper', 'Test Parent', 'phaseC-negtest-1'),
-  ('<provider_id>', 'field_trip_permission', 'child', '<child_id>',
-   'in_person_paper', 'Test Parent', 'phaseC-negtest-2');
--- expect: second row raises
---   ERROR: duplicate key value violates unique constraint
---     "acknowledgments_active_unique"
--- This proves durable-type uniqueness is preserved.
-
--- Cleanup (regardless of which inserts succeeded):
-update public.acknowledgments
-   set archived_at = now()
- where provider_id = '<provider_id>'
-   and subject_id = '<child_id>'
-   and snapshot_hash in ('phaseC-negtest-1','phaseC-negtest-2');
-```
-
-```sql
--- N2) Two active rows of a PER-OCCURRENCE type for the same child
---     are ALLOWED. Both inserts must succeed.
-insert into public.acknowledgments (
-  provider_id, type, subject_type, subject_id,
-  acknowledged_via, acknowledged_by_label,
-  occurrence_metadata, snapshot_hash
-) values
-  ('<provider_id>', 'transportation_nonroutine_per_trip',
-   'child', '<child_id>',
-   'in_person_paper', 'Test Parent',
-   '{"trip_date": "2026-07-15", "destination": "Library"}'::jsonb,
-   'phaseC-postest-1'),
-  ('<provider_id>', 'transportation_nonroutine_per_trip',
-   'child', '<child_id>',
-   'in_person_paper', 'Test Parent',
-   '{"trip_date": "2026-07-22", "destination": "Park"}'::jsonb,
-   'phaseC-postest-2');
--- expect: both rows insert successfully — no unique violation.
--- This proves the per-occurrence exemption works.
-
--- (Leave the rows in place if you want to verify the modal renders
---  them; otherwise archive:)
-update public.acknowledgments
-   set archived_at = now()
- where provider_id = '<provider_id>'
-   and subject_id = '<child_id>'
-   and snapshot_hash in ('phaseC-postest-1','phaseC-postest-2');
-```
-
-**Rollback (if needed):**
-
-```sql
-begin;
-  alter table public.acknowledgments
-    drop column if exists occurrence_metadata;
-  drop index if exists public.acknowledgments_active_unique;
-  create unique index acknowledgments_active_unique
-    on public.acknowledgments (provider_id, type, subject_type, subject_id)
-    where archived_at is null and subject_id is not null;
-commit;
-```
-
-**Caveat on rollback:** if Phase C per-occurrence rows have been captured by rollback time, the original unique index will fail to recreate (multiple active rows of the same type now exist for some children). In that case, archive the per-occurrence rows first:
-
-```sql
-update public.acknowledgments
-   set archived_at = now()
- where type in (
-   'transportation_nonroutine_per_trip',
-   'water_activities_off_premises_per_trip'
- ) and archived_at is null;
-```
-
-Then run the rollback transaction above.
-
-### Migration 026 — `expires_at` column on `acknowledgments` (Consents Phase B)
-
-**Status:** PENDING — written 2026-06-01, not yet applied to production. Awaits Seth's manual application via the Supabase web SQL editor and verification screenshots before promotion to Migration History below.
-
-**File:** `supabase/migrations/026_acknowledgments_expires_at.sql`
-
-**What it does:** adds a single nullable `expires_at timestamptz` column to `public.acknowledgments`. Forward-only, purely additive. No constraint changes, no policy changes, no index changes, no row mutations. Existing rows leave `expires_at = NULL` and behave identically to today.
-
-**Dependency:** migration 025 (`intake_confirm_for_parent_rpc`) must already be applied.
-
-**Why it's needed:** Consents Phase B introduces two time-bound recurring consent types (`transportation_routine_annual`, `water_activities_on_premises_seasonal`). Each captured row sets `expires_at = acknowledged_at + interval '1 year'`. The application's read paths apply the predicate `archived_at IS NULL AND (expires_at IS NULL OR expires_at > now())` to distinguish currently-satisfied from captured-but-lapsed.
-
-**Apply procedure:** open the file on the feature branch, copy the entire contents, paste into the Supabase web SQL editor for the production project, run. The file is short (one `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) so the long-statement caveat above does not apply.
-
-**Verification (paste each query into the SQL editor and screenshot):**
-
-```sql
--- (a) expires_at column exists with expected shape.
-select column_name, data_type, is_nullable
-from information_schema.columns
-where table_schema='public'
-  and table_name='acknowledgments'
-  and column_name='expires_at';
--- expect 1 row: expires_at | timestamp with time zone | YES
-```
-
-```sql
--- (b) No existing row was mutated (expires_at NULL for every
---     pre-Phase-B row).
-select count(*) as total_rows,
-       count(expires_at) as rows_with_expires_at
-from public.acknowledgments
-where archived_at is null;
--- expect: rows_with_expires_at = 0 immediately after migration.
-```
-
-```sql
--- (c) acknowledgments_active_unique partial-unique index unchanged.
-select indexname, indexdef
-from pg_indexes
-where schemaname='public' and tablename='acknowledgments'
-  and indexname='acknowledgments_active_unique';
--- expect: WHERE archived_at IS NULL AND subject_id IS NOT NULL
---         (no expires_at reference).
-```
-
-**Rollback (if needed):**
-
-```sql
-alter table public.acknowledgments
-  drop column if exists expires_at;
-```
-
-Non-destructive — every row keeps every other column intact. Captured Phase B rows (if any exist by rollback time) lose their `expires_at` values, but the rows themselves and the archived audit trail survive.
 
 ## Migration History
 
@@ -2601,3 +2196,162 @@ Post-merge — `feature/compliance-engine-phase-3` merged into `main`
 at commit `b6dd1d5` via `git merge --no-ff`, pushed
 **2026-06-05**. Vercel production deploy triggered by the push.
 No rollback executed.
+
+### ~2026-06-01 — Migration 026: `acknowledgments.expires_at` column (Consents Phase B) — APPLIED + BACKFILLED ENTRY (originally mis-recorded as Pending)
+
+> 🔧 **Backfilled 2026-06-10.** The migration was applied to production
+> (project ref `ooavvgkfhgouakkiknfs`) in an earlier session, but the
+> "Pending Application" entry was never promoted. Confirmed present
+> 2026-06-10 via `information_schema.columns`: `acknowledgments.expires_at`
+> exists in production with the expected `timestamp with time zone` /
+> `is_nullable = YES` shape. Apply-time verification output was not
+> preserved (the promotion step was skipped); this entry is the
+> corrective bookkeeping.
+
+What the migration does — `026_acknowledgments_expires_at.sql` adds a
+single nullable `expires_at timestamptz` column to
+`public.acknowledgments`. Forward-only, purely additive: no constraint
+changes, no policy changes, no index changes, no row mutations.
+
+Why it's needed — Consents Phase B introduces two time-bound recurring
+consent types (`transportation_routine_annual`,
+`water_activities_on_premises_seasonal`). Captured rows set
+`expires_at = acknowledged_at + interval '1 year'`. Read paths apply
+`archived_at IS NULL AND (expires_at IS NULL OR expires_at > now())`
+to distinguish currently-satisfied from captured-but-lapsed.
+
+Dependencies — sequential after migration 025
+(`intake_confirm_for_parent_rpc`).
+
+Verification — 2026-06-10 dashboard query against
+`information_schema.columns` confirmed the column exists with shape
+`timestamp with time zone | YES`.
+
+Rollback — `alter table public.acknowledgments drop column if exists
+expires_at;`. Non-destructive — every row keeps every other column;
+captured Phase B rows (if any) lose their `expires_at` values, but
+the rows themselves and the archived audit trail survive.
+
+### ~2026-06-02 — Migration 028: medication tables + role-gate trigger (PR #20 Part 1) — APPLIED + trigger live-verified + BACKFILLED ENTRY (originally mis-recorded as Pending)
+
+> 🔧 **Backfilled 2026-06-10.** The migration was applied to production
+> in an earlier session but the "Pending Application" entry was never
+> promoted. The stale Pending status triggered a wasted apply-
+> investigation on 2026-06-10 (a CC plan was built around the doc's
+> Pending claim before the database was checked). Corrected same day.
+> Apply-time output was not preserved; the 2026-06-10 verification
+> below is the canonical record.
+
+What the migration does — `028_medication.sql` ships PR #20 Part 1's
+data layer for R 400.1931 (medication administration):
+
+- `public.medication_authorizations` — one row per (child, medication).
+  Provider's active-plan record + original-container attestation +
+  OTC vs prescription split.
+- `public.medication_administration_events` — one row per dose.
+  Date/time/amount + administering caregiver; FK
+  `on delete restrict` so dose records survive authorization archival.
+- `medication_event_caregiver_role_check()` trigger function on the
+  events table — enforces R 400.1931(1) at the DB level (only
+  `licensee` or `child_care_staff_member` may administer), EXCEPT
+  when the linked authorization's `is_topical_otc = true` per
+  R 400.1931(8)'s exemption.
+- RLS — provider-scoped via `provider_id`; parents see their own
+  children's records via `parent_family_links → children` (same shape
+  as migration 024's parent SELECT policy on `acknowledgments`).
+
+Dependencies — migration 027 (`acknowledgments_per_occurrence`) and
+PR #8's `public.caregivers` + `public.caregiver_regulatory_roles`
+(migration 012) for the role-gate trigger's lookup.
+
+Verification — confirmed present 2026-06-10:
+
+- Tables `medication_authorizations` and
+  `medication_administration_events` both exist (`to_regclass`).
+- Trigger `trg_medication_event_caregiver_role_check` exists on the
+  events table (`pg_trigger`).
+- All 8 RLS policies present (`pg_policies`): provider
+  select / insert / update + parent-view select, on both tables.
+
+Role-gate trigger verified live (the legally-consequential test):
+
+- **Negative case (must reject) — PASSED.** A `child_care_assistant`
+  (`0e8d6915-…`) inserting a non-OTC dose (Doxy auth `b37043ba-…`)
+  was rejected with `ERROR P0001: Only licensee or child care staff
+  member may administer medication (R 400.1931(1))`. The DB enforces
+  the role-gate, not just the UI dropdown.
+- **Positive control (must allow) — PASSED.** A `licensee`
+  (`f5bfcf65-…`) inserting the same non-OTC dose succeeded. Trigger
+  discriminates correctly rather than blocking all. Test row
+  (`ea43482b-…`) deleted afterward; table confirmed clean.
+- Run from the Supabase SQL editor (superuser, RLS bypassed) — valid
+  for the trigger, which fires regardless of connecting role.
+  `auth.uid()` returns null there, so `provider_id` was supplied
+  directly.
+
+Known drift — file vs production (footnote, not a blocker). Branch
+`feature/pr-20-medication-log` added the Engineering-Discipline rule-4
+revoke/grant trailer to `medication_event_caregiver_role_check()` in
+the 028 *file* (commit `50407ff`). Because 028 was already applied,
+that file edit does NOT reach production — the **live function lacks
+the trailer**. Per the trigger-function exemption (a `returns trigger`
+function can't be called via PostgREST RPC), practical exposure is
+nil. Parity fix, if ever wanted: a one-line
+`CREATE OR REPLACE FUNCTION` + the trailer as a tiny follow-up
+migration — do NOT re-run all of 028. Logged in `docs/tech_debt.md`.
+
+Rollback — destructive; preserves no audit data. ⚠️ **Do NOT
+rollback if production dose records exist** — R 400.1931(9) requires
+2-year retention. Export the tables first if rollback is genuinely
+needed. The full rollback SQL is in the migration file's commented
+DOWN block.
+
+### ~2026-06-01 — Migration 027: relax `acknowledgments_active_unique` + add `occurrence_metadata` (Consents Phase C) — APPLIED + BACKFILLED ENTRY (originally mis-recorded as Pending)
+
+> 🔧 **Backfilled 2026-06-13.** Verified in production via the
+> `to_regclass` / `pg_indexes` / `information_schema.columns`
+> check the user ran in the Supabase web SQL editor after the
+> 2026-06-10 detour exposed the same Pending/Applied drift that
+> caught 026 and 028. Both schema changes were already present:
+>
+> - `acknowledgments.occurrence_metadata` exists with the expected
+>   shape (`jsonb`, `is_nullable = YES`).
+> - `acknowledgments_active_unique` index includes the per-occurrence
+>   type exemption (`indexdef` contains
+>   `transportation_nonroutine_per_trip` — i.e. the relaxed WHERE
+>   clause from the migration file is live in production).
+>
+> Apply-time verification output was not preserved (the promotion
+> step was skipped). This entry is the corrective bookkeeping.
+
+What the migration does — `027_acknowledgments_per_occurrence.sql`
+ships two schema changes inside a single `BEGIN/COMMIT` transaction:
+
+- Replaces the `acknowledgments_active_unique` partial unique index
+  with one whose WHERE clause exempts the two per-occurrence types
+  (`transportation_nonroutine_per_trip`,
+  `water_activities_off_premises_per_trip`). Every durable consent
+  type keeps its one-active-row guarantee.
+- Adds a nullable `occurrence_metadata jsonb` column to
+  `public.acknowledgments` — NULL for every existing row and every
+  durable type.
+
+Dependencies — sequential after migration 026
+(`acknowledgments_expires_at`), now also confirmed applied (see entry
+above).
+
+Verification — 2026-06-13 dashboard queries against `pg_indexes` +
+`information_schema.columns` confirmed both changes present, per the
+backfill note above. The negative-test pair from the migration file
+header (N1 durable-type uniqueness still enforced; N2 per-occurrence
+duplicates allowed) was NOT re-run during this backfill; if the
+runbook process ever runs these against a future per-occurrence
+write, the historical record points to migration 027's file header
+for the canonical INSERT pattern.
+
+Rollback — restores the original strict index and drops
+`occurrence_metadata`. ⚠️ If Phase C per-occurrence rows have been
+captured by rollback time, archive them first (the DOWN block in the
+migration file documents the cleanup SQL) — otherwise the original
+strict index will fail to recreate against duplicate active rows of
+the same per-occurrence type.
