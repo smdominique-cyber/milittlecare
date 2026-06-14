@@ -1093,30 +1093,64 @@ function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuard
   )
 }
 
-function ChildForm({ userId, familyId, child, onClose, onSaved }) {
+// IMMUNIZATION_STATUS_OPTIONS — locked to the exact enum the engine's
+// child_immunization_record resolver treats as on_file
+// (complianceState.js:672), which in turn matches the migration-024
+// CHECK constraint on children.immunization_status. Any drift here
+// would write successfully but never satisfy the row, which is the
+// subtle B1 trap. Order is from the rule's own enumeration (R
+// 400.1907(1)(c) sub-clauses i, iii, ii — completed, in progress,
+// waiver), reordered most-to-least common for the dropdown UX.
+// Exported for the B1 alignment lock test — the dropdown's option
+// values MUST match the resolver's VALID set exactly. Same constant
+// the JSX consumes below.
+export const IMMUNIZATION_STATUS_OPTIONS = Object.freeze([
+  { value: 'up_to_date',     label: 'Up to date' },
+  { value: 'waiver_on_file', label: 'Waiver on file' },
+  { value: 'in_progress',    label: 'In progress' },
+])
+
+// Exported for direct mount tests. The component lives in this file
+// because FamiliesPage is the only consumer; the export keeps the
+// test surface clean without spreading file structure.
+export function ChildForm({ userId, familyId, child, onClose, onSaved }) {
   const [form, setForm] = useState({
-    first_name:    child?.first_name || '',
-    last_name:     child?.last_name || '',
-    date_of_birth: child?.date_of_birth || '',
-    allergies:     child?.allergies || '',
-    medical_notes: child?.medical_notes || '',
-    notes:         child?.notes || '',
+    first_name:               child?.first_name || '',
+    last_name:                child?.last_name || '',
+    date_of_birth:            child?.date_of_birth || '',
+    allergies:                child?.allergies || '',
+    medical_notes:            child?.medical_notes || '',
+    notes:                    child?.notes || '',
+    // Added 2026-06-14 to close the B1 + B2 punch-list holes — the
+    // engine reads both but no UI wrote them. immunization_status is
+    // text with a CHECK constraint (empty string would fail);
+    // records_last_reviewed_on is a date column. Both normalize empty
+    // -> null in handleSave below.
+    immunization_status:      child?.immunization_status || '',
+    records_last_reviewed_on: child?.records_last_reviewed_on || '',
   })
 
   const update = (field) => (e) => setForm(f => ({ ...f, [field]: e.target.value }))
 
   const handleSave = async () => {
+    // Normalize empty strings to null for columns that can't accept
+    // ''. date_of_birth + records_last_reviewed_on are date columns;
+    // immunization_status is text with CHECK
+    // in ('up_to_date', 'waiver_on_file', 'in_progress') per
+    // migration 024:130-133, so '' would violate the constraint.
+    const payload = {
+      ...form,
+      date_of_birth:            form.date_of_birth || null,
+      immunization_status:      form.immunization_status || null,
+      records_last_reviewed_on: form.records_last_reviewed_on || null,
+    }
     if (child) {
-      await supabase.from('children').update({
-        ...form,
-        date_of_birth: form.date_of_birth || null,
-      }).eq('id', child.id)
+      await supabase.from('children').update(payload).eq('id', child.id)
     } else {
       await supabase.from('children').insert({
         user_id: userId,
         family_id: familyId,
-        ...form,
-        date_of_birth: form.date_of_birth || null,
+        ...payload,
       })
     }
     await onSaved()
@@ -1146,6 +1180,39 @@ function ChildForm({ userId, familyId, child, onClose, onSaved }) {
         <div className="form-field-group">
           <label className="field-label">Medical notes</label>
           <textarea className="field-input" value={form.medical_notes} onChange={update('medical_notes')} placeholder="Medications, conditions, etc." />
+        </div>
+        <div className="form-field-group">
+          <label className="field-label" htmlFor="child-immunization-status">Immunization status</label>
+          <select
+            id="child-immunization-status"
+            className="field-input"
+            value={form.immunization_status}
+            onChange={update('immunization_status')}
+          >
+            <option value="">Not recorded</option>
+            {IMMUNIZATION_STATUS_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <p style={{ margin: '4px 0 0', fontSize: '0.8125rem', color: 'var(--clr-ink-soft)' }}>
+            R 400.1907(1)(c). Any of the three satisfies the rule —
+            up-to-date, an active waiver, or an in-progress catch-up plan.
+          </p>
+        </div>
+        <div className="form-field-group">
+          <label className="field-label" htmlFor="child-records-last-reviewed-on">Records last reviewed on</label>
+          <input
+            id="child-records-last-reviewed-on"
+            className="field-input"
+            type="date"
+            value={form.records_last_reviewed_on}
+            onChange={update('records_last_reviewed_on')}
+          />
+          <p style={{ margin: '4px 0 0', fontSize: '0.8125rem', color: 'var(--clr-ink-soft)' }}>
+            Annual record review per R 400.1907. Update each time you
+            complete a review — the scheduler reads this and recomputes
+            the next reminder from <code>records_last_reviewed_on + 1 year</code>.
+          </p>
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end' }}>
           <button className="btn-discard" onClick={onClose}>Cancel</button>
