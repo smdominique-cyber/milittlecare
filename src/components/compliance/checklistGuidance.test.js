@@ -148,10 +148,24 @@ describe('Surface 5 — /miregistry', () => {
 // -----------------------------------------------------------------------------
 
 describe('category B/C rows render text-only (no fixTarget)', () => {
-  it('G4 fingerprint reprint (BusinessInfo link deliberately deferred past 3.1b-1) → no fixTarget', () => {
+  it('G4 fingerprint reprint (honest "keep records" copy; upload surface not yet built) → no fixTarget', () => {
     const gap = gapFor('cdc_fingerprint_reprint_currency', { kind: 'missing_required' }, CTX)
+    // Preserved: the 5-year cycle reality and the text-only contract.
     expect(gap.guidanceText).toContain('5-year cycle')
     expect(gap.fixTarget).toBeUndefined()
+
+    // Integrity-hole regression locks (2026-06-14): the prior copy
+    // promised an in-app `fingerprint_date` field update that no UI
+    // delivers. If those phrases ever come back, the row resumes
+    // telling the provider to do something the app gives them no
+    // way to do — exactly the NO-WRITER class the audit flagged.
+    expect(gap.guidanceText).not.toMatch(/fingerprint_date/i)
+    expect(gap.guidanceText).not.toMatch(/update after each reprint/i)
+
+    // Honest tone locks — matches the drills/property "keep records,
+    // an auditor will ask" pattern.
+    expect(gap.guidanceText).toMatch(/keep records/i)
+    expect(gap.guidanceText).toMatch(/auditor/i)
   })
 
   it('H1 attendance acks (/acknowledgments ?child= is 3.1b-3+) → no fixTarget', () => {
