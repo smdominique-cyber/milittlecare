@@ -121,6 +121,8 @@ function makeSourceRows(overrides = {}) {
     funding_documents: [],
     miregistry_training_entries: [],
     attendance_acks: [],
+    // 2026-06-14 batch (mig 039) — property J1/J2/J8 resolvers read this.
+    compliance_documents: [],
     drill_logs: null,
     property_records: null,
     ...overrides,
@@ -816,18 +818,19 @@ describe('Pattern D — MiRegistry annual ongoing (Dec 16)', () => {
 // -----------------------------------------------------------------------------
 
 describe('Pattern E — feature-not-yet-shipped', () => {
+  // 2026-06-14 batch (mig 039): radon, heating, and licensing_notebook
+  // flipped from Pattern E to compliance_documents-backed; their
+  // resolver tests live in the "compliance_documents-backed resolvers"
+  // describe below. Everything else here remains Pattern E.
   const PATTERN_E_KEYS = [
     'drill_fire_quarterly',
     'drill_tornado_seasonal',
     'drill_other_emergencies_annual',
     'emergency_response_plan_on_file',
-    'property_radon_test_quadrennial',
-    'property_heating_inspection_quadrennial',
     'property_co_detectors_per_level',
     'property_smoke_detectors_per_floor',
     'property_fire_extinguishers_per_floor',
     'property_smoking_prohibition_posted',
-    'property_licensing_notebook_archive',
     'caregiver_physician_attestation_annual',
     'caregiver_discipline_policy_ack_at_hire',
     'caregiver_daily_arrival_departure',
@@ -861,6 +864,105 @@ describe('Pattern E — feature-not-yet-shipped', () => {
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
     expect(state.reason).toBe('feature-not-yet-shipped')
   })
+})
+
+// -----------------------------------------------------------------------------
+// 2026-06-14 batch — compliance_documents-backed resolvers
+// (J1 radon / J2 heating / J8 licensing-notebook)
+// -----------------------------------------------------------------------------
+//
+// Each row pairs a registry document_type with a slot upload. The
+// resolver reads sourceRows.compliance_documents and emits on_file
+// when at least one non-archived doc of the matching type exists,
+// missing_required when none, and UNKNOWN under the §2a load-failure
+// guard. The tests below mirror the pattern E5 / B1 trio: applied +
+// populated → ON_FILE; loaded + empty → MISSING_REQUIRED; not loaded
+// → UNKNOWN with a recognizable reason.
+
+describe('compliance_documents-backed resolvers (J1/J2/J8 — mig 039)', () => {
+  const CASES = [
+    { key: 'property_radon_test_quadrennial',          docType: 'property_radon_test' },
+    { key: 'property_heating_inspection_quadrennial',  docType: 'property_heating_inspection' },
+    { key: 'property_licensing_notebook_archive',      docType: 'property_licensing_notebook' },
+  ]
+
+  for (const { key, docType } of CASES) {
+    describe(key, () => {
+      const requirement = REQUIREMENT_REGISTRY[key]
+
+      it('data_state has flipped to shipped (was not_yet_modelled before this batch)', () => {
+        expect(requirement.data_state).toBe(DATA_STATE.SHIPPED)
+      })
+
+      it('loaded + a matching non-archived doc → ON_FILE', () => {
+        const doc = { id: 'd-1', document_type: docType, uploaded_at: '2026-06-01T00:00:00Z', archived_at: null }
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({ compliance_documents: [doc] }),
+          // sourceRowsLoaded omitted ⇒ legacy "all true" path; the
+          // resolver still works.
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+      })
+
+      it('loaded + empty doc list → MISSING_REQUIRED', () => {
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows(),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      })
+
+      it('archived doc of the matching type is ignored → MISSING_REQUIRED', () => {
+        const doc = { id: 'd-archived', document_type: docType, uploaded_at: '2026-06-01T00:00:00Z', archived_at: '2026-06-02T00:00:00Z' }
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({ compliance_documents: [doc] }),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      })
+
+      it('doc of a DIFFERENT type is ignored (the document_type discriminator works)', () => {
+        const wrong = { id: 'd-wrong', document_type: 'fingerprint_reprint', uploaded_at: '2026-06-01T00:00:00Z', archived_at: null }
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({ compliance_documents: [wrong] }),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      })
+
+      it('§2a guard: sourceRowsLoaded.compliance_documents === false → UNKNOWN compliance-documents-load-failure (never a false MISSING)', () => {
+        // Even with a valid doc in the array, the guard forces UNKNOWN.
+        // This is the exact case the §2a invariant exists to catch — a
+        // failed PostgREST query returns [] which would otherwise read
+        // identical to "genuinely empty."
+        const doc = { id: 'd-1', document_type: docType, uploaded_at: '2026-06-01T00:00:00Z', archived_at: null }
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({ compliance_documents: [doc] }),
+          sourceRowsLoaded: {
+            caregivers: true, staff_training_records: true, training_requirements: true,
+            funding_sources: true, funding_documents: true, health_safety_updates: true,
+            medication_authorizations: true, medication_admin_events: true,
+            acks: true, miregistry_training_entries: true, attendance_acks: true,
+            compliance_documents: false,
+          },
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+        expect(state.reason).toBe('compliance-documents-load-failure')
+      })
+    })
+  }
 })
 
 // -----------------------------------------------------------------------------

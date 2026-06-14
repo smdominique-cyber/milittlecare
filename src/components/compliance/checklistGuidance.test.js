@@ -182,6 +182,35 @@ describe('category B/C rows render text-only (no fixTarget)', () => {
     expect(gap.guidanceText).toContain('acknowledg')
     expect(gap.fixTarget).toBeUndefined()
   })
+
+  // 2026-06-14 batch (mig 039): three property rows gained a real
+  // fixTarget into the new /business-info?section=property surface
+  // hosting ComplianceDocumentSlot. Lock the fixTarget shape and
+  // assert that the copy actually mentions the surface — the
+  // integrity-hole pattern from the G4 softening test.
+  describe('J1/J2/J8 property doc rows — Business Info → Property fixTarget', () => {
+    const ROWS = [
+      'property_radon_test_quadrennial',
+      'property_heating_inspection_quadrennial',
+      'property_licensing_notebook_archive',
+    ]
+    for (const key of ROWS) {
+      it(`${key}: missing_required → /business-info?section=property`, () => {
+        const gap = gapFor(key, { kind: 'missing_required' }, CTX)
+        expect(gap).toBeDefined()
+        expect(gap.fixTarget).toBeDefined()
+        expect(gap.fixTarget.to).toBe('/business-info?section=property')
+        expect(gap.fixTarget.label).toMatch(/property/i)
+        // Copy honesty: each row's guidance mentions the surface so
+        // the provider knows where to go even if they don't click.
+        expect(gap.guidanceText).toMatch(/business info/i)
+        expect(gap.guidanceText).toMatch(/property/i)
+        // Severity matches the registry severity rank — missing
+        // required without an explicit override is 'critical'.
+        expect(gap.severity).toBe('critical')
+      })
+    }
+  })
 })
 
 // -----------------------------------------------------------------------------
@@ -572,6 +601,13 @@ describe('registry-wide invariants', () => {
     const NON_AWAITING_BUSINESS_INFO_ALLOWED = new Set([
       'cdc_fingerprint_reprint_currency:missing_required',
       'cdc_fingerprint_reprint_currency:expired',
+      // 2026-06-14 batch (mig 039) — J1/J2/J8 property docs.
+      'property_radon_test_quadrennial:missing_required',
+      'property_radon_test_quadrennial:expired',
+      'property_heating_inspection_quadrennial:missing_required',
+      'property_heating_inspection_quadrennial:expired',
+      'property_licensing_notebook_archive:missing_required',
+      'property_licensing_notebook_archive:expired',
     ])
     const kinds = ['missing_required', 'expired', 'pending_parent']
     for (const key of Object.keys(REQUIREMENT_REGISTRY)) {

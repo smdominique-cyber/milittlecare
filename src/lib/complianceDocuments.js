@@ -35,7 +35,10 @@ export const BUCKET = 'compliance-documents'
 // A regression test asserts the catalog is the same length as the
 // config map and that every key is recognized by both.
 export const COMPLIANCE_DOCUMENT_TYPES = Object.freeze([
-  'fingerprint_reprint',
+  'fingerprint_reprint',           // G4   — Phase A (mig 038)
+  'property_radon_test',           // J1   — Phase A batch (mig 039)
+  'property_heating_inspection',   // J2   — Phase A batch (mig 039)
+  'property_licensing_notebook',   // J8   — Phase A batch (mig 039)
 ])
 
 /**
@@ -96,6 +99,40 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
       'through paper. This slot covers YOU (the licensee). Staff and ' +
       'household-member fingerprint records still live on paper for ' +
       'now (no per-person model in MILittleCare yet).',
+    multi: false,
+  },
+  property_radon_test: {
+    title: 'Radon test',
+    badge: { text: 'Required', tone: 'required' },
+    help:
+      'Upload your most recent radon test report from a certified ' +
+      'tester. Rules R 400.1932 / R 400.1934 require a test on a ' +
+      '4-year cycle — replace this with the latest report after each ' +
+      'retest. If you have older reports for the same home, the ' +
+      '"Replace" flow keeps the prior one in archive for the ' +
+      'retention window.',
+    multi: false,
+  },
+  property_heating_inspection: {
+    title: 'Heating equipment inspection',
+    badge: { text: 'Required', tone: 'required' },
+    help:
+      'Upload your most recent heating/HVAC inspection report from a ' +
+      'qualified contractor. R 400.1932 requires inspection on a ' +
+      '4-year cycle. Replace after each inspection; prior reports ' +
+      'stay in archive for the retention window.',
+    multi: false,
+  },
+  property_licensing_notebook: {
+    title: 'Licensing notebook archive',
+    badge: { text: 'Required', tone: 'required' },
+    help:
+      'Upload a single PDF (or photo) of your current licensing ' +
+      'notebook — your licensing certificate, recent licensing ' +
+      'correspondence, and any inspection reports parents may ask ' +
+      'to see per R 400.1906(3). Replace whenever your notebook ' +
+      'changes; the prior copy stays in archive for the retention ' +
+      'window.',
     multi: false,
   },
 })

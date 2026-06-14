@@ -357,6 +357,47 @@ function patternENotYetModelled() {
   return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'feature-not-yet-shipped' }
 }
 
+/**
+ * Resolver builder for rows backed by the compliance_documents store
+ * (substrate from migration 038; document_type list extended by
+ * migration 039 and any successor). Returns a resolver that:
+ *
+ *   - Honors the §2a load-failure guard: when
+ *     `sourceRowsLoaded.compliance_documents === false`, the resolver
+ *     returns UNKNOWN with a recognizable reason rather than reading
+ *     a possibly-empty array as "no documents on file."
+ *   - Returns ON_FILE when at least one non-archived document of the
+ *     requested type exists for this provider.
+ *   - Returns MISSING_REQUIRED otherwise.
+ *
+ * Phase A intentionally does NOT model document freshness (e.g. the
+ * quadrennial expiration for radon/heating). The current design is
+ * "replace via the slot's Replace flow to reset" — the prior doc
+ * archives, the new one becomes the active row. A future migration
+ * can add a `record_date` column to compliance_documents and a more
+ * sophisticated resolver; this builder is the place to extend it.
+ *
+ * Used by the J1/J2/J8 property batch (2026-06-14). The G4
+ * fingerprint resolver still reads `provider.fingerprint_date` (the
+ * pre-substrate field); migrating G4's resolver to this builder is
+ * a follow-up flagged in the batch's commit message.
+ */
+function buildComplianceDocResolver(documentType) {
+  return ({ sourceRows, sourceRowsLoaded }) => {
+    if (sourceRowsLoaded && sourceRowsLoaded.compliance_documents === false) {
+      return {
+        kind: REQUIREMENT_STATE_KIND.UNKNOWN,
+        reason: 'compliance-documents-load-failure',
+      }
+    }
+    const docs = (sourceRows && sourceRows.compliance_documents) || []
+    const hasActive = docs.some(d => d && d.document_type === documentType && !d.archived_at)
+    return hasActive
+      ? { kind: REQUIREMENT_STATE_KIND.ON_FILE }
+      : { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED }
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Domain-specific helpers
 // -----------------------------------------------------------------------------
@@ -2002,9 +2043,14 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'high',
-    data_state: 'not_yet_modelled',
+    // 2026-06-14 batch: flipped from 'not_yet_modelled' to 'shipped'.
+    // The substrate is compliance_documents (mig 038 + 039); the
+    // resolver below reads the doc store directly. Replace flow is
+    // the rotation mechanism for the quadrennial cycle (Phase A
+    // simplification — no record_date column yet).
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildComplianceDocResolver('property_radon_test'),
   }),
 
   property_heating_inspection_quadrennial: Object.freeze({
@@ -2016,9 +2062,10 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'high',
-    data_state: 'not_yet_modelled',
+    // 2026-06-14 batch: see radon for the same migration.
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildComplianceDocResolver('property_heating_inspection'),
   }),
 
   property_co_detectors_per_level: Object.freeze({
@@ -2104,9 +2151,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'medium',
-    data_state: 'not_yet_modelled',
+    // 2026-06-14 batch: flipped to 'shipped' alongside radon +
+    // heating. The notebook archive is a single replace-as-needed
+    // PDF; no cycle-tracking required.
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildComplianceDocResolver('property_licensing_notebook'),
   }),
 })
 

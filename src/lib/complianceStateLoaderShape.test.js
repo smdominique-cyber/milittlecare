@@ -81,6 +81,8 @@ function makeSourceRows(overrides = {}) {
     funding_documents: [],
     miregistry_training_entries: [],
     attendance_acks: [],
+    // 2026-06-14 batch (mig 039) — property J1/J2/J8 resolvers read this.
+    compliance_documents: [],
     drill_logs: null,
     property_records: null,
     ...overrides,
@@ -101,6 +103,8 @@ const ALL_LOADED = Object.freeze({
   training_requirements:       true,
   miregistry_training_entries: true,
   attendance_acks:             true,
+  // 2026-06-14 batch (mig 039) — J1/J2/J8 property resolvers opt in.
+  compliance_documents:        true,
 })
 
 // Build a sourceRowsLoaded with one or more tables forced false.
@@ -674,6 +678,7 @@ describe('§2a loader — sourceRowsLoaded signal (loader integration)', () => {
       training_requirements:       true,
       miregistry_training_entries: true,
       attendance_acks:             true,
+      compliance_documents:        true,
     })
   })
 
@@ -727,6 +732,44 @@ describe('§2a loader — sourceRowsLoaded signal (loader integration)', () => {
     })
     const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
     expect(out.sourceRowsLoaded.attendance_acks).toBe(false)
+    expect(out.sourceRowsLoaded.acks).toBe(true)
+  })
+
+  it('compliance_documents load (2026-06-14 batch): cleanly empty → rows=[], loaded=true', async () => {
+    globalThis.__loaderTestSupabase = makeFakeSupabase({
+      profiles: { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children: { data: [{ id: 'child-1' }], error: null },
+      compliance_documents: { data: [], error: null },
+    })
+    const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
+    expect(out.sourceRowsLoaded.compliance_documents).toBe(true)
+    expect(out.sourceRows.compliance_documents).toEqual([])
+  })
+
+  it('compliance_documents load (2026-06-14 batch): populated → rows pass through, loaded=true', async () => {
+    const docs = [
+      { id: 'd1', document_type: 'property_radon_test', uploaded_at: '2026-06-01T00:00:00Z', archived_at: null },
+      { id: 'd2', document_type: 'property_heating_inspection', uploaded_at: '2026-06-02T00:00:00Z', archived_at: null },
+    ]
+    globalThis.__loaderTestSupabase = makeFakeSupabase({
+      profiles: { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children: { data: [{ id: 'child-1' }], error: null },
+      compliance_documents: { data: docs, error: null },
+    })
+    const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
+    expect(out.sourceRowsLoaded.compliance_documents).toBe(true)
+    expect(out.sourceRows.compliance_documents).toEqual(docs)
+  })
+
+  it('PostgREST error on compliance_documents → loaded=false (the §2a guard); other tables still true', async () => {
+    globalThis.__loaderTestSupabase = makeFakeSupabase({
+      profiles: { data: { id: 'prov-1', license_type: 'family_home' }, error: null },
+      children: { data: [{ id: 'child-1' }], error: null },
+      compliance_documents: { data: null, error: { code: 'PGRST116', message: 'RLS' } },
+    })
+    const out = await loadComplianceSourceRows({ providerId: 'prov-1' })
+    expect(out.sourceRowsLoaded.compliance_documents).toBe(false)
+    expect(out.sourceRowsLoaded.funding_sources).toBe(true)
     expect(out.sourceRowsLoaded.acks).toBe(true)
   })
 })

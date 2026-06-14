@@ -25,6 +25,10 @@ const KNOWN_SECTIONS = Object.freeze(new Set([
   'licensing',
   'premises',
   'compliance_applicability',
+  // 2026-06-14 batch — property document slots (radon, heating,
+  // licensing-notebook), backed by migration 039 +
+  // ComplianceDocumentSlot.
+  'property',
 ]))
 
 const DAYS = [
@@ -475,6 +479,15 @@ export default function BusinessInfoPage() {
           // any remaining unknown rows directly.
           done: false,
         }]
+      : []),
+    // 2026-06-14 batch — property record uploads (radon, heating,
+    // licensing-notebook). Licensed homes only; LEPs see no
+    // compliance UI per modules.js / CLAUDE.md. "Done" semantics
+    // tracked at the row level by each ComplianceDocumentSlot
+    // (the page-level chip stays neutral — the checklist is the
+    // canonical signal).
+    ...(profile?.license_type === 'family_home' || profile?.license_type === 'group_home'
+      ? [{ id: 'property', label: 'Property', icon: ScrollText, done: false }]
       : []),
   ]
 
@@ -972,7 +985,37 @@ export default function BusinessInfoPage() {
       {activeSection === 'compliance_applicability' && (
         <ApplicabilityQuestionsSection providerId={user?.id} />
       )}
+
+      {activeSection === 'property' && (
+        <PropertyRecordsSection />
+      )}
     </>
+  )
+}
+
+// PropertyRecordsSection — 2026-06-14 batch. Hosts the J1/J2/J8
+// ComplianceDocumentSlots (radon test, heating inspection, licensing
+// notebook). Each slot is provider-level by construction (no parent
+// FK on compliance_documents); the slot writes a row whose user_id
+// is the licensee and whose document_type discriminates between the
+// three uploads. Gated to licensed homes by the same parent check
+// that gates the compliance_applicability tab.
+function PropertyRecordsSection() {
+  return (
+    <div className="bi-section">
+      <div className="bi-section-header">
+        <h3>Property records</h3>
+        <p>
+          Three records an auditor will ask to see. Upload your latest
+          report into each slot; the Replace button rotates them after
+          the next test or inspection, keeping the prior copy in
+          archive for retention.
+        </p>
+      </div>
+      <ComplianceDocumentSlot documentType="property_radon_test" />
+      <ComplianceDocumentSlot documentType="property_heating_inspection" />
+      <ComplianceDocumentSlot documentType="property_licensing_notebook" />
+    </div>
   )
 }
 

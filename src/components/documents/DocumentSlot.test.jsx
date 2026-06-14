@@ -56,11 +56,17 @@ describe('compliance_documents catalog ↔ config alignment (the B1-style enum t
     }
   })
 
-  it('fingerprint_reprint is the only Phase A type (matches the migration 038 CHECK)', () => {
-    // Phase A intentionally ships one value. A second type means
-    // both the SQL CHECK and this catalog need updating in the
-    // same commit — this test forces an explicit revisit.
-    expect(COMPLIANCE_DOCUMENT_TYPES).toEqual(['fingerprint_reprint'])
+  it('Phase A + 2026-06-14 batch types — order locked, count locked (forces a deliberate revisit on the next addition)', () => {
+    // Each addition needs both the SQL CHECK (mig 038, then 039)
+    // and this catalog updated in lockstep. A new entry forces
+    // this test to fail until the migration is named in the same
+    // commit — the same enum-trap discipline as B1.
+    expect(COMPLIANCE_DOCUMENT_TYPES).toEqual([
+      'fingerprint_reprint',           // G4   — mig 038
+      'property_radon_test',           // J1   — mig 039
+      'property_heating_inspection',   // J2   — mig 039
+      'property_licensing_notebook',   // J8   — mig 039
+    ])
   })
 
   it('config entries carry the shape DocumentSlot expects (title + help; badge or null; multi boolean)', () => {
