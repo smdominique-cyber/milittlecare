@@ -104,6 +104,10 @@ export const SURFACE = Object.freeze({
   // KNOWN_SECTIONS set; both tabs confirmed in BusinessInfoPage.jsx.
   BUSINESS_INFO_PREMISES:      'business_info_premises',
   BUSINESS_INFO_APPLICABILITY: 'business_info_applicability',
+  // 2026-06-14 — G4 fingerprint-reprint upload (migration 038 +
+  // ComplianceDocumentSlot). The Licensing section already validates
+  // `licensing` in BusinessInfoPage's KNOWN_SECTIONS.
+  BUSINESS_INFO_LICENSING:     'business_info_licensing',
   // 3.1b-2 — StaffTrainingPage drill-in via ?caregiver=<id>;
   // page-level without a caregiverId in context.
   STAFF_TRAINING:              'staff_training',
@@ -124,6 +128,12 @@ function buildFixTarget(surface, context) {
     return {
       label: 'Answer in Business Info → What applies to my program?',
       to: '/business-info?section=compliance_applicability',
+    }
+  }
+  if (surface === SURFACE.BUSINESS_INFO_LICENSING) {
+    return {
+      label: 'Open Business Info → Licensing',
+      to: '/business-info?section=licensing',
     }
   }
   if (surface === SURFACE.STAFF_TRAINING) {
@@ -516,24 +526,24 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
     },
   },
   cdc_fingerprint_reprint_currency: {
-    // G4 ships as honest "keep records" guidance (no fixTarget). The
-    // softening on 2026-06-14 closes the audit's integrity hole: the
-    // prior copy promised an in-app `fingerprint_date` field update
-    // that no UI delivers (grep src/ for .from('profiles').update —
-    // no caller writes fingerprint_date), AND named a HOUSEHOLD
-    // MEMBERS case the schema doesn't model. A real upload surface
-    // for fingerprint-reprint receipts would need a new provider-
-    // level documents store (no suitable existing table; see
-    // Step 0 investigation in commit message). Until that ships,
-    // the copy matches the genuinely-not-built rows in drills /
-    // property — "keep records on file, an auditor will ask" —
-    // without promising a feature that doesn't exist.
+    // 2026-06-14: G4 gained a real upload surface in BusinessInfo →
+    // Licensing (ComplianceDocumentSlot on the compliance_documents
+    // table — migration 038 + commit hash carried by Phase A of the
+    // compliance-documents-store branch). The guidance now points
+    // there. The household-members-on-paper reality is preserved —
+    // the upload slot covers the LICENSEE's own records only; there
+    // is no per-person model for staff/household-member fingerprints
+    // yet. The /fingerprint_date/ field-update promise stays out of
+    // the copy (locked by the regression test below).
+    surface: SURFACE.BUSINESS_INFO_LICENSING,
     missing:
       'Keep records of fingerprint reprints on file — an auditor ' +
       'will ask. The rule is a 5-year cycle that applies to YOU ' +
       '(the licensee) and any staff or household members originally ' +
-      'fingerprinted before April 2024. MILittleCare does not yet ' +
-      'hold these records in-app; for now they stay on paper.',
+      'fingerprinted before April 2024. Upload YOUR reprint receipt ' +
+      'in Business Info → Licensing so we hold it for you; staff and ' +
+      'household-member fingerprint records still stay on paper for ' +
+      'now (no per-person model yet).',
   },
 
   // ── Property (questionnaire-driven applicability, 3.1b-1) ────────

@@ -148,24 +148,33 @@ describe('Surface 5 — /miregistry', () => {
 // -----------------------------------------------------------------------------
 
 describe('category B/C rows render text-only (no fixTarget)', () => {
-  it('G4 fingerprint reprint (honest "keep records" copy; upload surface not yet built) → no fixTarget', () => {
+  it('G4 fingerprint reprint (Phase A upload surface, 2026-06-14): fixTarget → /business-info?section=licensing', () => {
     const gap = gapFor('cdc_fingerprint_reprint_currency', { kind: 'missing_required' }, CTX)
-    // Preserved: the 5-year cycle reality and the text-only contract.
+    // Preserved: the 5-year cycle reality + the "keep records" tone.
     expect(gap.guidanceText).toContain('5-year cycle')
-    expect(gap.fixTarget).toBeUndefined()
+    expect(gap.guidanceText).toMatch(/keep records/i)
+    expect(gap.guidanceText).toMatch(/auditor/i)
 
-    // Integrity-hole regression locks (2026-06-14): the prior copy
-    // promised an in-app `fingerprint_date` field update that no UI
-    // delivers. If those phrases ever come back, the row resumes
-    // telling the provider to do something the app gives them no
-    // way to do — exactly the NO-WRITER class the audit flagged.
+    // Phase A: G4 now points at the real upload surface.
+    expect(gap.fixTarget).toBeDefined()
+    expect(gap.fixTarget.to).toBe('/business-info?section=licensing')
+    // Label is provider-readable, not just a slug.
+    expect(gap.fixTarget.label).toMatch(/licens/i)
+
+    // Integrity-hole regression locks (carried forward from the
+    // 2026-06-14 softening commit): the original copy promised an
+    // in-app `fingerprint_date` field update that no UI delivers.
+    // Those phrases must stay out — the fix is the upload surface
+    // now, not a field-update promise.
     expect(gap.guidanceText).not.toMatch(/fingerprint_date/i)
     expect(gap.guidanceText).not.toMatch(/update after each reprint/i)
 
-    // Honest tone locks — matches the drills/property "keep records,
-    // an auditor will ask" pattern.
-    expect(gap.guidanceText).toMatch(/keep records/i)
-    expect(gap.guidanceText).toMatch(/auditor/i)
+    // Phase A reality lock: the upload covers the LICENSEE's own
+    // records only. The household-members-on-paper truth must stay
+    // visible — promising in-app coverage for staff/household members
+    // would re-open a smaller-scale version of the same hole.
+    expect(gap.guidanceText).toMatch(/household/i)
+    expect(gap.guidanceText).toMatch(/paper/i)
   })
 
   it('H1 attendance acks (/acknowledgments ?child= is 3.1b-3+) → no fixTarget', () => {
@@ -544,13 +553,37 @@ describe('registry-wide invariants', () => {
     }
   })
 
-  it('no non-awaiting state ever links to /business-info (3.1a map otherwise untouched)', () => {
+  it('non-awaiting state /business-info links: only the explicitly-allowed rows (G4 fingerprint, 2026-06-14)', () => {
+    // The 3.1a invariant was "no non-awaiting state ever links to
+    // /business-info" — that policy was correct when BusinessInfo
+    // only served the awaiting_input questionnaire (premises +
+    // applicability). Phase A of compliance_documents (2026-06-14)
+    // added /business-info?section=licensing as a real provider-
+    // level fix surface for G4 fingerprint reprint, so the
+    // invariant is relaxed to an allowlist: any future addition
+    // forces an explicit decision here.
+    // expired falls back to the missing copy + the same surface
+    // (actionableGapPropsFor), so a row with a surface property
+    // produces a fixTarget for BOTH kinds even if its resolver
+    // happens to only emit one. Allowlist both for G4 so the
+    // invariant stays a meaningful gate without being brittle
+    // against state-kind iteration. pending_parent never builds a
+    // fixTarget (gated null in the resolver) and so is not listed.
+    const NON_AWAITING_BUSINESS_INFO_ALLOWED = new Set([
+      'cdc_fingerprint_reprint_currency:missing_required',
+      'cdc_fingerprint_reprint_currency:expired',
+    ])
     const kinds = ['missing_required', 'expired', 'pending_parent']
     for (const key of Object.keys(REQUIREMENT_REGISTRY)) {
       for (const kind of kinds) {
         const gap = gapFor(key, { kind }, CTX)
-        if (gap && gap.fixTarget) {
-          expect(gap.fixTarget.to, `${key}/${kind}`).not.toContain('/business-info')
+        if (gap && gap.fixTarget && gap.fixTarget.to.includes('/business-info')) {
+          const pair = `${key}:${kind}`
+          expect(
+            NON_AWAITING_BUSINESS_INFO_ALLOWED.has(pair),
+            `${pair} links to ${gap.fixTarget.to}. ` +
+            'Add it to NON_AWAITING_BUSINESS_INFO_ALLOWED above if intentional.'
+          ).toBe(true)
         }
       }
     }
