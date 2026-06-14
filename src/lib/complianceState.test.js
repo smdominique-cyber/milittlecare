@@ -121,6 +121,8 @@ function makeSourceRows(overrides = {}) {
     funding_documents: [],
     miregistry_training_entries: [],
     attendance_acks: [],
+    // 2026-06-14 batch (mig 039) — property J1/J2/J8 resolvers read this.
+    compliance_documents: [],
     drill_logs: null,
     property_records: null,
     ...overrides,
@@ -816,18 +818,19 @@ describe('Pattern D — MiRegistry annual ongoing (Dec 16)', () => {
 // -----------------------------------------------------------------------------
 
 describe('Pattern E — feature-not-yet-shipped', () => {
+  // 2026-06-14 batch (mig 039): radon, heating, and licensing_notebook
+  // flipped from Pattern E to compliance_documents-backed; their
+  // resolver tests live in the "compliance_documents-backed resolvers"
+  // describe below. Everything else here remains Pattern E.
   const PATTERN_E_KEYS = [
     'drill_fire_quarterly',
     'drill_tornado_seasonal',
     'drill_other_emergencies_annual',
     'emergency_response_plan_on_file',
-    'property_radon_test_quadrennial',
-    'property_heating_inspection_quadrennial',
     'property_co_detectors_per_level',
     'property_smoke_detectors_per_floor',
     'property_fire_extinguishers_per_floor',
     'property_smoking_prohibition_posted',
-    'property_licensing_notebook_archive',
     'caregiver_physician_attestation_annual',
     'caregiver_discipline_policy_ack_at_hire',
     'caregiver_daily_arrival_departure',
@@ -860,6 +863,268 @@ describe('Pattern E — feature-not-yet-shipped', () => {
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
     expect(state.reason).toBe('feature-not-yet-shipped')
+  })
+})
+
+// -----------------------------------------------------------------------------
+// 2026-06-14 batch — compliance_documents-backed resolvers
+// (J1 radon / J2 heating / J8 licensing-notebook)
+// -----------------------------------------------------------------------------
+//
+// Each row pairs a registry document_type with a slot upload. The
+// resolver reads sourceRows.compliance_documents and emits on_file
+// when at least one non-archived doc of the matching type exists,
+// missing_required when none, and UNKNOWN under the §2a load-failure
+// guard. The tests below mirror the pattern E5 / B1 trio: applied +
+// populated → ON_FILE; loaded + empty → MISSING_REQUIRED; not loaded
+// → UNKNOWN with a recognizable reason.
+
+describe('compliance_documents-backed resolvers (J1/J2/J8 — mig 039 + mig 040)', () => {
+  // FIXED_NOW = 2026-06-15T12:00:00Z → today's ISO date = 2026-06-15.
+  // The cycle-mode tests reference this anchor for the boundary cases.
+  const TODAY_YMD       = '2026-06-15'
+  const FUTURE_YMD      = '2027-01-01'
+  const PAST_YMD        = '2026-06-14'
+
+  // requiresDueDate=true → cycle mode (mig 040); false → existence-only
+  // mode (mig 039). The third value is the SQL CHECK token in
+  // chk_compliance_documents_document_type the registry row targets.
+  const CASES = [
+    { key: 'property_radon_test_quadrennial',          docType: 'property_radon_test',          requiresDueDate: true  },
+    { key: 'property_heating_inspection_quadrennial',  docType: 'property_heating_inspection',  requiresDueDate: true  },
+    { key: 'property_licensing_notebook_archive',      docType: 'property_licensing_notebook',  requiresDueDate: false },
+  ]
+
+  // §2a sourceRowsLoaded with everything true (helper for the
+  // load-failure guard test below — flipping one key is enough).
+  const ALL_LOADED = Object.freeze({
+    caregivers: true, staff_training_records: true, training_requirements: true,
+    funding_sources: true, funding_documents: true, health_safety_updates: true,
+    medication_authorizations: true, medication_admin_events: true,
+    acks: true, miregistry_training_entries: true, attendance_acks: true,
+    compliance_documents: true,
+  })
+
+  for (const { key, docType, requiresDueDate } of CASES) {
+    describe(`${key}${requiresDueDate ? ' (cycle, mig 040)' : ' (plain)'}`, () => {
+      const requirement = REQUIREMENT_REGISTRY[key]
+      // Cycle rows need a doc with a next_due_on to land on_file;
+      // plain rows ignore the column entirely. The helper produces
+      // the right shape for each.
+      const makeActiveDoc = (overrides = {}) => ({
+        id: 'd-active',
+        document_type: docType,
+        uploaded_at: '2026-06-01T00:00:00Z',
+        archived_at: null,
+        next_due_on: requiresDueDate ? FUTURE_YMD : null,
+        ...overrides,
+      })
+
+      it('data_state has flipped to shipped (was not_yet_modelled before this batch)', () => {
+        expect(requirement.data_state).toBe(DATA_STATE.SHIPPED)
+      })
+
+      it('loaded + a matching non-archived doc (with valid next_due_on for cycle types) → ON_FILE', () => {
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({ compliance_documents: [makeActiveDoc()] }),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+        if (requiresDueDate) {
+          // Cycle mode carries the date forward as expires_at so the
+          // checklist UI can render it if it wants.
+          expect(state.expires_at).toBe(FUTURE_YMD)
+        }
+      })
+
+      it('loaded + empty doc list → MISSING_REQUIRED', () => {
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows(),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      })
+
+      it('archived doc of the matching type is ignored → MISSING_REQUIRED', () => {
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({
+            compliance_documents: [makeActiveDoc({ id: 'd-archived', archived_at: '2026-06-02T00:00:00Z' })],
+          }),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      })
+
+      it('doc of a DIFFERENT type is ignored (the document_type discriminator works)', () => {
+        const wrong = { id: 'd-wrong', document_type: 'fingerprint_reprint', uploaded_at: '2026-06-01T00:00:00Z', archived_at: null, next_due_on: FUTURE_YMD }
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({ compliance_documents: [wrong] }),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+      })
+
+      it('§2a guard: sourceRowsLoaded.compliance_documents === false → UNKNOWN compliance-documents-load-failure (never a false MISSING)', () => {
+        // Even with a valid doc in the array, the guard forces UNKNOWN.
+        // This is the exact case the §2a invariant exists to catch — a
+        // failed PostgREST query returns [] which would otherwise read
+        // identical to "genuinely empty."
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({ compliance_documents: [makeActiveDoc()] }),
+          sourceRowsLoaded: { ...ALL_LOADED, compliance_documents: false },
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+        expect(state.reason).toBe('compliance-documents-load-failure')
+      })
+    })
+  }
+
+  // -- mig 040 cycle branch — date-boundary semantics --------------------
+  //
+  // Tests below run only for the cycle CASES (radon + heating). The
+  // boundary rule from the task: due TODAY is still on_file (>=); due
+  // YESTERDAY is expired. A doc with a NULL next_due_on returns
+  // MISSING_REQUIRED with reason 'due-date-missing' — the engine
+  // never claims currency it can't see.
+
+  const CYCLE_CASES = CASES.filter(c => c.requiresDueDate)
+  for (const { key, docType } of CYCLE_CASES) {
+    describe(`${key} — mig 040 cycle date boundary`, () => {
+      const requirement = REQUIREMENT_REGISTRY[key]
+
+      it('next_due_on in the FUTURE → ON_FILE (expires_at carries the date)', () => {
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({
+            compliance_documents: [{ id: 'd', document_type: docType, uploaded_at: '2026-06-01T00:00:00Z', archived_at: null, next_due_on: FUTURE_YMD }],
+          }),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+        expect(state.expires_at).toBe(FUTURE_YMD)
+      })
+
+      it('next_due_on in the PAST → EXPIRED (expired_at carries the date)', () => {
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({
+            compliance_documents: [{ id: 'd', document_type: docType, uploaded_at: '2022-06-01T00:00:00Z', archived_at: null, next_due_on: PAST_YMD }],
+          }),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.EXPIRED)
+        expect(state.expired_at).toBe(PAST_YMD)
+      })
+
+      it('next_due_on == today → ON_FILE (boundary: due today is still current)', () => {
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({
+            compliance_documents: [{ id: 'd', document_type: docType, uploaded_at: '2022-06-01T00:00:00Z', archived_at: null, next_due_on: TODAY_YMD }],
+          }),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+        expect(state.expires_at).toBe(TODAY_YMD)
+      })
+
+      it('doc present + next_due_on NULL → MISSING_REQUIRED reason "due-date-missing" (engine refuses to claim currency it can\'t see)', () => {
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({
+            compliance_documents: [{ id: 'd-no-date', document_type: docType, uploaded_at: '2026-06-01T00:00:00Z', archived_at: null, next_due_on: null }],
+          }),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+        expect(state.reason).toBe('due-date-missing')
+      })
+
+      it('doc present + next_due_on undefined → same MISSING_REQUIRED "due-date-missing" path (pre-040 row defense)', () => {
+        // Production rows from before mig 040 came back without the
+        // column at all; PostgREST may surface that as undefined
+        // rather than null. The resolver must treat both identically.
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({
+            compliance_documents: [{ id: 'd-pre-040', document_type: docType, uploaded_at: '2026-06-01T00:00:00Z', archived_at: null }],
+          }),
+          now: FIXED_NOW,
+        })
+        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+        expect(state.reason).toBe('due-date-missing')
+      })
+    })
+  }
+
+  // -- Non-cycle regression — J8 notebook and (by extension) G4 ----------
+  //
+  // The plain-mode builder must NOT look at next_due_on. A non-cycle
+  // type that somehow has a past-date next_due_on (an admin tool, a
+  // manual SQL insert) still resolves ON_FILE because the resolver
+  // never reads the column. This guards against accidentally adding
+  // requiresDueDate to the plain builder later.
+
+  describe('non-cycle types ignore next_due_on (mig 040 regression lock)', () => {
+    it('property_licensing_notebook_archive: next_due_on in the PAST is ignored — still ON_FILE', () => {
+      const requirement = REQUIREMENT_REGISTRY.property_licensing_notebook_archive
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          compliance_documents: [{
+            id: 'd-notebook',
+            document_type: 'property_licensing_notebook',
+            uploaded_at: '2022-06-01T00:00:00Z',
+            archived_at: null,
+            // The plain builder must not look here. If anyone flips
+            // J8 to requiresDueDate without updating this test, the
+            // existence-only behavior would silently shift to expired
+            // — exactly the regression we want loud.
+            next_due_on: PAST_YMD,
+          }],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+      expect(state.expires_at).toBeUndefined()
+    })
+
+    it('property_licensing_notebook_archive: NULL next_due_on does NOT trigger "due-date-missing" on plain builder', () => {
+      const requirement = REQUIREMENT_REGISTRY.property_licensing_notebook_archive
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          compliance_documents: [{
+            id: 'd-notebook-null',
+            document_type: 'property_licensing_notebook',
+            uploaded_at: '2026-06-01T00:00:00Z',
+            archived_at: null,
+            next_due_on: null,
+          }],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+      expect(state.reason).toBeUndefined()
+    })
   })
 })
 

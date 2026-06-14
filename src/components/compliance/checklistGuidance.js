@@ -108,6 +108,10 @@ export const SURFACE = Object.freeze({
   // ComplianceDocumentSlot). The Licensing section already validates
   // `licensing` in BusinessInfoPage's KNOWN_SECTIONS.
   BUSINESS_INFO_LICENSING:     'business_info_licensing',
+  // 2026-06-14 batch — J1/J2/J8 property document upload (mig 039 +
+  // a new 'property' section on BusinessInfoPage that hosts the
+  // three ComplianceDocumentSlots).
+  BUSINESS_INFO_PROPERTY:      'business_info_property',
   // 3.1b-2 — StaffTrainingPage drill-in via ?caregiver=<id>;
   // page-level without a caregiverId in context.
   STAFF_TRAINING:              'staff_training',
@@ -134,6 +138,12 @@ function buildFixTarget(surface, context) {
     return {
       label: 'Open Business Info → Licensing',
       to: '/business-info?section=licensing',
+    }
+  }
+  if (surface === SURFACE.BUSINESS_INFO_PROPERTY) {
+    return {
+      label: 'Open Business Info → Property',
+      to: '/business-info?section=property',
     }
   }
   if (surface === SURFACE.STAFF_TRAINING) {
@@ -556,6 +566,74 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
     // feature_not_yet_shipped state falls to the `property` category
     // entry in TRACKING_SHIPS_WITH.
     awaitingSurface: SURFACE.BUSINESS_INFO_APPLICABILITY,
+  },
+
+  // ── Property batch (2026-06-14) — document-backed, mig 038 + 039 ──
+  //
+  // Three property rows flipped from feature_not_yet_shipped to
+  // document-backed in this batch. Each points at the new
+  // /business-info?section=property surface (ComplianceDocumentSlot
+  // for the matching document_type). Compare to the G4 fingerprint
+  // copy — same shape, different bucket of records.
+  property_radon_test_quadrennial: {
+    surface: SURFACE.BUSINESS_INFO_PROPERTY,
+    // mig 040: cycle-aware. The provider sets the next-due date on
+    // upload; the resolver flips this row to expired the day after
+    // that date passes.
+    missing: (state) => {
+      if (state && state.reason === 'due-date-missing') {
+        return (
+          'Your radon test is on file but no next-due date is set, ' +
+          'so the requirement can’t tell whether it’s current. ' +
+          'Re-upload in Business Info → Property and enter the next ' +
+          'recommended retest date (your tester usually notes it).'
+        )
+      }
+      return (
+        'Upload your most recent radon test report in Business Info ' +
+        '→ Property and enter the next-due date the tester ' +
+        'recommended. R 400.1934 / R 400.1932 require a test on a ' +
+        '4-year cycle; this row flips to expired the day after the ' +
+        'date you enter.'
+      )
+    },
+    expired:
+      'Your radon test is past due. Upload a current report in ' +
+      'Business Info → Property and enter the new next-due date ' +
+      '(R 400.1934 / R 400.1932). The prior report stays in archive ' +
+      'for the retention window.',
+  },
+  property_heating_inspection_quadrennial: {
+    surface: SURFACE.BUSINESS_INFO_PROPERTY,
+    // mig 040: cycle-aware, same shape as radon.
+    missing: (state) => {
+      if (state && state.reason === 'due-date-missing') {
+        return (
+          'Your heating inspection is on file but no next-due date ' +
+          'is set, so the requirement can’t tell whether it’s ' +
+          'current. Re-upload in Business Info → Property and ' +
+          'enter the next-due date your contractor noted.'
+        )
+      }
+      return (
+        'Upload your most recent heating/HVAC inspection report in ' +
+        'Business Info → Property and enter the next-due date ' +
+        'your contractor noted. R 400.1932 is a 4-year cycle; this ' +
+        'row flips to expired the day after that date.'
+      )
+    },
+    expired:
+      'Your heating inspection is past due. Upload a current report ' +
+      'in Business Info → Property and enter the new next-due ' +
+      'date (R 400.1932). The prior report stays archived.',
+  },
+  property_licensing_notebook_archive: {
+    surface: SURFACE.BUSINESS_INFO_PROPERTY,
+    missing:
+      'Upload a single PDF of your licensing notebook (your licensing ' +
+      'certificate plus recent licensing correspondence and inspection ' +
+      'reports) in Business Info → Property. R 400.1906(3) — these ' +
+      'are the records parents may ask to see.',
   },
 
   // ── Group H — attendance acks (category C surface — text-only) ───

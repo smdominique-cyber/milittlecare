@@ -332,6 +332,19 @@ export async function loadComplianceSourceRows({
       .is('archived_at', null)
   )
 
+  // 8a. Compliance documents (provider-level — migration 038 + 039).
+  //     Fingerprint reprint (G4, 038) + the property batch (J1/J2/J8,
+  //     039). Each row that reads this opts into the loaded signal:
+  //     a failed load surfaces as `unknown / compliance-documents-
+  //     load-failure` per the §2a guard, never a false missing.
+  const complianceDocumentsResp = await safeQueryWithLoaded('compliance_documents', () =>
+    supabase
+      .from('compliance_documents')
+      .select('id, document_type, uploaded_at, archived_at')
+      .eq('user_id', providerId)
+      .is('archived_at', null)
+  )
+
   // 9. Attendance acks — windowed (default 90 days). The volume
   //    concern from §5: a full year of per-day rows for every child
   //    is heavy; the window is the knob.
@@ -379,6 +392,9 @@ export async function loadComplianceSourceRows({
       funding_documents: fundingDocumentsResp.rows,
       miregistry_training_entries: miregistryEntriesResp.rows,
       attendance_acks: attendanceAcksResp.rows,
+      // 2026-06-14: J1/J2/J8 property rows (radon, heating,
+      // licensing-notebook) + G4 fingerprint resolver consume this.
+      compliance_documents: complianceDocumentsResp.rows,
       // Pattern E slots — sources not yet shipped.
       drill_logs: null,
       property_records: null,
@@ -403,6 +419,7 @@ export async function loadComplianceSourceRows({
       training_requirements:       trainingRequirementsResp.loaded,
       miregistry_training_entries: miregistryEntriesResp.loaded,
       attendance_acks:             attendanceAcksResp.loaded,
+      compliance_documents:        complianceDocumentsResp.loaded,
     },
   }
 }
@@ -467,6 +484,15 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
   const miregistryEntriesResp = await safeQueryWithLoaded('miregistry_training_entries', () =>
     supabase.from('miregistry_training_entries').select('*').eq('user_id', providerId).is('archived_at', null)
   )
+  // Compliance documents — provider-level (no children involved),
+  // so this path queries the same table the main loader does.
+  const complianceDocumentsResp = await safeQueryWithLoaded('compliance_documents', () =>
+    supabase
+      .from('compliance_documents')
+      .select('id, document_type, uploaded_at, archived_at')
+      .eq('user_id', providerId)
+      .is('archived_at', null)
+  )
   return {
     sourceRows: {
       acks: [],
@@ -480,6 +506,7 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
       funding_documents: fundingDocumentsResp.rows,
       miregistry_training_entries: miregistryEntriesResp.rows,
       attendance_acks: [],
+      compliance_documents: complianceDocumentsResp.rows,
       drill_logs: null,
       property_records: null,
     },
@@ -499,6 +526,7 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
       staff_training_records:      staffTrainingResp.loaded,
       training_requirements:       trainingRequirementsResp.loaded,
       miregistry_training_entries: miregistryEntriesResp.loaded,
+      compliance_documents:        complianceDocumentsResp.loaded,
     },
   }
 }
@@ -516,6 +544,7 @@ function emptySourceRows() {
     funding_documents: [],
     miregistry_training_entries: [],
     attendance_acks: [],
+    compliance_documents: [],
     drill_logs: null,
     property_records: null,
   }
@@ -542,6 +571,7 @@ function emptySourceRowsLoaded() {
     training_requirements:       true,
     miregistry_training_entries: true,
     attendance_acks:             true,
+    compliance_documents:        true,
   }
 }
 
