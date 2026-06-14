@@ -1898,19 +1898,25 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
         return hasCdc ? APPLICABILITY_RESULT.APPLIES : APPLICABILITY_RESULT.DOES_NOT_APPLY
       },
     },
-    state_resolver: ({ provider, now }) => {
-      if (!provider || !provider.fingerprint_date) return { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED }
-      // 5-year cycle: print is good for 5 years.
-      const printedMs = parseTimestampMs(provider.fingerprint_date + 'T00:00:00Z')
-      if (printedMs == null) return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'unparseable-fingerprint-date' }
-      const ageDays = Math.round((now.getTime() - printedMs) / 86400000)
-      const FIVE_YEARS_DAYS = 5 * 365  // ignore leap-year noise; spec acceptable
-      if (ageDays >= FIVE_YEARS_DAYS) return { kind: REQUIREMENT_STATE_KIND.EXPIRED, expired_at: provider.fingerprint_date }
-      const result = { kind: REQUIREMENT_STATE_KIND.ON_FILE, expires_at: provider.fingerprint_date }
-      // 30-day expiring window before the 5-year mark.
-      if (ageDays >= FIVE_YEARS_DAYS - 30) result.expiring_soon = true
-      return result
-    },
+    // 2026-06-14: closes the G4 resolver loop. The pre-038 resolver
+    // read provider.fingerprint_date and emitted MISSING_REQUIRED /
+    // ON_FILE / EXPIRED off a 5-year cycle. Migration 038 + the
+    // ComplianceDocumentSlot on Business Info → Licensing introduced
+    // an upload that writes compliance_documents, but the resolver
+    // was never moved over — so uploading a fingerprint receipt
+    // didn't actually flip the row. (Flagged as a known follow-up in
+    // the J1/J2/J8 batch commit on 2026-06-14.)
+    //
+    // Plain-mode swap per the task brief: the slot doesn't capture a
+    // next-due date today, so the resolver checks existence only.
+    // ON_FILE when a non-archived fingerprint_reprint doc exists,
+    // MISSING_REQUIRED otherwise, UNKNOWN under the §2a guard. The
+    // EXPIRED / 'unparseable-fingerprint-date' / expiring_soon paths
+    // the legacy resolver carried are intentionally dropped here;
+    // re-adding 5-year cycle tracking is a separate piece of work
+    // (mig 040's requiresDueDate option is the obvious extension
+    // point when a date capture lands on the fingerprint slot).
+    state_resolver: buildComplianceDocResolver('fingerprint_reprint'),
   }),
 
   // ─── attendance (1) ──────────────────────────────────────────────
