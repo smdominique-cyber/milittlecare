@@ -655,101 +655,182 @@ describe('Pattern B — inform-only via lead_disclosure', () => {
 describe('Pattern C — CDC fingerprint reprint currency', () => {
   const requirement = REQUIREMENT_REGISTRY.cdc_fingerprint_reprint_currency
 
-  it('LEP with CDC + recent fingerprint → on_file', () => {
+  // 2026-06-14: the resolver flipped from reading provider.fingerprint_date
+  // to reading sourceRows.compliance_documents (plain-mode
+  // buildComplianceDocResolver('fingerprint_reprint')). The
+  // applicability gate is UNCHANGED — license-status answered AND CDC on
+  // file. The state half is now existence-only: a non-archived
+  // fingerprint_reprint doc satisfies the row. Cycle tracking (the old
+  // resolver's 5-year window + expired + expiring_soon) is intentionally
+  // dropped here; re-adding it is a separate piece of work using mig
+  // 040's requiresDueDate option when a date capture lands on the
+  // fingerprint slot. Tests below cover the new behaviour.
+
+  const cdcOnly = () => makeSourceRows({
+    funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
+  })
+  const activeFingerprintDoc = (overrides = {}) => ({
+    id: 'd-1',
+    document_type: 'fingerprint_reprint',
+    uploaded_at: '2026-06-01T00:00:00Z',
+    archived_at: null,
+    ...overrides,
+  })
+
+  it('LEP with CDC + fingerprint doc uploaded → on_file', () => {
     const state = getRequirementState({
       requirement,
-      provider: makeLepProvider({ fingerprint_date: '2024-01-01' }),
+      provider: makeLepProvider(),
       sourceRows: makeSourceRows({
         funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
+        compliance_documents: [activeFingerprintDoc()],
       }),
       now: FIXED_NOW,
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
   })
 
-  it('LEP with CDC + fingerprint 6 years ago → expired', () => {
+  it('LEP with CDC + NO fingerprint doc → missing_required', () => {
     const state = getRequirementState({
       requirement,
-      provider: makeLepProvider({ fingerprint_date: '2020-01-01' }),
-      sourceRows: makeSourceRows({
-        funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
-      }),
+      provider: makeLepProvider(),
+      sourceRows: cdcOnly(),
       now: FIXED_NOW,
     })
-    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.EXPIRED)
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
   })
 
-  it('LEP without CDC → does_not_apply', () => {
+  it('LEP without CDC → does_not_apply (gate is CDC enrollment, not doc presence)', () => {
     const state = getRequirementState({
       requirement,
-      provider: makeLepProvider({ fingerprint_date: '2024-01-01' }),
-      sourceRows: makeSourceRows({ funding_sources: [] }),
+      provider: makeLepProvider(),
+      sourceRows: makeSourceRows({
+        funding_sources: [],
+        compliance_documents: [activeFingerprintDoc()],
+      }),
       now: FIXED_NOW,
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
   })
 
-  // CORRECTED 2026-06-06 per docs/Compliance Corrections.md Part 6
-  // — the 5-year reprint cycle is NOT LEP-only. Licensed
-  // Family/Group Home providers with CDC are equally subject.
-  // Was: licensed home + CDC → not_applicable.
-  // Now: licensed home + CDC → on_file/expired/etc. per fingerprint date.
-  it('licensed home with CDC + recent fingerprint → on_file (Part 6 correction)', () => {
+  // The 2026-06-06 Part 6 correction (licensed Family/Group Home + CDC
+  // is equally subject — not LEP-only) stays in effect. Only the state
+  // half changed; the applicability gate is unchanged.
+  it('licensed home with CDC + fingerprint doc uploaded → on_file (Part 6 applicability preserved)', () => {
     const state = getRequirementState({
       requirement,
-      provider: makeLicensedProvider({ fingerprint_date: '2024-01-01' }),
+      provider: makeLicensedProvider(),
       sourceRows: makeSourceRows({
         funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
+        compliance_documents: [activeFingerprintDoc()],
       }),
       now: FIXED_NOW,
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
   })
 
-  it('licensed home with CDC + fingerprint 6 years ago → expired (Part 6 correction)', () => {
+  it('licensed home with CDC + NO fingerprint doc → missing_required (Part 6 applicability preserved)', () => {
     const state = getRequirementState({
       requirement,
-      provider: makeLicensedProvider({ fingerprint_date: '2020-01-01' }),
-      sourceRows: makeSourceRows({
-        funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
-      }),
+      provider: makeLicensedProvider(),
+      sourceRows: cdcOnly(),
       now: FIXED_NOW,
     })
-    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.EXPIRED)
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
   })
 
   it('licensed home without CDC → not_applicable (CDC-gated, not LEP-gated)', () => {
     const state = getRequirementState({
       requirement,
-      provider: makeLicensedProvider({ fingerprint_date: '2024-01-01' }),
-      sourceRows: makeSourceRows({ funding_sources: [] }),
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({
+        funding_sources: [],
+        compliance_documents: [activeFingerprintDoc()],
+      }),
       now: FIXED_NOW,
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
   })
 
-  it('unanswered license_type AND is_license_exempt → unknown (§2a)', () => {
+  it('unanswered license_type AND is_license_exempt → unknown (§2a applicability gate)', () => {
     const state = getRequirementState({
       requirement,
-      provider: { id: 'p-1', license_type: null, is_license_exempt: null, fingerprint_date: '2024-01-01' },
+      provider: { id: 'p-1', license_type: null, is_license_exempt: null },
       sourceRows: makeSourceRows({
         funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
+        compliance_documents: [activeFingerprintDoc()],
       }),
       now: FIXED_NOW,
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
   })
 
-  it('LEP with CDC + missing fingerprint → missing_required', () => {
+  it('archived fingerprint doc is ignored → missing_required (soft-delete respected)', () => {
     const state = getRequirementState({
       requirement,
-      provider: makeLepProvider({ fingerprint_date: null }),
+      provider: makeLepProvider(),
       sourceRows: makeSourceRows({
         funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
+        compliance_documents: [activeFingerprintDoc({ archived_at: '2026-06-02T00:00:00Z' })],
       }),
       now: FIXED_NOW,
     })
     expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+  })
+
+  it('a doc of a DIFFERENT type does NOT satisfy G4 (document_type discriminator works)', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLepProvider(),
+      sourceRows: makeSourceRows({
+        funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
+        compliance_documents: [{ ...activeFingerprintDoc(), document_type: 'property_radon_test' }],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+  })
+
+  it('§2a guard: sourceRowsLoaded.compliance_documents === false → UNKNOWN compliance-documents-load-failure', () => {
+    const ALL_LOADED = {
+      caregivers: true, staff_training_records: true, training_requirements: true,
+      funding_sources: true, funding_documents: true, health_safety_updates: true,
+      medication_authorizations: true, medication_admin_events: true,
+      acks: true, miregistry_training_entries: true, attendance_acks: true,
+      compliance_documents: false,
+    }
+    const state = getRequirementState({
+      requirement,
+      provider: makeLepProvider(),
+      sourceRows: makeSourceRows({
+        funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
+        compliance_documents: [activeFingerprintDoc()],
+      }),
+      sourceRowsLoaded: ALL_LOADED,
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+    expect(state.reason).toBe('compliance-documents-load-failure')
+  })
+
+  // Plain-mode regression lock — fingerprint MUST NOT swing into cycle
+  // mode by accident. A future flip of G4 to requiresDueDate would
+  // change this test's expectation; the failure surfaces the decision
+  // rather than letting it slip.
+  it('plain mode regression: fingerprint resolver IGNORES next_due_on (no cycle math)', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLepProvider(),
+      sourceRows: makeSourceRows({
+        funding_sources: [{ id: 'fs-1', type: 'cdc_scholarship', archived_at: null }],
+        // A past next_due_on would flip a CYCLE-mode resolver to expired.
+        // Plain mode reads only the existence — still ON_FILE.
+        compliance_documents: [activeFingerprintDoc({ next_due_on: '2020-01-01' })],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+    expect(state.expires_at).toBeUndefined()
   })
 })
 
