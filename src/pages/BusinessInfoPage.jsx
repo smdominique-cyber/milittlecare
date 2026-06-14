@@ -9,6 +9,7 @@ import {
   MessageCircle, Info, ScrollText, Shield, ClipboardCheck,
 } from 'lucide-react'
 import ApplicabilityQuestionsSection from '@/components/compliance/ApplicabilityQuestionsSection'
+import ComplianceDocumentSlot from '@/components/documents/ComplianceDocumentSlot'
 import '@/styles/business-info.css'
 
 // Valid ?section= deep-link targets — must stay in sync with the
@@ -924,12 +925,39 @@ export default function BusinessInfoPage() {
       )}
 
       {activeSection === 'licensing' && (
-        <LicensingSection
-          currentValue={profile?.license_type ?? null}
-          reviewNeeded={profile?.license_type_review_needed === true}
-          onSave={saveLicenseStatus}
-          saving={saving}
-        />
+        <>
+          <LicensingSection
+            currentValue={profile?.license_type ?? null}
+            reviewNeeded={profile?.license_type_review_needed === true}
+            onSave={saveLicenseStatus}
+            saving={saving}
+          />
+          {/*
+            G4 fingerprint-reprint upload slot (2026-06-14). The
+            audit's NO-WRITER classification (commit 345b284) flagged
+            cdc_fingerprint_reprint_currency as a row where the
+            engine guidance promised a field update no UI delivered;
+            this slot replaces the promise with an actual upload
+            surface. The slot covers the LICENSEE's own records —
+            staff and household-member fingerprinting still live on
+            paper (no per-person model yet, per the same audit). The
+            checklist guidance updated alongside this commit points
+            at /business-info?section=licensing.
+          */}
+          <div className="bi-section" style={{ marginTop: 'var(--space-4)' }}>
+            <div className="bi-section-header">
+              <h3>Fingerprint reprint records</h3>
+              <p>
+                The licensing rule is a 5-year cycle. Keep your most recent
+                fingerprint reprint receipt or notice here so an auditor
+                can see it without rummaging through paper. This slot
+                covers YOU (the licensee); staff and household-member
+                fingerprint records still stay on paper for now.
+              </p>
+            </div>
+            <ComplianceDocumentSlot documentType="fingerprint_reprint" />
+          </div>
+        </>
       )}
 
       {activeSection === 'premises' && (
