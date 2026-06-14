@@ -119,10 +119,13 @@ create table if not exists public.medication_authorizations (
   provider_id              uuid not null references auth.users(id) on delete cascade,
   child_id                 uuid not null references public.children(id) on delete cascade,
 
-  -- Medication identity + plan.
+  -- Medication identity + plan. dose_text and schedule_text are both
+  -- free text (scope OQ1: structured schedule deferred to V2).
+  -- Examples: dose_text "5 mL by mouth"; schedule_text "twice daily,
+  -- 8a + 8p".
   medication_name          text not null,
-  dose_text                text,                    -- "5 mL by mouth" — free text (scope OQ1: structured schedule deferred to V2)
-  schedule_text            text,                    -- "twice daily, 8a + 8p" — free text
+  dose_text                text,
+  schedule_text            text,
 
   -- R 400.1931(8) discriminant: when true, the row's events bypass
   -- the role-gate trigger AND the per-dose log is OPTIONAL (per
