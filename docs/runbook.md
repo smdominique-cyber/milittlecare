@@ -370,149 +370,6 @@ drop index if exists public.consent_attachments_target_active_idx;
 drop table if exists public.consent_attachments;
 ```
 
-### Migration 027 — relax `acknowledgments_active_unique` + add `occurrence_metadata` (Consents Phase C)
-
-**Status:** PENDING — written 2026-06-01, not yet applied to production. Awaits Seth's manual application via the Supabase web SQL editor and verification screenshots (including the two negative tests) before promotion to Migration History below.
-
-**File:** `supabase/migrations/027_acknowledgments_per_occurrence.sql`
-
-**What it does:** two schema changes inside a single transaction — (a) replaces the `acknowledgments_active_unique` partial unique index with one whose WHERE clause exempts the two per-occurrence types (`transportation_nonroutine_per_trip`, `water_activities_off_premises_per_trip`); (b) adds a nullable `occurrence_metadata jsonb` column. Both DDL statements wrapped in BEGIN/COMMIT so other readers see either the old state or the new state, never neither.
-
-**Dependency:** migration 026 (`acknowledgments_expires_at`) must already be applied. If 026 hasn't landed yet, apply 026 first and verify before running 027.
-
-**Why it's needed:** Consents Phase C ships the two per-occurrence licensing-required consent types — one row per trip / outing. Multiple active rows per `(provider, type, child)` are EXPECTED for these types (one per occurrence) but the original `acknowledgments_active_unique` partial index from migration 024 actively blocks them. The relaxation surgically exempts ONLY these two `type` values; every durable type (Phase A `field_trip_permission`, `photo_sharing_consent`/`_revoked`, Phase B `transportation_routine_annual`, `water_activities_on_premises_seasonal`, every R 400.1907 intake type) keeps its one-active-row guarantee.
-
-**Apply procedure:** open the file on the feature branch, copy the entire contents (including the BEGIN/COMMIT), paste into the Supabase web SQL editor for the production project, run. Then run the verification queries below.
-
-**Verification (paste each into the SQL editor and screenshot):**
-
-```sql
--- (a) occurrence_metadata column exists.
-select column_name, data_type, is_nullable
-from information_schema.columns
-where table_schema='public'
-  and table_name='acknowledgments'
-  and column_name='occurrence_metadata';
--- expect 1 row: occurrence_metadata | jsonb | YES
-```
-
-```sql
--- (b) The new partial unique index carries the exclusion clause.
-select indexname, indexdef
-from pg_indexes
-where schemaname='public' and tablename='acknowledgments'
-  and indexname='acknowledgments_active_unique';
--- expect: indexdef WHERE clause contains
---   "type <> ALL (ARRAY['transportation_nonroutine_per_trip'::text,
---                       'water_activities_off_premises_per_trip'::text])"
---   (Postgres normalizes NOT IN to <> ALL in pg_indexes output;
---   semantic identical.)
-```
-
-```sql
--- (c) No existing row was mutated (occurrence_metadata is NULL for
---     every pre-Phase-C row).
-select count(*) as total_rows,
-       count(occurrence_metadata) as rows_with_occurrence_metadata
-from public.acknowledgments
-where archived_at is null;
--- expect: rows_with_occurrence_metadata = 0 immediately after migration.
-```
-
-```sql
--- (d) The provider-level partial unique was NOT touched.
-select indexname, indexdef
-from pg_indexes
-where schemaname='public' and tablename='acknowledgments'
-  and indexname='acknowledgments_active_unique_no_subject';
--- expect: WHERE clause unchanged from migration 024 —
---   "WHERE ((archived_at IS NULL) AND (subject_id IS NULL))"
-```
-
-**Negative tests (the heart of the index relaxation — run these on a throwaway test child):**
-
-```sql
--- N1) Two active rows of a DURABLE type for the same child STILL
---     violate the unique. The SECOND insert must raise a
---     unique-violation error. Replace <provider_id> + <child_id>
---     with real test values from your data.
-insert into public.acknowledgments (
-  provider_id, type, subject_type, subject_id,
-  acknowledged_via, acknowledged_by_label, snapshot_hash
-) values
-  ('<provider_id>', 'field_trip_permission', 'child', '<child_id>',
-   'in_person_paper', 'Test Parent', 'phaseC-negtest-1'),
-  ('<provider_id>', 'field_trip_permission', 'child', '<child_id>',
-   'in_person_paper', 'Test Parent', 'phaseC-negtest-2');
--- expect: second row raises
---   ERROR: duplicate key value violates unique constraint
---     "acknowledgments_active_unique"
--- This proves durable-type uniqueness is preserved.
-
--- Cleanup (regardless of which inserts succeeded):
-update public.acknowledgments
-   set archived_at = now()
- where provider_id = '<provider_id>'
-   and subject_id = '<child_id>'
-   and snapshot_hash in ('phaseC-negtest-1','phaseC-negtest-2');
-```
-
-```sql
--- N2) Two active rows of a PER-OCCURRENCE type for the same child
---     are ALLOWED. Both inserts must succeed.
-insert into public.acknowledgments (
-  provider_id, type, subject_type, subject_id,
-  acknowledged_via, acknowledged_by_label,
-  occurrence_metadata, snapshot_hash
-) values
-  ('<provider_id>', 'transportation_nonroutine_per_trip',
-   'child', '<child_id>',
-   'in_person_paper', 'Test Parent',
-   '{"trip_date": "2026-07-15", "destination": "Library"}'::jsonb,
-   'phaseC-postest-1'),
-  ('<provider_id>', 'transportation_nonroutine_per_trip',
-   'child', '<child_id>',
-   'in_person_paper', 'Test Parent',
-   '{"trip_date": "2026-07-22", "destination": "Park"}'::jsonb,
-   'phaseC-postest-2');
--- expect: both rows insert successfully — no unique violation.
--- This proves the per-occurrence exemption works.
-
--- (Leave the rows in place if you want to verify the modal renders
---  them; otherwise archive:)
-update public.acknowledgments
-   set archived_at = now()
- where provider_id = '<provider_id>'
-   and subject_id = '<child_id>'
-   and snapshot_hash in ('phaseC-postest-1','phaseC-postest-2');
-```
-
-**Rollback (if needed):**
-
-```sql
-begin;
-  alter table public.acknowledgments
-    drop column if exists occurrence_metadata;
-  drop index if exists public.acknowledgments_active_unique;
-  create unique index acknowledgments_active_unique
-    on public.acknowledgments (provider_id, type, subject_type, subject_id)
-    where archived_at is null and subject_id is not null;
-commit;
-```
-
-**Caveat on rollback:** if Phase C per-occurrence rows have been captured by rollback time, the original unique index will fail to recreate (multiple active rows of the same type now exist for some children). In that case, archive the per-occurrence rows first:
-
-```sql
-update public.acknowledgments
-   set archived_at = now()
- where type in (
-   'transportation_nonroutine_per_trip',
-   'water_activities_off_premises_per_trip'
- ) and archived_at is null;
-```
-
-Then run the rollback transaction above.
-
 ## Migration History
 
 ### 2026-05-13 — Migrations 003-006: funding-source scaffolding
@@ -2448,3 +2305,53 @@ rollback if production dose records exist** — R 400.1931(9) requires
 2-year retention. Export the tables first if rollback is genuinely
 needed. The full rollback SQL is in the migration file's commented
 DOWN block.
+
+### ~2026-06-01 — Migration 027: relax `acknowledgments_active_unique` + add `occurrence_metadata` (Consents Phase C) — APPLIED + BACKFILLED ENTRY (originally mis-recorded as Pending)
+
+> 🔧 **Backfilled 2026-06-13.** Verified in production via the
+> `to_regclass` / `pg_indexes` / `information_schema.columns`
+> check the user ran in the Supabase web SQL editor after the
+> 2026-06-10 detour exposed the same Pending/Applied drift that
+> caught 026 and 028. Both schema changes were already present:
+>
+> - `acknowledgments.occurrence_metadata` exists with the expected
+>   shape (`jsonb`, `is_nullable = YES`).
+> - `acknowledgments_active_unique` index includes the per-occurrence
+>   type exemption (`indexdef` contains
+>   `transportation_nonroutine_per_trip` — i.e. the relaxed WHERE
+>   clause from the migration file is live in production).
+>
+> Apply-time verification output was not preserved (the promotion
+> step was skipped). This entry is the corrective bookkeeping.
+
+What the migration does — `027_acknowledgments_per_occurrence.sql`
+ships two schema changes inside a single `BEGIN/COMMIT` transaction:
+
+- Replaces the `acknowledgments_active_unique` partial unique index
+  with one whose WHERE clause exempts the two per-occurrence types
+  (`transportation_nonroutine_per_trip`,
+  `water_activities_off_premises_per_trip`). Every durable consent
+  type keeps its one-active-row guarantee.
+- Adds a nullable `occurrence_metadata jsonb` column to
+  `public.acknowledgments` — NULL for every existing row and every
+  durable type.
+
+Dependencies — sequential after migration 026
+(`acknowledgments_expires_at`), now also confirmed applied (see entry
+above).
+
+Verification — 2026-06-13 dashboard queries against `pg_indexes` +
+`information_schema.columns` confirmed both changes present, per the
+backfill note above. The negative-test pair from the migration file
+header (N1 durable-type uniqueness still enforced; N2 per-occurrence
+duplicates allowed) was NOT re-run during this backfill; if the
+runbook process ever runs these against a future per-occurrence
+write, the historical record points to migration 027's file header
+for the canonical INSERT pattern.
+
+Rollback — restores the original strict index and drops
+`occurrence_metadata`. ⚠️ If Phase C per-occurrence rows have been
+captured by rollback time, archive them first (the DOWN block in the
+migration file documents the cleanup SQL) — otherwise the original
+strict index will fail to recreate against duplicate active rows of
+the same per-occurrence type.
