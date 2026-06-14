@@ -360,30 +360,43 @@ function patternENotYetModelled() {
 /**
  * Resolver builder for rows backed by the compliance_documents store
  * (substrate from migration 038; document_type list extended by
- * migration 039 and any successor). Returns a resolver that:
+ * migration 039; next_due_on column added by migration 040).
  *
- *   - Honors the §2a load-failure guard: when
- *     `sourceRowsLoaded.compliance_documents === false`, the resolver
- *     returns UNKNOWN with a recognizable reason rather than reading
- *     a possibly-empty array as "no documents on file."
- *   - Returns ON_FILE when at least one non-archived document of the
- *     requested type exists for this provider.
- *   - Returns MISSING_REQUIRED otherwise.
+ * Two modes, selected via `options.requiresDueDate`:
  *
- * Phase A intentionally does NOT model document freshness (e.g. the
- * quadrennial expiration for radon/heating). The current design is
- * "replace via the slot's Replace flow to reset" — the prior doc
- * archives, the new one becomes the active row. A future migration
- * can add a `record_date` column to compliance_documents and a more
- * sophisticated resolver; this builder is the place to extend it.
+ *   default (requiresDueDate=false) — used by fingerprint (G4) and
+ *   licensing-notebook (J8). The row is satisfied by the EXISTENCE
+ *   of a non-archived doc of the requested type. No freshness math.
+ *
+ *   cycle (requiresDueDate=true) — used by radon (J1) and heating
+ *   (J2). The row reads `next_due_on` from the active doc and
+ *   compares against today (UTC Y-M-D, lexicographic compare on
+ *   ISO date strings — calendar-correct without timezone juggling).
+ *     - next_due_on >= today → ON_FILE (expires_at = next_due_on).
+ *       The == case is "due today still current" per the task's
+ *       boundary rule.
+ *     - next_due_on <  today → EXPIRED (expired_at = next_due_on).
+ *     - next_due_on is NULL → MISSING_REQUIRED with reason
+ *       'due-date-missing'. Pre-040 rows (uploaded before the
+ *       column existed) and any future row whose write skipped
+ *       the date land here — the engine never claims currency it
+ *       can't see. Provider re-uploads via the slot to enter a
+ *       date.
+ *
+ * Both modes honor the §2a load-failure guard: when
+ * `sourceRowsLoaded.compliance_documents === false`, the resolver
+ * returns UNKNOWN with reason 'compliance-documents-load-failure'
+ * rather than reading the possibly-empty array as "no documents on
+ * file."
  *
  * Used by the J1/J2/J8 property batch (2026-06-14). The G4
  * fingerprint resolver still reads `provider.fingerprint_date` (the
  * pre-substrate field); migrating G4's resolver to this builder is
  * a follow-up flagged in the batch's commit message.
  */
-function buildComplianceDocResolver(documentType) {
-  return ({ sourceRows, sourceRowsLoaded }) => {
+function buildComplianceDocResolver(documentType, options = {}) {
+  const requiresDueDate = !!options.requiresDueDate
+  return ({ sourceRows, sourceRowsLoaded, now }) => {
     if (sourceRowsLoaded && sourceRowsLoaded.compliance_documents === false) {
       return {
         kind: REQUIREMENT_STATE_KIND.UNKNOWN,
@@ -391,10 +404,34 @@ function buildComplianceDocResolver(documentType) {
       }
     }
     const docs = (sourceRows && sourceRows.compliance_documents) || []
-    const hasActive = docs.some(d => d && d.document_type === documentType && !d.archived_at)
-    return hasActive
-      ? { kind: REQUIREMENT_STATE_KIND.ON_FILE }
-      : { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED }
+    const active = docs.find(d => d && d.document_type === documentType && !d.archived_at)
+    if (!active) return { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED }
+    if (!requiresDueDate) return { kind: REQUIREMENT_STATE_KIND.ON_FILE }
+
+    // Cycle branch. mig 040 added compliance_documents.next_due_on
+    // as a nullable date the provider enters via the slot. The
+    // resolver compares it as an ISO date string against today's
+    // ISO date string — both UTC for tests to be deterministic
+    // across timezones. The 1-day boundary skew vs local time is
+    // negligible for a quadrennial cycle and keeps the compare
+    // pure-string.
+    const dueOn = active.next_due_on
+    if (!dueOn) {
+      return {
+        kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED,
+        reason: 'due-date-missing',
+      }
+    }
+    const today = now || new Date()
+    const todayYmd = today.toISOString().slice(0, 10)
+    // dueOn is a PostgreSQL date which PostgREST returns as a YYYY-MM-DD
+    // string; lexicographic compare of two ISO Y-M-D strings is
+    // calendar-correct. >= keeps "due today" on the on-file side
+    // (the task's explicit boundary rule).
+    if (dueOn >= todayYmd) {
+      return { kind: REQUIREMENT_STATE_KIND.ON_FILE, expires_at: dueOn }
+    }
+    return { kind: REQUIREMENT_STATE_KIND.EXPIRED, expired_at: dueOn }
   }
 }
 
@@ -2043,14 +2080,16 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'high',
-    // 2026-06-14 batch: flipped from 'not_yet_modelled' to 'shipped'.
-    // The substrate is compliance_documents (mig 038 + 039); the
-    // resolver below reads the doc store directly. Replace flow is
-    // the rotation mechanism for the quadrennial cycle (Phase A
-    // simplification — no record_date column yet).
+    // 2026-06-14 batch (mig 038/039): flipped from 'not_yet_modelled'
+    // to 'shipped'; resolver reads compliance_documents.
+    // mig 040 followup: now cycle-aware. The provider enters the
+    // next-due date directly via the slot; the resolver does a
+    // straight today-vs-due compare. Replace flow rotates the
+    // doc — the new row carries the new next_due_on the provider
+    // attests to.
     data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: buildComplianceDocResolver('property_radon_test'),
+    state_resolver: buildComplianceDocResolver('property_radon_test', { requiresDueDate: true }),
   }),
 
   property_heating_inspection_quadrennial: Object.freeze({
@@ -2062,10 +2101,11 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'high',
-    // 2026-06-14 batch: see radon for the same migration.
+    // 2026-06-14 batch: see radon for the same migration. mig 040
+    // followup: cycle-aware same as radon.
     data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: buildComplianceDocResolver('property_heating_inspection'),
+    state_resolver: buildComplianceDocResolver('property_heating_inspection', { requiresDueDate: true }),
   }),
 
   property_co_detectors_per_level: Object.freeze({

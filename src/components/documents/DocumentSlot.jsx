@@ -109,6 +109,16 @@ export default function DocumentSlot({
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  // 2026-06-14 mig 040 — the provider-entered next-due date for
+  // cycle types (radon, heating). Empty string when unset; the
+  // payload writes null in that case. For requiresDueDate slots an
+  // empty value blocks the upload (the engine would resolve the
+  // resulting row to MISSING_REQUIRED 'due-date-missing' anyway —
+  // failing client-side surfaces the error where the provider can
+  // act on it). For non-cycle slots this state is ignored and the
+  // input never renders.
+  const requiresDueDate = !!config.requiresDueDate
+  const [dueDate, setDueDate] = useState('')
 
   // Compose the WHERE clause once. `parentScope` is opt-in: when
   // present, the slot is keyed on (parent_column, type); when absent,
@@ -165,8 +175,25 @@ export default function DocumentSlot({
     if (!err) setDocuments(data || [])
   }
 
+  // Sync the dueDate state with whatever's on the loaded doc — so an
+  // existing row's value pre-fills the input rather than reading
+  // empty (which would block any subsequent Replace until the
+  // provider re-typed the date). Multi-slot configs are excluded
+  // because there's no single "current" doc to pre-fill from; the
+  // requiresDueDate / multi=true combination would need its own UX
+  // and isn't shipping today.
+  useEffect(() => {
+    if (!requiresDueDate || config.multi) return
+    const current = (documents || []).find(d => !d.archived_at)
+    setDueDate(current?.next_due_on || '')
+  }, [requiresDueDate, config.multi, documents])
+
   // Build the INSERT payload. parentScope inserts the column on
-  // funding_documents; without it, the row is provider-level.
+  // funding_documents; without it, the row is provider-level. For
+  // cycle types (mig 040, requiresDueDate=true) the provider-entered
+  // next_due_on rides through; for non-cycle types the column stays
+  // NULL on the row (the migration left it nullable for exactly
+  // this case).
   const buildInsertPayload = (file, path) => {
     const base = {
       user_id: user.id,
@@ -181,6 +208,9 @@ export default function DocumentSlot({
     if (parentScope?.columnName && parentScope.value) {
       base[parentScope.columnName] = parentScope.value
     }
+    if (requiresDueDate) {
+      base.next_due_on = dueDate || null
+    }
     return base
   }
 
@@ -193,6 +223,14 @@ export default function DocumentSlot({
     }
     if (!user) {
       setError(ERRORS.upload)
+      return
+    }
+    // mig-040 guard. A cycle-type upload without a next-due date
+    // would land as a MISSING_REQUIRED 'due-date-missing' row the
+    // moment it's saved; failing here puts the error in front of
+    // the provider where they can fix it.
+    if (requiresDueDate && !dueDate) {
+      setError(dueDateMissingMessage(config))
       return
     }
     setBusy(true)
@@ -244,6 +282,10 @@ export default function DocumentSlot({
     }
     if (!user) {
       setError(ERRORS.upload)
+      return
+    }
+    if (requiresDueDate && !dueDate) {
+      setError(dueDateMissingMessage(config))
       return
     }
     setBusy(true)
@@ -336,6 +378,21 @@ export default function DocumentSlot({
 
       {error && <ErrorBanner text={error} />}
 
+      {/* mig-040: due-date input renders ONLY for cycle types. The
+          non-cycle path is untouched — fingerprint + notebook never
+          see this element, so their behaviour is byte-for-byte
+          identical to pre-040. */}
+      {requiresDueDate && !loading && (
+        <DueDateInput
+          documentType={documentType}
+          label={config.dueDateLabel}
+          help={config.dueDateHelp}
+          value={dueDate}
+          onChange={setDueDate}
+          disabled={busy}
+        />
+      )}
+
       {loading ? (
         <p style={loadingStyle}>Loading documents…</p>
       ) : config.multi ? (
@@ -375,6 +432,47 @@ export default function DocumentSlot({
 // Subcomponents (cribbed verbatim from FundingDocumentSlot — same
 // presentational shape so the two slots feel identical to the user)
 // -----------------------------------------------------------------------------
+
+// mig-040: provider-entered next-due date. Required input that
+// pre-fills from the active doc's value when present and lives
+// above the upload zone so the provider answers it BEFORE picking
+// the file. Wrapped in its own component so the type=date / id /
+// label association stays tidy across the cycle types without
+// repeating the JSX in each consumer.
+function DueDateInput({ documentType, label, help, value, onChange, disabled }) {
+  const inputId = `document-slot-due-${documentType}`
+  return (
+    <div style={dueDateGroupStyle}>
+      <label htmlFor={inputId} style={dueDateLabelStyle}>
+        {label || 'Next due'} <span style={dueDateRequiredStyle}>*</span>
+      </label>
+      <input
+        id={inputId}
+        type="date"
+        value={value || ''}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        style={dueDateInputStyle}
+      />
+      {help && <p style={dueDateHelpStyle}>{help}</p>}
+    </div>
+  )
+}
+
+// Error message for the requiresDueDate guard. Title-scoped so the
+// provider sees "Set a next-due date for the radon test…" instead
+// of a generic "this field is required" sentence. The slot's
+// title carries the audit-readable name.
+function dueDateMissingMessage(config) {
+  const what = config && config.title
+    ? config.title.toLowerCase()
+    : 'this document'
+  return (
+    `Enter a next-due date for the ${what} before uploading. The ` +
+    'requirement needs a date to compare against today — without it, ' +
+    'the compliance row stays marked as missing.'
+  )
+}
 
 function SlotHeader({ title, badge, help }) {
   return (
@@ -654,4 +752,26 @@ const errorBannerStyle = {
   color: 'var(--clr-danger, #b00020)',
   fontSize: '0.875rem',
   lineHeight: 1.45,
+}
+
+// mig-040 — due-date input styling
+const dueDateGroupStyle = {
+  display: 'flex', flexDirection: 'column', gap: 4,
+}
+const dueDateLabelStyle = {
+  fontWeight: 500, fontSize: '0.8125rem', color: 'var(--clr-ink)',
+}
+const dueDateRequiredStyle = {
+  color: 'var(--clr-danger, #b00020)', marginLeft: 2,
+}
+const dueDateInputStyle = {
+  alignSelf: 'flex-start',
+  padding: '6px 8px',
+  border: '1px solid var(--clr-warm-mid)',
+  borderRadius: 'var(--radius-sm)',
+  fontSize: '0.875rem',
+  background: 'white',
+}
+const dueDateHelpStyle = {
+  margin: 0, fontSize: '0.75rem', color: 'var(--clr-ink-soft)', lineHeight: 1.4,
 }

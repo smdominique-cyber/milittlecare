@@ -112,6 +112,17 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
       '"Replace" flow keeps the prior one in archive for the ' +
       'retention window.',
     multi: false,
+    // 2026-06-14 mig 040: the resolver compares this date against
+    // today. The slot captures it as a required input alongside the
+    // file; uploads without it are blocked client-side and the
+    // engine flags them server-side ('due-date-missing') if the row
+    // ever gets in without one.
+    requiresDueDate: true,
+    dueDateLabel: 'Next radon test due',
+    dueDateHelp:
+      'Enter the date this radon test cycle is next due. Your tester ' +
+      'should have given you a recommended retest date; otherwise ' +
+      'use the report date + 4 years (R 400.1932 / R 400.1934).',
   },
   property_heating_inspection: {
     title: 'Heating equipment inspection',
@@ -122,6 +133,13 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
       '4-year cycle. Replace after each inspection; prior reports ' +
       'stay in archive for the retention window.',
     multi: false,
+    // 2026-06-14 mig 040: see radon for the same boundary contract.
+    requiresDueDate: true,
+    dueDateLabel: 'Next heating inspection due',
+    dueDateHelp:
+      'Enter the date the next heating/HVAC inspection is due. Your ' +
+      'contractor usually notes this on the report; otherwise use the ' +
+      'inspection date + 4 years (R 400.1932).',
   },
   property_licensing_notebook: {
     title: 'Licensing notebook archive',

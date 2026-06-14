@@ -379,3 +379,125 @@ describe('DocumentSlot — defensive prop handling', () => {
     warnSpy.mockRestore()
   })
 })
+
+// -----------------------------------------------------------------------------
+// mig 040 — provider-entered next-due date for cycle types
+// -----------------------------------------------------------------------------
+
+describe('DocumentSlot — mig 040 due-date capture (cycle types)', () => {
+  it('cycle types render a "Next ... due" date input above the dropzone — radon', async () => {
+    tableState.fetchQueue.push({ data: [], error: null })
+    render(<ComplianceDocumentSlot documentType="property_radon_test" />)
+    expect(await screen.findByLabelText(/next radon test due/i)).toBeTruthy()
+  })
+
+  it('cycle types render a "Next ... due" date input above the dropzone — heating', async () => {
+    tableState.fetchQueue.push({ data: [], error: null })
+    render(<ComplianceDocumentSlot documentType="property_heating_inspection" />)
+    expect(await screen.findByLabelText(/next heating inspection due/i)).toBeTruthy()
+  })
+
+  it('non-cycle types do NOT render the date input (fingerprint + notebook unregressed)', async () => {
+    tableState.fetchQueue.push({ data: [], error: null })
+    render(<ComplianceDocumentSlot documentType="fingerprint_reprint" />)
+    await screen.findByLabelText(/drop a file/i)
+    expect(screen.queryByLabelText(/next .* due/i)).toBeNull()
+
+    cleanup()
+    tableState.fetchQueue.push({ data: [], error: null })
+    render(<ComplianceDocumentSlot documentType="property_licensing_notebook" />)
+    await screen.findByLabelText(/drop a file/i)
+    expect(screen.queryByLabelText(/next .* due/i)).toBeNull()
+  })
+
+  it('cycle upload writes next_due_on on the insert payload (the migration-040 contract)', async () => {
+    tableState.fetchQueue.push({ data: [], error: null })
+    tableState.fetchQueue.push({
+      data: [{ id: 'd-1', document_type: 'property_radon_test', uploaded_at: '2026-06-14T00:00:00Z', archived_at: null, next_due_on: '2030-06-15' }],
+      error: null,
+    })
+
+    const { container } = render(
+      <ComplianceDocumentSlot documentType="property_radon_test" />
+    )
+    const dateInput = await screen.findByLabelText(/next radon test due/i)
+    fireEvent.change(dateInput, { target: { value: '2030-06-15' } })
+
+    const fileInputs = container.querySelectorAll('input[type="file"]')
+    const file = new File(['radon-report-bytes'], 'radon.pdf', { type: 'application/pdf' })
+    await act(async () => {
+      pickFile(fileInputs[0], file)
+    })
+
+    expect(tableState.inserts).toHaveLength(1)
+    expect(tableState.inserts[0].payload).toMatchObject({
+      document_type: 'property_radon_test',
+      next_due_on: '2030-06-15',
+    })
+  })
+
+  it('cycle upload BLOCKS when the date input is empty — no storage upload, no metadata insert, error surfaced', async () => {
+    tableState.fetchQueue.push({ data: [], error: null })
+
+    const { container } = render(
+      <ComplianceDocumentSlot documentType="property_radon_test" />
+    )
+    // Don't fill the date — go straight to the file picker.
+    await screen.findByLabelText(/next radon test due/i)
+    const fileInputs = container.querySelectorAll('input[type="file"]')
+    const file = new File(['x'], 'radon.pdf', { type: 'application/pdf' })
+    await act(async () => {
+      pickFile(fileInputs[0], file)
+    })
+
+    // Nothing reached the wire — the guard fires client-side.
+    expect(tableState.storageUploads).toHaveLength(0)
+    expect(tableState.inserts).toHaveLength(0)
+
+    // The provider gets a date-required message they can act on.
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent || '').toMatch(/next-due date|due date/i)
+  })
+
+  it('non-cycle upload (fingerprint) does NOT write next_due_on on the insert payload (regression lock)', async () => {
+    tableState.fetchQueue.push({ data: [], error: null })
+    tableState.fetchQueue.push({ data: [], error: null })
+
+    const { container } = render(
+      <ComplianceDocumentSlot documentType="fingerprint_reprint" />
+    )
+    await screen.findByLabelText(/drop a file/i)
+    const fileInputs = container.querySelectorAll('input[type="file"]')
+    const file = new File(['cert-bytes'], 'cert.pdf', { type: 'application/pdf' })
+    await act(async () => {
+      pickFile(fileInputs[0], file)
+    })
+
+    expect(tableState.inserts).toHaveLength(1)
+    expect(tableState.inserts[0].payload).not.toHaveProperty('next_due_on')
+  })
+
+  it('cycle slot pre-fills the date input from the active doc\'s next_due_on (Replace UX)', async () => {
+    tableState.fetchQueue.push({
+      data: [{
+        id: 'd-pref',
+        document_type: 'property_radon_test',
+        original_filename: 'radon.pdf',
+        storage_path: 'u-licensee/property_radon_test/x.pdf',
+        uploaded_at: '2026-06-14T10:00:00Z',
+        retention_until: '2030-06-14',
+        archived_at: null,
+        next_due_on: '2030-06-15',
+      }],
+      error: null,
+    })
+
+    render(<ComplianceDocumentSlot documentType="property_radon_test" />)
+    const dateInput = await screen.findByLabelText(/next radon test due/i)
+    // The pre-fill flows through the documents-watching useEffect; the
+    // input's value mirrors the active doc's next_due_on so a Replace
+    // doesn't force the provider to retype.
+    await new Promise(r => setTimeout(r, 0))
+    expect(dateInput.value).toBe('2030-06-15')
+  })
+})

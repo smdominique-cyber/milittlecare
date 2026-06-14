@@ -577,18 +577,55 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
   // copy — same shape, different bucket of records.
   property_radon_test_quadrennial: {
     surface: SURFACE.BUSINESS_INFO_PROPERTY,
-    missing:
-      'Upload your most recent radon test report in Business Info → ' +
-      'Property. R 400.1934 / R 400.1932 require a test on a 4-year ' +
-      'cycle — Replace the slot after each retest and the prior ' +
-      'report stays in archive for the retention window.',
+    // mig 040: cycle-aware. The provider sets the next-due date on
+    // upload; the resolver flips this row to expired the day after
+    // that date passes.
+    missing: (state) => {
+      if (state && state.reason === 'due-date-missing') {
+        return (
+          'Your radon test is on file but no next-due date is set, ' +
+          'so the requirement can’t tell whether it’s current. ' +
+          'Re-upload in Business Info → Property and enter the next ' +
+          'recommended retest date (your tester usually notes it).'
+        )
+      }
+      return (
+        'Upload your most recent radon test report in Business Info ' +
+        '→ Property and enter the next-due date the tester ' +
+        'recommended. R 400.1934 / R 400.1932 require a test on a ' +
+        '4-year cycle; this row flips to expired the day after the ' +
+        'date you enter.'
+      )
+    },
+    expired:
+      'Your radon test is past due. Upload a current report in ' +
+      'Business Info → Property and enter the new next-due date ' +
+      '(R 400.1934 / R 400.1932). The prior report stays in archive ' +
+      'for the retention window.',
   },
   property_heating_inspection_quadrennial: {
     surface: SURFACE.BUSINESS_INFO_PROPERTY,
-    missing:
-      'Upload your most recent heating/HVAC inspection report in ' +
-      'Business Info → Property. R 400.1932 is a 4-year cycle — ' +
-      'Replace after each inspection; prior reports stay archived.',
+    // mig 040: cycle-aware, same shape as radon.
+    missing: (state) => {
+      if (state && state.reason === 'due-date-missing') {
+        return (
+          'Your heating inspection is on file but no next-due date ' +
+          'is set, so the requirement can’t tell whether it’s ' +
+          'current. Re-upload in Business Info → Property and ' +
+          'enter the next-due date your contractor noted.'
+        )
+      }
+      return (
+        'Upload your most recent heating/HVAC inspection report in ' +
+        'Business Info → Property and enter the next-due date ' +
+        'your contractor noted. R 400.1932 is a 4-year cycle; this ' +
+        'row flips to expired the day after that date.'
+      )
+    },
+    expired:
+      'Your heating inspection is past due. Upload a current report ' +
+      'in Business Info → Property and enter the new next-due ' +
+      'date (R 400.1932). The prior report stays archived.',
   },
   property_licensing_notebook_archive: {
     surface: SURFACE.BUSINESS_INFO_PROPERTY,
