@@ -7,6 +7,7 @@ import {
   Clock, Calendar, DollarSign, Phone, AlertTriangle,
   Plus, X, Save, Trash2, ChevronDown, ChevronRight, Check,
   MessageCircle, Info, ScrollText, Shield, ClipboardCheck,
+  Home,
 } from 'lucide-react'
 import ApplicabilityQuestionsSection from '@/components/compliance/ApplicabilityQuestionsSection'
 import ComplianceDocumentSlot from '@/components/documents/ComplianceDocumentSlot'
@@ -17,6 +18,12 @@ import '@/styles/business-info.css'
 // ?section= falls back to the default tab ('hours'), never errors.
 // Mirrors FamiliesPage's KNOWN_TABS validation (Finding #5 precedent).
 const KNOWN_SECTIONS = Object.freeze(new Set([
+  // 2026-06-15 — provider-facing edit surface for profiles.daycare_name.
+  // Closes the "no writable input anywhere" gap surfaced after the
+  // parent-portal-branding PR (the column is read by 12+ surfaces —
+  // parent-portal header, invitation emails, tax/billing exports — and
+  // had no UI writer prior to this).
+  'business_name',
   'hours',
   'closures',
   'policies',
@@ -170,6 +177,10 @@ export default function BusinessInfoPage() {
   // michigan_license_number, michigan_provider_id) when those need edit
   // surfaces — see docs/license_status_prompt_spec.md § 9 decision 1.
   const [profile, setProfile] = useState(null)
+  // 2026-06-15 — controlled draft for the Business name input
+  // (profiles.daycare_name). Seeded from `profile.daycare_name` inside
+  // loadAll; empty string → write NULL on save (see saveBusinessName).
+  const [businessNameDraft, setBusinessNameDraft] = useState('')
 
   useEffect(() => { loadAll() }, [])
 
@@ -182,8 +193,10 @@ export default function BusinessInfoPage() {
       supabase.from('business_policies').select('*').eq('user_id', user.id).maybeSingle(),
       // PR #14: license_type is the compliance source of truth (migration 022);
       // is_license_exempt is the mirrored legacy column.
+      // 2026-06-15: daycare_name added to the projection so the Business
+      // name input (new section, this PR) renders the current value.
       supabase.from('profiles')
-        .select('license_type, license_type_review_needed, is_license_exempt, home_built_before_1978, firearms_on_premises')
+        .select('license_type, license_type_review_needed, is_license_exempt, home_built_before_1978, firearms_on_premises, daycare_name')
         .eq('id', user.id).maybeSingle(),
     ])
 
@@ -202,6 +215,10 @@ export default function BusinessInfoPage() {
     setClosures(closuresResp.data || [])
     setPolicies(policyResp.data || { user_id: user.id, payment_methods: {} })
     setProfile(profileResp.data || null)
+    // 2026-06-15 — seed the Business name draft from the loaded value.
+    // After a successful save the page calls loadAll() again, so this
+    // line is both the initial hydration AND the post-save re-hydration.
+    setBusinessNameDraft(profileResp.data?.daycare_name ?? '')
     setLoading(false)
   }
 
@@ -407,6 +424,39 @@ export default function BusinessInfoPage() {
     setSaving(false)
   }
 
+  // 2026-06-15 — Business name writer. Matches the same shape as
+  // saveLicenseStatus / savePremises (the canonical profile-write pattern
+  // on this page): one .update().eq('id', user.id), .error checked
+  // (Rule 2), wrapped in setSaving / try / catch / loadAll.
+  //
+  // Empty → NULL: an empty or whitespace-only input becomes NULL in the
+  // database, not ''. Reason: the read-side fallback chain
+  // (`daycare_name → full_name → 'Your provider'`) at
+  // `resolveParentPortalProviderName` + every other read site depends on
+  // the value being null/missing for the fallback to fire. Storing '' is
+  // technically truthy-as-a-trimmed-string only if we DIDN'T trim — but
+  // we do. Storing whitespace would be even worse: `'   ' || x === '   '`
+  // would pin the header to whitespace. Trim then nullify-if-empty fixes
+  // both.
+  const saveBusinessName = async () => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      const trimmed = businessNameDraft.trim()
+      const valueToWrite = trimmed.length === 0 ? null : trimmed
+      const { error } = await supabase
+        .from('profiles')
+        .update({ daycare_name: valueToWrite })
+        .eq('id', user.id)
+      if (error) throw error
+      setMessage({ type: 'success', text: '✓ Business name saved.' })
+      await loadAll()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+    setSaving(false)
+  }
+
   // PR #16: save the two property disclosures together. When either
   // toggles from false -> true, any existing child intakes that did not
   // include the corresponding sub-row drift to "intake incomplete" via
@@ -437,6 +487,17 @@ export default function BusinessInfoPage() {
   }
 
   const sections = [
+    // 2026-06-15 — Business name first. It's the identity field every
+    // parent-facing surface reads (portal header, invitation email
+    // greeting, tax / billing PDFs). Putting it at position 0 makes the
+    // "Set this once" framing of the page header land first on the
+    // single field every parent sees by name.
+    {
+      id: 'business_name',
+      label: 'Business name',
+      icon: Home,
+      done: !!(profile?.daycare_name && profile.daycare_name.trim().length > 0),
+    },
     { id: 'hours', label: 'Hours', icon: Clock, done: policies.hours_set },
     { id: 'closures', label: 'Holidays & Closures', icon: Calendar, done: policies.closures_set },
     { id: 'policies', label: 'Payment & Fees', icon: DollarSign, done: policies.policies_set },
@@ -534,6 +595,77 @@ export default function BusinessInfoPage() {
       {message && (
         <div className={`bi-message ${message.type}`}>
           {message.text}
+        </div>
+      )}
+
+      {activeSection === 'business_name' && (
+        <div className="bi-section">
+          <div className="bi-section-header">
+            <h3>Business name</h3>
+            <p>
+              This is the name parents see in their MILittleCare parent portal
+              and on the invitation emails you send them. If left blank, parents
+              see your full name instead.
+            </p>
+          </div>
+
+          <div style={{ maxWidth: 480 }}>
+            <label
+              htmlFor="business-name-input"
+              className="bi-label"
+              style={{
+                display: 'block',
+                fontFamily: 'var(--font-display)',
+                fontSize: '0.9375rem',
+                color: 'var(--clr-ink)',
+                marginBottom: 6,
+              }}
+            >
+              Daycare / business name
+            </label>
+            <input
+              id="business-name-input"
+              type="text"
+              className="bi-text-input"
+              value={businessNameDraft}
+              onChange={(e) => setBusinessNameDraft(e.target.value)}
+              placeholder="e.g. Bright Beginnings Daycare"
+              maxLength={120}
+              aria-describedby="business-name-help"
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                border: '1px solid var(--clr-warm-mid)',
+                borderRadius: 'var(--radius-md)',
+                fontFamily: 'var(--font-body)',
+                fontSize: '0.9375rem',
+                color: 'var(--clr-ink)',
+                background: 'white',
+                boxSizing: 'border-box',
+              }}
+            />
+            <p
+              id="business-name-help"
+              style={{
+                marginTop: 6,
+                fontSize: '0.8125rem',
+                color: 'var(--clr-ink-soft)',
+                lineHeight: 1.4,
+              }}
+            >
+              Parents see this in the portal header and on the invitation email
+              we send them. Leave blank to fall back to your full name.
+            </p>
+          </div>
+
+          <button
+            className="bi-save-btn"
+            onClick={saveBusinessName}
+            disabled={saving}
+            style={{ marginTop: 16 }}
+          >
+            <Save size={14} /> {saving ? 'Saving…' : 'Save business name'}
+          </button>
         </div>
       )}
 
