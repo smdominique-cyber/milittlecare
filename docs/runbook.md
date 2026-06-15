@@ -700,16 +700,25 @@ Verification — queries run by Seth in the Supabase web SQL Editor on
 Rollback — uncomment the `DOWN MIGRATION` block at the foot of
 `013_training_requirements.sql` (drop the table, then the 2 enums).
 
-### 2026-05-19 — Migration 014: profiles.terms_accepted_at — PENDING PRODUCTION APPLICATION
+### 2026-05-19 — Migration 014: profiles.terms_accepted_at — APPLIED (status corrected 2026-06-15)
 
-> ⚠️ **Status: PENDING PRODUCTION APPLICATION.** Ships on branch
-> `chore/legal-pages-and-consent`; **not yet applied**. Apply per the
-> Migration Application Procedure above — including the user-visible
-> dashboard verification convention (`CLAUDE.md` § Critical Domain
-> Knowledge: the user runs the verification queries in the Supabase
-> web SQL Editor and saves a screenshot). This entry is completed with
-> the actual verification output at application time; the numbers below
-> are *expected*, not confirmed.
+> 🔧 **Status corrected 2026-06-15 — APPLIED.** This entry was
+> originally written as PENDING PRODUCTION APPLICATION but the
+> migration was applied to production sometime after 2026-05-19;
+> the runbook promotion step was skipped (same drift class that
+> caught 026 / 027 / 028 in 2026-06-10 and 038 / 039 / 040 today).
+> Confirmed applied 2026-06-15 via an
+> `information_schema.columns` query against production —
+> `public.profiles.terms_accepted_at` exists. Code-side, three
+> `src/` pages write the column today
+> (`InviteAcceptPage.jsx`, `LoginPage.jsx`,
+> `StaffInviteAcceptPage.jsx`); signups have been working in
+> production, which is consistent with the column being live (a
+> missing column would have made every signup 400 silently).
+> Apply-time verification output was not preserved; the
+> queries below are reconstructed from the migration file as
+> the canonical post-hoc paste-into-SQL-editor evidence
+> whenever a fresh snapshot is wanted.
 
 What the migration does — `014_terms_acceptance.sql` adds a nullable
 `terms_accepted_at timestamptz` column to **both** user-shaped tables:
@@ -779,15 +788,24 @@ Rollback — uncomment the `DOWN MIGRATION` block at the foot of
 discards every recorded acceptance written since application; the
 clickwrap UI continues to gate signup either way.
 
-### 2026-05-19 — Migration 015: Supabase security advisor hardening — PENDING PRODUCTION APPLICATION
+### 2026-05-19 — Migration 015: Supabase security advisor hardening — APPLIED (status corrected 2026-06-15)
 
-> ⚠️ **Status: PENDING PRODUCTION APPLICATION.** Ships on branch
-> `chore/supabase-security-hardening`; **not yet applied**. Apply per
-> the Migration Application Procedure above — including the
-> user-visible dashboard verification convention (`CLAUDE.md`
-> § Critical Domain Knowledge). This entry is completed with the
-> actual verification output at application time; the numbers below
-> are *expected*, not confirmed.
+> 🔧 **Status corrected 2026-06-15 — APPLIED.** This entry was
+> originally written as PENDING PRODUCTION APPLICATION, but
+> `docs/backlog.md` § "Resolved" already recorded 015 as
+> resolved 2026-05-19 alongside the dashboard step for
+> leaked-password protection — the runbook just never caught up.
+> Confirmed applied 2026-06-15 via a `pg_proc.proconfig` query
+> against production: the `search_path` hardening is present on
+> every SECURITY DEFINER + helper function 015 targets
+> (`admin_user_progress`, `current_user_licensee_id`,
+> `current_user_role`, `bump_thread_last_message_at`,
+> `set_funding_source_priority_default`, `handle_new_user`,
+> `set_updated_at`). Apply-time verification output was not
+> preserved in the runbook; the four queries below remain the
+> canonical post-hoc paste-into-SQL-editor evidence whenever a
+> fresh snapshot is wanted, and the dashboard leaked-password
+> toggle step lives at the bottom of this entry.
 
 What the migration does — `015_security_hardening.sql` resolves the
 three pre-existing Supabase security advisor findings recorded in
@@ -2563,3 +2581,146 @@ each is re-entered. Treat as an emergency path; export the
 so the dates can be restored after the followup. The migration
 file's DOWN block (lines 88–94) documents the single-statement
 rollback.
+
+### ~2026-06-14 — Migration 041: `intake_packets` table + `acknowledgments.packet_id` + `consent_attachments` target_type extension + parent RPC (intake-packet capture model, Option D) — APPLIED + BACKFILLED ENTRY (originally missing entirely from the runbook)
+
+> 🔧 **Backfilled 2026-06-15.** The migration was applied to
+> production manually AFTER the
+> `feature/intake-packet-capture` PR's commit message recorded
+> "Migration NOT applied" (the commit was the as-pushed state;
+> the manual apply landed shortly after). Code merged to main
+> with the 1595-test baseline. Confirmed applied 2026-06-15 by
+> a `pg_proc` query against production:
+> `intake_packet_confirm_for_parent` exists with
+> `search_path=public` — and that RPC is created by THIS
+> migration (`041_intake_packets.sql`, lines 380-525), so the
+> migration ran. Further confirmed by:
+> (a) a same-session live-gate of all three capture cases —
+> path (b) uploaded signed copy, path (a) send-for-signature
+> with parent flip, and the path (b) guardrail (no
+> consent_attachments row → no covering acks);
+> (b) a verification query of `public.acknowledgments` showing
+> the `packet_id` column present with 12 rows and 0 populated
+> (the column is in place; production has no packet-tagged
+> acks yet — expected for a freshly-applied capture model
+> before providers exercise it at scale).
+>
+> The earlier-entry runbook drift class (026 / 027 / 028 in
+> 2026-06-10, then 038 / 039 / 040 today) recurred a fourth
+> time. The DB-is-source-of-truth process note at the top of
+> this file remains the standing rule; 041 is the most recent
+> demonstration of why it matters.
+
+What the migration does — `041_intake_packets.sql` ships the
+capture-model substrate for the R 400.1907 intake bundle as
+either (a) a send-for-digital-signature flow or (b) an
+upload-already-signed-copy flow, with the provider declaring
+which of the nine intake elements the artifact covers. Five
+distinct database changes inside one migration:
+
+1. **`public.intake_packets` table** — one row per packet
+   (per send-for-sig request OR per uploaded signed copy). 16
+   columns: `id`, `provider_id` (FK `auth.users`),
+   `subject_type` (CHECK locked to `'child'` for forward
+   compat), `subject_id` (FK `public.children`), `source` CHECK
+   `('digital_signature_request', 'uploaded_signed_copy')`,
+   `status` CHECK `('pending_parent', 'signed', 'archived')`,
+   signature evidence (`signed_via` CHECK
+   `('parent_portal', 'parent_portal_esign', 'in_person_paper')`
+   nullable, `signed_at`, `signed_by_user_id`,
+   `signed_by_label`), `snapshot_hash` (envelope-style drift
+   hash), `attestation_text`, soft-delete pair
+   (`archived_at`, `archived_by`), `created_at`, `updated_at`.
+   DB-floor honesty guardrail via `intake_packets_signed_shape`
+   CHECK: `status='signed'` implies `signed_via IS NOT NULL` AND
+   `signed_at IS NOT NULL`; `status='pending_parent'` implies
+   `signed_via IS NULL`. One-active-per-child partial unique
+   index.
+
+2. **`acknowledgments.packet_id` column** — nullable FK to
+   `intake_packets(id)` ON DELETE SET NULL, plus a partial
+   index where `packet_id IS NOT NULL`. Every pre-041 row stays
+   valid (NULL = free-standing, the pre-Option-D world). The
+   nine intake-row resolvers in `complianceState.js` do NOT
+   read this column — `packet_id` is metadata for a future
+   "display grouping" PR that collapses the per-element wall.
+
+3. **`consent_attachments.target_type` CHECK extension** —
+   adds `'intake_packet'` alongside the existing
+   `'acknowledgment'` and `'medication_authorization'` so a
+   path-(b) uploaded signed copy attaches to the packet row.
+
+4. **Parent SELECT policy on `consent_attachments`** —
+   walked from mig 030's 3-EXISTS-branch shape to a 4-branch
+   shape; the new branch joins through `intake_packets →
+   children → parent_family_links` and matches the existing
+   acknowledgment branch's privacy contract.
+
+5. **`intake_packet_confirm_for_parent` RPC** — mirrors mig
+   025's `intake_confirm_for_parent` (same auth + archive +
+   insert + reminder-resolve transaction) PLUS packet_id
+   stamping on the new acks AND the
+   `intake_packets.status` flip (pending_parent → signed). A
+   separate function (not a modified 025) so the legacy
+   non-packet send-to-portal path keeps working unchanged.
+   SECURITY DEFINER with the canonical rule-4 revoke/grant
+   trailer (`PUBLIC` and `anon` revoked, `authenticated`
+   granted).
+
+Honesty guardrail — green must never be a bare checkbox.
+Enforcement points:
+
+- **App layer (write-time, load-bearing).** Path (a) writes
+  covering acks as `acknowledged_via='provider_override'`
+  which `patternAAckOnFile` reads as `pending_parent` — they
+  CANNOT read `on_file` until the parent signs. Path (b)
+  refuses the ack-insert step unless a `consent_attachments`
+  row with `target_type='intake_packet'` exists FIRST.
+- **DB floor (defense in depth).** The
+  `intake_packets_signed_shape` CHECK above prevents an
+  accidental "pending but already signed" or "signed but no
+  signature evidence" state at the DB.
+
+Dependencies — applies AFTER migrations 024 (acknowledgments
+table), 025 (`intake_confirm_for_parent` — the mirror
+source), 029 (consent_attachments substrate), 030 (parent
+SELECT policy on consent_attachments). Code-side wired into
+`src/lib/intakePackets.js` + `src/components/families/
+ChildIntakeModal.jsx`'s opt-in `PacketCaptureForm` +
+`src/pages/ParentIntakeAcknowledgePage.jsx`'s pending-packet
+routing.
+
+Verification — confirmed applied 2026-06-15 by:
+
+- **`pg_proc` query** — `intake_packet_confirm_for_parent`
+  exists with `search_path=public`. This RPC is created only
+  by this migration, so its presence is proof of apply.
+- **Live-gate (same session).** All three capture cases passed:
+  path (b) uploaded artifact + N covering acks landed; path
+  (a) packet pending_parent + provider_override acks landed;
+  the path (b) guardrail blocked the ack-write when no
+  attachment had been uploaded first.
+- **`information_schema.columns` query** — `acknowledgments`
+  shows `packet_id` column with 12 existing rows and 0
+  populated (the column is in place; production has no
+  packet-tagged acks yet because providers have not exercised
+  the new capture surface at scale — expected at this point
+  in the rollout).
+- The seven-query verification block in the migration file
+  header (lines 100–164: table shape, signed-shape CHECK,
+  packet_id column + index, consent_attachments CHECK
+  extension, parent policy 4th branch, four RLS policies on
+  `intake_packets`, RPC existence + arg signature, existing
+  acks regression) remains the canonical paste-into-SQL-editor
+  evidence whenever a fresh snapshot is wanted.
+
+Rollback — destructive on multiple surfaces. ⚠️ **Do NOT
+rollback if production packet rows or packet-stamped ack rows
+exist** — the audit trail requires preservation. The
+migration file's DOWN block (lines 562–588) documents the
+order: drop the RPC, restore mig 030's 3-branch parent SELECT
+policy, restore the mig 029 target_type CHECK to its
+2-value form, drop `acknowledgments.packet_id`, drop the
+`intake_packets` table + indexes + policies + trigger.
+Storage in the `consent-attachments` bucket is untouched
+(no objects are deleted by rollback).
