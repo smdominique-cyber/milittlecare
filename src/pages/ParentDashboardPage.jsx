@@ -308,7 +308,7 @@ export default function ParentDashboardPage() {
   }
 
   const disableAutopay = async (family) => {
-    if (!window.confirm(`Disable autopay for ${family.family_name}? You\'ll go back to paying invoices manually.`)) return
+    if (!window.confirm(`Disable autopay for ${family.family_name}? You'll go back to paying invoices manually.`)) return
     setDisabling(true)
     try {
       const { data: { session } } = await supabase.auth.getSession()

@@ -164,7 +164,6 @@ export default function FamiliesPage() {
     const match = families.find(f => f.id === familyIdFromUrl)
     if (!match) return
     setSelectedFamily(match)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, families, familyIdFromUrl])
 
   function clearDeepLinkParams() {

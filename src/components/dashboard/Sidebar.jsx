@@ -189,7 +189,7 @@ export default function Sidebar({ isOpen = false }) {
                   key={item.href}
                   href={item.href}
                   target="_blank"
-                  rel="noopener"
+                  rel="noopener noreferrer"
                   className="nav-item"
                 >
                   <item.icon size={18} />

@@ -51,7 +51,6 @@ export default function LicenseTypeReviewBanner({ userId }) {
     if (needsReview) setModalOpen(true)
     // Intentionally no dependency on modalOpen — we only want to open once
     // on mount/initial load, not re-open if the user closes it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsReview])
 
   const handleModalClose = async () => {

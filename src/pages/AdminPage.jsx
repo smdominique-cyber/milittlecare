@@ -50,7 +50,6 @@ export default function AdminPage() {
     loadData()
     const interval = setInterval(loadData, REFRESH_INTERVAL_MS)
     return () => clearInterval(interval)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin])
 
   async function loadData() {
