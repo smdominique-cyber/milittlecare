@@ -100,14 +100,21 @@ export default function FamiliesPage() {
   // downstream code reads (PR #15 lesson).
   const [licenseeProfile, setLicenseeProfile] = useState(null)
 
-  // Phase 3 fix-forward (Finding #5): deep-link from /compliance per-
-  // child rollup. URL shape: /families?family=<id>&child=<id>&tab=compliance.
-  // When `family` matches a loaded family, open its modal with `tab`
-  // as the initial tab. This is the page's FIRST query-param handler
-  // — keep the scheme tight so any future deep-link adds plug in
-  // here without inventing a parallel convention.
+  // Deep-link integration: /compliance routes here as
+  //   /families?family=<id>&child=<id>&tab=compliance.
+  //
+  // 2026-06-14 v2 reactivity fix — the page now ONLY resolves the
+  // family-modal-open state. Tab + child are read DIRECTLY from
+  // useSearchParams inside FamilyDetailModal, so a same-page
+  // fixTarget click (URL changes while modal stays mounted) cannot
+  // get out of sync with a mirrored useState. The v1 attempt
+  // (2fbb153) kept the page's `modalInitialTab` state and a
+  // setTab(initialTab) effect inside the modal; the real Link click
+  // produced a render where modalInitialTab was stale, the modal
+  // re-rendered with the wrong initialTab, useState ignored the
+  // post-commit prop change, and the visible result was a reset to
+  // 'overview'. Removing the mirror removes the bug class.
   const [params, setParams] = useSearchParams()
-  const [modalInitialTab, setModalInitialTab] = useState('overview')
 
   useEffect(() => { if (licenseeId) loadAll() }, [licenseeId])
 
@@ -137,36 +144,28 @@ export default function FamiliesPage() {
     setLoading(false)
   }
 
-  // Phase 3 fix-forward (Finding #5) — consume the deep-link params
-  // once families are loaded. The /compliance per-child rollup links
-  // here as /families?family=<id>&child=<id>&tab=compliance; without
-  // this effect FamiliesPage ignored the params entirely and the
-  // user landed on the default list with no modal open.
+  // v2 reactivity fix (2026-06-14) — page-level effect ONLY resolves
+  // family-modal-open state from `family` in the URL. tab + child
+  // are read directly from useSearchParams inside FamilyDetailModal
+  // (single source of truth = the URL; no mirrored useState to fall
+  // out of sync). Dep narrowed to the family id string so the
+  // effect doesn't re-fire on tab/child URL changes — irrelevant to
+  // family resolution.
   //
-  // Known tab keys from FamilyDetailModal: overview / invitations /
-  // children / funding / guardians / emergency / attendance /
-  // compliance. Unknown values fall back to overview (defensive —
-  // e.g. a stale link from a future "Reports" tab that wasn't built).
+  // setSelectedFamily(match) short-circuits when match is the same
+  // object reference (Object.is). Cross-family clicks land here with
+  // a different match → state updates → modal remounts via the
+  // key={family.id} on the JSX element (see below) so the modal's
+  // form-field useState initializers pick up the new family.
+  const familyIdFromUrl = params.get('family')
   useEffect(() => {
     if (loading || families.length === 0) return
-    const familyId = params.get('family')
-    if (!familyId) return
-    const match = families.find(f => f.id === familyId)
+    if (!familyIdFromUrl) return
+    const match = families.find(f => f.id === familyIdFromUrl)
     if (!match) return
-    const KNOWN_TABS = new Set([
-      'overview', 'invitations', 'children', 'funding',
-      'guardians', 'emergency', 'attendance', 'compliance',
-    ])
-    const tabParam = params.get('tab')
-    setModalInitialTab(KNOWN_TABS.has(tabParam) ? tabParam : 'overview')
     setSelectedFamily(match)
-    // The `child` param is currently informational — the per-family
-    // Compliance tab already lists every child in the family. A future
-    // polish step could scroll/focus the named child within the tab;
-    // for now landing on the family + compliance tab is the load-
-    // bearing fix.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, families, params])
+  }, [loading, families, familyIdFromUrl])
 
   function clearDeepLinkParams() {
     // Tidy the URL when the modal closes so refreshing doesn't
@@ -351,19 +350,25 @@ export default function FamiliesPage() {
       )}
 
       {(creating || selectedFamily) && (
+        // v2 reactivity fix: `key` triggers a fresh modal instance
+        // when the family identity changes (so the modal's
+        // useState-initialized form fields read the new family).
+        // Same-family same-modal clicks (e.g. a fixTarget for the
+        // currently-open family) keep the key constant → modal
+        // stays mounted → useSearchParams inside the modal picks up
+        // the new tab/child params reactively. No `initialTab` prop
+        // — the modal reads the tab from the URL directly.
         <FamilyDetailModal
+          key={creating ? '__new__' : selectedFamily?.id}
           userId={user.id}
           family={selectedFamily}
           licenseeProfile={licenseeProfile}
           children={children.filter(c => c.family_id === selectedFamily?.id)}
           guardians={guardians.filter(g => g.family_id === selectedFamily?.id)}
           emergencyContacts={emergency.filter(e => e.family_id === selectedFamily?.id)}
-          initialTab={modalInitialTab}
           onClose={() => {
             setSelectedFamily(null)
             setCreating(false)
-            // Reset the next-open default; clear any sticky deep-link.
-            setModalInitialTab('overview')
             clearDeepLinkParams()
           }}
           onChange={loadAll}
@@ -374,13 +379,55 @@ export default function FamiliesPage() {
 }
 
 // ════════════════════════════════════════════════════════════
-function FamilyDetailModal({ userId, family, licenseeProfile, children: initialChildren, guardians: initialGuardians, emergencyContacts: initialEC, initialTab = 'overview', onClose, onChange }) {
+//
+// 2026-06-14 v2 reactivity fix — `tab` and `focusChildId` are now
+// derived from useSearchParams instead of mirrored from a parent
+// useState. This kills the state-mirror sync bug the v1 attempt
+// hit: when a same-page Link click changed the URL, the v1 page
+// wrote setModalInitialTab(newTab) (async setState), then the
+// modal received a stale initialTab on the SAME render, then a
+// useEffect post-commit tried to setTab(initialTab) → in
+// production this raced React 18's batching and the visible
+// result was a reset to 'overview' rather than the new tab. With
+// a derived value there's no race: the URL says 'children' AT
+// THE SAME RENDER as the page sees the new params.
+//
+// Manual tab clicks push the new tab onto the URL via
+// setSearchParams (replace mode, no history flood). Same source
+// of truth either way.
+//
+// Exported as a named export so the integration-level test
+// (FamiliesPage.deepLink.test.jsx) can mount it through a
+// MemoryRouter without dragging the page's data load.
+const KNOWN_TABS = new Set([
+  'overview', 'invitations', 'children', 'funding',
+  'guardians', 'emergency', 'attendance', 'compliance',
+])
+
+export function FamilyDetailModal({ userId, family, licenseeProfile, children: initialChildren, guardians: initialGuardians, emergencyContacts: initialEC, onClose, onChange }) {
   const isNew = !family
-  // Phase 3 fix-forward (Finding #5): initialTab is the parent's
-  // deep-link target (e.g. 'compliance' when the user clicks "Open
-  // child's compliance tab" on /compliance). When opening a new
-  // family or no deep-link, defaults to 'overview' — pre-fix behavior.
-  const [tab, setTab] = useState(isNew ? 'overview' : initialTab)
+
+  // URL-driven tab. urlTab is the canonical value; the local
+  // setTab function pushes it back into the URL so manual clicks
+  // are visible in history (`replace: true` so they don't pollute
+  // back/forward navigation).
+  const [modalParams, setModalParams] = useSearchParams()
+  const urlTab = modalParams.get('tab')
+  const tab = isNew
+    ? 'overview'
+    : (KNOWN_TABS.has(urlTab) ? urlTab : 'overview')
+
+  const setTab = (newTab) => {
+    if (isNew) return
+    const next = new URLSearchParams(modalParams)
+    next.set('tab', newTab)
+    setModalParams(next, { replace: true })
+  }
+
+  // URL-driven child focus — propagated to ChildrenTab. Same
+  // derivation discipline as tab: read straight from the URL
+  // instead of mirroring through state.
+  const focusChildId = modalParams.get('child')
   const [form, setForm] = useState({
     family_name:                 family?.family_name || '',
     billing_type:                family?.billing_type || 'weekly',
@@ -521,6 +568,7 @@ function FamilyDetailModal({ userId, family, licenseeProfile, children: initialC
               children={initialChildren}
               licenseeProfile={licenseeProfile}
               primaryGuardianName={primaryGuardianName(initialGuardians)}
+              focusChildId={focusChildId}
               onChange={onChange}
             />
           )}
@@ -873,7 +921,30 @@ function primaryGuardianName(guardians) {
   return [primary.first_name, primary.last_name].filter(Boolean).join(' ').trim()
 }
 
-function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuardianName: primaryGuardian, onChange }) {
+function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuardianName: primaryGuardian, focusChildId = null, onChange }) {
+  // v2 reactivity fix — Children-tab focus. URL ?child=<id> →
+  // scroll the matching person-card into view and flash it briefly.
+  // The data-attribute pattern survives child re-renders (no
+  // ref-map bookkeeping), and requestAnimationFrame defers past
+  // the tab switch's first paint.
+  useEffect(() => {
+    if (!focusChildId) return undefined
+    const raf = requestAnimationFrame(() => {
+      // Child ids are UUIDs ([0-9a-f-]) — no CSS escaping needed.
+      const card = document.querySelector(
+        `[data-focus-child="${focusChildId}"]`
+      )
+      if (!card) return
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      card.classList.add('person-card-focus-flash')
+      const t = setTimeout(() => {
+        card.classList.remove('person-card-focus-flash')
+      }, 1500)
+      return () => clearTimeout(t)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [focusChildId, children])
+
   const [adding, setAdding] = useState(false)
   // PR #16: intake-form modal target. null when closed.
   const [intakeTarget, setIntakeTarget] = useState(null)
@@ -960,7 +1031,11 @@ function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuard
             onSaved={async () => { setEditing(null); await onChange() }}
           />
         ) : (
-          <div key={child.id} className="person-card">
+          <div
+            key={child.id}
+            className="person-card"
+            data-focus-child={child.id}
+          >
             <div className="person-avatar">{getInitials(child.first_name + ' ' + (child.last_name || ''))}</div>
             <div className="person-info">
               <div className="person-name">{child.first_name} {child.last_name}</div>
