@@ -700,16 +700,25 @@ Verification — queries run by Seth in the Supabase web SQL Editor on
 Rollback — uncomment the `DOWN MIGRATION` block at the foot of
 `013_training_requirements.sql` (drop the table, then the 2 enums).
 
-### 2026-05-19 — Migration 014: profiles.terms_accepted_at — PENDING PRODUCTION APPLICATION
+### 2026-05-19 — Migration 014: profiles.terms_accepted_at — APPLIED (status corrected 2026-06-15)
 
-> ⚠️ **Status: PENDING PRODUCTION APPLICATION.** Ships on branch
-> `chore/legal-pages-and-consent`; **not yet applied**. Apply per the
-> Migration Application Procedure above — including the user-visible
-> dashboard verification convention (`CLAUDE.md` § Critical Domain
-> Knowledge: the user runs the verification queries in the Supabase
-> web SQL Editor and saves a screenshot). This entry is completed with
-> the actual verification output at application time; the numbers below
-> are *expected*, not confirmed.
+> 🔧 **Status corrected 2026-06-15 — APPLIED.** This entry was
+> originally written as PENDING PRODUCTION APPLICATION but the
+> migration was applied to production sometime after 2026-05-19;
+> the runbook promotion step was skipped (same drift class that
+> caught 026 / 027 / 028 in 2026-06-10 and 038 / 039 / 040 today).
+> Confirmed applied 2026-06-15 via an
+> `information_schema.columns` query against production —
+> `public.profiles.terms_accepted_at` exists. Code-side, three
+> `src/` pages write the column today
+> (`InviteAcceptPage.jsx`, `LoginPage.jsx`,
+> `StaffInviteAcceptPage.jsx`); signups have been working in
+> production, which is consistent with the column being live (a
+> missing column would have made every signup 400 silently).
+> Apply-time verification output was not preserved; the
+> queries below are reconstructed from the migration file as
+> the canonical post-hoc paste-into-SQL-editor evidence
+> whenever a fresh snapshot is wanted.
 
 What the migration does — `014_terms_acceptance.sql` adds a nullable
 `terms_accepted_at timestamptz` column to **both** user-shaped tables:
@@ -779,15 +788,24 @@ Rollback — uncomment the `DOWN MIGRATION` block at the foot of
 discards every recorded acceptance written since application; the
 clickwrap UI continues to gate signup either way.
 
-### 2026-05-19 — Migration 015: Supabase security advisor hardening — PENDING PRODUCTION APPLICATION
+### 2026-05-19 — Migration 015: Supabase security advisor hardening — APPLIED (status corrected 2026-06-15)
 
-> ⚠️ **Status: PENDING PRODUCTION APPLICATION.** Ships on branch
-> `chore/supabase-security-hardening`; **not yet applied**. Apply per
-> the Migration Application Procedure above — including the
-> user-visible dashboard verification convention (`CLAUDE.md`
-> § Critical Domain Knowledge). This entry is completed with the
-> actual verification output at application time; the numbers below
-> are *expected*, not confirmed.
+> 🔧 **Status corrected 2026-06-15 — APPLIED.** This entry was
+> originally written as PENDING PRODUCTION APPLICATION, but
+> `docs/backlog.md` § "Resolved" already recorded 015 as
+> resolved 2026-05-19 alongside the dashboard step for
+> leaked-password protection — the runbook just never caught up.
+> Confirmed applied 2026-06-15 via a `pg_proc.proconfig` query
+> against production: the `search_path` hardening is present on
+> every SECURITY DEFINER + helper function 015 targets
+> (`admin_user_progress`, `current_user_licensee_id`,
+> `current_user_role`, `bump_thread_last_message_at`,
+> `set_funding_source_priority_default`, `handle_new_user`,
+> `set_updated_at`). Apply-time verification output was not
+> preserved in the runbook; the four queries below remain the
+> canonical post-hoc paste-into-SQL-editor evidence whenever a
+> fresh snapshot is wanted, and the dashboard leaked-password
+> toggle step lives at the bottom of this entry.
 
 What the migration does — `015_security_hardening.sql` resolves the
 three pre-existing Supabase security advisor findings recorded in
@@ -2355,3 +2373,354 @@ captured by rollback time, archive them first (the DOWN block in the
 migration file documents the cleanup SQL) — otherwise the original
 strict index will fail to recreate against duplicate active rows of
 the same per-occurrence type.
+
+### ~2026-06-14 — Migration 038: `compliance_documents` table + private bucket + RLS (Phase A of G4 fingerprint upload) — APPLIED + BACKFILLED ENTRY (originally missing entirely from the runbook)
+
+> 🔧 **Backfilled 2026-06-15.** Applied to production during the
+> G4 fingerprint slot session (commit `a56832d` / `fd1cce1`) but
+> the runbook promotion step was skipped — the same drift pattern
+> that caught migrations 026 / 027 / 028 in 2026-06-10. Confirmed
+> applied during the live-gate of the G4 upload (provider uploaded
+> a fingerprint receipt at `/business-info?section=licensing`; the
+> row landed in `public.compliance_documents` and the storage
+> object landed in `compliance-documents/<user_id>/fingerprint_reprint/`).
+> The follow-up J1/J2/J8 batch (migration 039) AND the cycle-date
+> follow-up (migration 040) both depend on this substrate and both
+> are live in production — that further confirms 038 itself is in
+> place. Apply-time verification output was not preserved at
+> session time; the file's six-query verification block
+> (a–f at lines 87–112) is the canonical paste-into-SQL-editor
+> evidence whenever a fresh verification snapshot is wanted.
+
+What the migration does — `038_compliance_documents.sql` ships
+the provider-level compliance evidence substrate that PRs #18 / #21
+(staff file gaps + property records) plus the G4 fingerprint
+upload all consume:
+
+- **`public.compliance_documents` table** — 15 columns including
+  `id`, `user_id` (FK `auth.users`), `document_type text` with
+  `chk_compliance_documents_document_type` CHECK (Phase A accepts
+  `'fingerprint_reprint'` only; extended by mig 039), the storage
+  pointer set (`storage_path`, `original_filename`, `content_type`,
+  `file_size_bytes`), `uploaded_at`, `uploaded_by_user_id`,
+  `retention_until date` (default `current_date + 4 years` per
+  the funding-docs convention), the soft-delete pair (`archived_at`
+  + `archived_by`), `notes`, `created_at`, `updated_at`. NO
+  per-row uniqueness constraint — replace flow is at the slot UI
+  layer (mig file lines 37–43).
+- **`updated_at` trigger** wired to the existing
+  `public.set_updated_at()` from mig 001.
+- **`compliance-documents` private storage bucket** —
+  `(storage.foldername(name))[1] = auth.uid()` ownership template,
+  same shape as `funding-documents` (008) + `consent-attachments`
+  (029).
+- **RLS — 6 policies total.** Three table-level
+  (`SELECT / INSERT / UPDATE` keyed on `auth.uid() = user_id`; no
+  DELETE per the never-hard-delete rule). Three storage-object
+  policies (`INSERT / SELECT / DELETE` keyed on
+  `(storage.foldername(name))[1] = auth.uid()`; no UPDATE — storage
+  objects are immutable).
+
+Storage layout — `compliance-documents/<user_id>/<document_type>/<uuid>.<ext>`.
+The middle segment (`<document_type>`) makes per-type bulk listing
+trivial; the first segment (`<user_id>`) is what storage RLS keys
+off.
+
+Dependencies — stands alone schema-wise (no FK beyond
+`auth.users`). Code-side wired into `src/lib/complianceDocuments.js`
++ `src/components/documents/{DocumentSlot,ComplianceDocumentSlot}.jsx`
++ the Business Info → Licensing section for G4 fingerprint upload.
+
+Verification — confirmed present in production by the G4 upload
+live-gate (file row + storage object both landed); further
+confirmed by 039 and 040 successfully extending the substrate
+in subsequent sessions. The canonical six-query verification
+block lives at lines 87–138 of the migration file (a) table
+columns, (b) `document_type` CHECK, (c) three table RLS policies,
+(d) bucket exists + private, (e) three storage RLS policies,
+(f) row count zero immediately post-apply.
+
+Rollback — destructive; preserves no audit data. ⚠️ **Do NOT
+rollback if production document rows exist** — the 4-year
+retention convention (per the funding-docs precedent) requires
+preservation. Bucket deletion also requires the bucket to be empty
+first. The full rollback SQL is in the migration file's commented
+DOWN block (file lines 314–334).
+
+### ~2026-06-14 — Migration 039: extend `compliance_documents.document_type` CHECK to accept three property doc types — APPLIED + BACKFILLED ENTRY (originally missing entirely from the runbook)
+
+> 🔧 **Backfilled 2026-06-15.** Applied during the J1/J2/J8 property
+> batch session (commit `36a5f23` / `f3e2d30`) but the runbook
+> promotion step was skipped — same drift pattern as 038. Confirmed
+> applied during the live-gate of the property upload slots
+> (provider uploaded radon, heating, and licensing-notebook docs;
+> all three landed in `compliance_documents` and the
+> `chk_compliance_documents_document_type` constraint accepted the
+> new values without error). Migration 040 also relies on this
+> CHECK shape and shipped after 039 — further confirms 039 itself
+> is in place.
+
+What the migration does — `039_compliance_documents_property_types.sql`
+runs a single `BEGIN ... COMMIT` transaction that drops the
+existing `chk_compliance_documents_document_type` constraint
+(which Phase A / mig 038 declared accepting only
+`'fingerprint_reprint'`) and re-adds it accepting four values:
+
+- `fingerprint_reprint` (carried over from 038 — G4)
+- `property_radon_test` (J1 — radon-test report from a tester)
+- `property_heating_inspection` (J2 — HVAC/heating inspection report)
+- `property_licensing_notebook` (J8 — the home's licensing
+  notebook PDF: licensing certificate + correspondence +
+  inspection reports per R 400.1906(3))
+
+The five non-document property rows (CO detectors / smoke
+detectors / fire extinguishers / animal_notification /
+smoking_prohibition_posted) were explicitly classified as OUT
+of the batch — their evidence type doesn't fit a document slot
+and they remain Pattern E feature_not_yet_shipped. The two
+caregiver-scoped types (`physician_attestation` /
+`discipline_policy_ack`) were classified as DEFERRED — they fit
+the substrate but need a `subject_caregiver_id` column on
+`compliance_documents` before they ship. The
+`emergency_response_plan_on_file` row is document-shaped but
+was not enumerated in the batch's task brief; flagged in the
+039 file header as a clean future addition that uses the same
+one-line CHECK-extension migration pattern.
+
+Dependencies — applies AFTER migration 038 (the substrate
+itself). Code-side wired by extending
+`COMPLIANCE_DOCUMENT_TYPES` + the per-type config in
+`src/lib/complianceDocuments.js` and by flipping the three
+property rows in `complianceState.js` from
+`patternENotYetModelled` to
+`buildComplianceDocResolver(documentType)`.
+
+Verification — confirmed present in production by the J1/J2/J8
+upload live-gate (all three new document_type values accepted
+by the CHECK; rows landed in `compliance_documents`). The
+two-query verification block in the migration file (a) at
+lines 65–80 confirms the CHECK definition shape, (b) at lines
+82–93 confirms no existing row was invalidated by the swap.
+
+Rollback — restores the 038 single-value CHECK. ⚠️ If any rows
+of the three new types exist in production at rollback time,
+the `ADD CONSTRAINT` will fail (existing rows would violate the
+narrower CHECK). The migration file's DOWN block (lines
+99–126) documents the archive-first compensation. Treat
+rollback as an emergency-only path.
+
+### ~2026-06-14 — Migration 040: `compliance_documents.next_due_on` nullable date column (provider-entered cycle expiration) — APPLIED + BACKFILLED ENTRY (originally missing entirely from the runbook)
+
+> 🔧 **Backfilled 2026-06-15.** Applied during the cycle-date
+> follow-up session (commit `03b658e` / `f3e2d30`) but the runbook
+> promotion step was skipped — same drift pattern as 038 / 039.
+> Confirmed applied during the live-gate of the radon and heating
+> cycle-date inputs (provider entered a `next_due_on` value via
+> the slot's date input; the value landed on the row, and the
+> resolver flipped the compliance row to ON_FILE with
+> `expires_at` carrying the date; a past-date input flipped the
+> row to EXPIRED with `expired_at`).
+
+What the migration does — `040_compliance_documents_next_due_on.sql`
+adds a single nullable `next_due_on date` column to
+`public.compliance_documents` via `ALTER TABLE ADD COLUMN IF NOT
+EXISTS`. Forward-only, purely additive: no constraint changes, no
+RLS changes, no row mutations. Pre-040 rows leave the column
+NULL.
+
+The column is nullable on purpose:
+
+- Pre-040 rows (any G4 fingerprint or J1/J2/J8 property uploads
+  captured before 040 applied) carry no due-date value. The JS
+  resolver (`buildComplianceDocResolver` in
+  `src/lib/complianceState.js`, cycle branch) treats NULL
+  `next_due_on` on a cycle-required type as MISSING_REQUIRED
+  with reason `'due-date-missing'` — never silently green.
+- The `fingerprint_reprint` and `property_licensing_notebook`
+  types don't recur — `next_due_on` stays NULL on those rows
+  forever. A `NOT NULL` constraint would force a meaningless
+  date on those uploads. The JS layer is the right enforcement
+  point: `requiresDueDate: true` in
+  `COMPLIANCE_DOCUMENT_TYPE_CONFIG` is what gates the
+  must-be-set rule.
+
+Resolver semantics (from `complianceState.js`, cycle branch) —
+the provider enters the next-due date directly via the slot
+(no cycle math in the resolver, straight today-vs-due compare):
+
+- `next_due_on >= today` (ISO Y-M-D, UTC lex compare) → ON_FILE
+  (carries `expires_at = next_due_on`).
+- `next_due_on <  today` → EXPIRED (carries
+  `expired_at = next_due_on`).
+- NULL on a cycle type → MISSING_REQUIRED reason
+  `'due-date-missing'`.
+- §2a load-failure guard still applies → UNKNOWN reason
+  `'compliance-documents-load-failure'`.
+
+Dependencies — applies AFTER migration 039 (the property
+document_type CHECK extension). Code-side wired by adding
+`requiresDueDate` + `dueDateLabel` / `dueDateHelp` to the radon
+and heating entries in `COMPLIANCE_DOCUMENT_TYPE_CONFIG` and
+the cycle branch in `buildComplianceDocResolver`.
+
+Verification — confirmed present in production by the
+radon/heating live-gate; further confirmed by the
+column-comment text being readable in the dashboard (the
+migration's `COMMENT ON COLUMN` ran). The three-query
+verification block in the migration file (a) at lines 54–61
+confirms the column shape, (b) at lines 64–73 confirms no
+existing row was mutated (every pre-040 `next_due_on` is NULL),
+(c) at lines 75–82 confirms the `document_type` CHECK from
+039 is unchanged.
+
+Rollback — drops the column. ⚠️ Lossy in intent: every
+cycle-tracked row loses the provider's attested next-due date,
+and the resolver flips every cycle row to MISSING_REQUIRED until
+each is re-entered. Treat as an emergency path; export the
+`next_due_on` column first if rollback is genuinely necessary
+so the dates can be restored after the followup. The migration
+file's DOWN block (lines 88–94) documents the single-statement
+rollback.
+
+### ~2026-06-14 — Migration 041: `intake_packets` table + `acknowledgments.packet_id` + `consent_attachments` target_type extension + parent RPC (intake-packet capture model, Option D) — APPLIED + BACKFILLED ENTRY (originally missing entirely from the runbook)
+
+> 🔧 **Backfilled 2026-06-15.** The migration was applied to
+> production manually AFTER the
+> `feature/intake-packet-capture` PR's commit message recorded
+> "Migration NOT applied" (the commit was the as-pushed state;
+> the manual apply landed shortly after). Code merged to main
+> with the 1595-test baseline. Confirmed applied 2026-06-15 by
+> a `pg_proc` query against production:
+> `intake_packet_confirm_for_parent` exists with
+> `search_path=public` — and that RPC is created by THIS
+> migration (`041_intake_packets.sql`, lines 380-525), so the
+> migration ran. Further confirmed by:
+> (a) a same-session live-gate of all three capture cases —
+> path (b) uploaded signed copy, path (a) send-for-signature
+> with parent flip, and the path (b) guardrail (no
+> consent_attachments row → no covering acks);
+> (b) a verification query of `public.acknowledgments` showing
+> the `packet_id` column present with 12 rows and 0 populated
+> (the column is in place; production has no packet-tagged
+> acks yet — expected for a freshly-applied capture model
+> before providers exercise it at scale).
+>
+> The earlier-entry runbook drift class (026 / 027 / 028 in
+> 2026-06-10, then 038 / 039 / 040 today) recurred a fourth
+> time. The DB-is-source-of-truth process note at the top of
+> this file remains the standing rule; 041 is the most recent
+> demonstration of why it matters.
+
+What the migration does — `041_intake_packets.sql` ships the
+capture-model substrate for the R 400.1907 intake bundle as
+either (a) a send-for-digital-signature flow or (b) an
+upload-already-signed-copy flow, with the provider declaring
+which of the nine intake elements the artifact covers. Five
+distinct database changes inside one migration:
+
+1. **`public.intake_packets` table** — one row per packet
+   (per send-for-sig request OR per uploaded signed copy). 16
+   columns: `id`, `provider_id` (FK `auth.users`),
+   `subject_type` (CHECK locked to `'child'` for forward
+   compat), `subject_id` (FK `public.children`), `source` CHECK
+   `('digital_signature_request', 'uploaded_signed_copy')`,
+   `status` CHECK `('pending_parent', 'signed', 'archived')`,
+   signature evidence (`signed_via` CHECK
+   `('parent_portal', 'parent_portal_esign', 'in_person_paper')`
+   nullable, `signed_at`, `signed_by_user_id`,
+   `signed_by_label`), `snapshot_hash` (envelope-style drift
+   hash), `attestation_text`, soft-delete pair
+   (`archived_at`, `archived_by`), `created_at`, `updated_at`.
+   DB-floor honesty guardrail via `intake_packets_signed_shape`
+   CHECK: `status='signed'` implies `signed_via IS NOT NULL` AND
+   `signed_at IS NOT NULL`; `status='pending_parent'` implies
+   `signed_via IS NULL`. One-active-per-child partial unique
+   index.
+
+2. **`acknowledgments.packet_id` column** — nullable FK to
+   `intake_packets(id)` ON DELETE SET NULL, plus a partial
+   index where `packet_id IS NOT NULL`. Every pre-041 row stays
+   valid (NULL = free-standing, the pre-Option-D world). The
+   nine intake-row resolvers in `complianceState.js` do NOT
+   read this column — `packet_id` is metadata for a future
+   "display grouping" PR that collapses the per-element wall.
+
+3. **`consent_attachments.target_type` CHECK extension** —
+   adds `'intake_packet'` alongside the existing
+   `'acknowledgment'` and `'medication_authorization'` so a
+   path-(b) uploaded signed copy attaches to the packet row.
+
+4. **Parent SELECT policy on `consent_attachments`** —
+   walked from mig 030's 3-EXISTS-branch shape to a 4-branch
+   shape; the new branch joins through `intake_packets →
+   children → parent_family_links` and matches the existing
+   acknowledgment branch's privacy contract.
+
+5. **`intake_packet_confirm_for_parent` RPC** — mirrors mig
+   025's `intake_confirm_for_parent` (same auth + archive +
+   insert + reminder-resolve transaction) PLUS packet_id
+   stamping on the new acks AND the
+   `intake_packets.status` flip (pending_parent → signed). A
+   separate function (not a modified 025) so the legacy
+   non-packet send-to-portal path keeps working unchanged.
+   SECURITY DEFINER with the canonical rule-4 revoke/grant
+   trailer (`PUBLIC` and `anon` revoked, `authenticated`
+   granted).
+
+Honesty guardrail — green must never be a bare checkbox.
+Enforcement points:
+
+- **App layer (write-time, load-bearing).** Path (a) writes
+  covering acks as `acknowledged_via='provider_override'`
+  which `patternAAckOnFile` reads as `pending_parent` — they
+  CANNOT read `on_file` until the parent signs. Path (b)
+  refuses the ack-insert step unless a `consent_attachments`
+  row with `target_type='intake_packet'` exists FIRST.
+- **DB floor (defense in depth).** The
+  `intake_packets_signed_shape` CHECK above prevents an
+  accidental "pending but already signed" or "signed but no
+  signature evidence" state at the DB.
+
+Dependencies — applies AFTER migrations 024 (acknowledgments
+table), 025 (`intake_confirm_for_parent` — the mirror
+source), 029 (consent_attachments substrate), 030 (parent
+SELECT policy on consent_attachments). Code-side wired into
+`src/lib/intakePackets.js` + `src/components/families/
+ChildIntakeModal.jsx`'s opt-in `PacketCaptureForm` +
+`src/pages/ParentIntakeAcknowledgePage.jsx`'s pending-packet
+routing.
+
+Verification — confirmed applied 2026-06-15 by:
+
+- **`pg_proc` query** — `intake_packet_confirm_for_parent`
+  exists with `search_path=public`. This RPC is created only
+  by this migration, so its presence is proof of apply.
+- **Live-gate (same session).** All three capture cases passed:
+  path (b) uploaded artifact + N covering acks landed; path
+  (a) packet pending_parent + provider_override acks landed;
+  the path (b) guardrail blocked the ack-write when no
+  attachment had been uploaded first.
+- **`information_schema.columns` query** — `acknowledgments`
+  shows `packet_id` column with 12 existing rows and 0
+  populated (the column is in place; production has no
+  packet-tagged acks yet because providers have not exercised
+  the new capture surface at scale — expected at this point
+  in the rollout).
+- The seven-query verification block in the migration file
+  header (lines 100–164: table shape, signed-shape CHECK,
+  packet_id column + index, consent_attachments CHECK
+  extension, parent policy 4th branch, four RLS policies on
+  `intake_packets`, RPC existence + arg signature, existing
+  acks regression) remains the canonical paste-into-SQL-editor
+  evidence whenever a fresh snapshot is wanted.
+
+Rollback — destructive on multiple surfaces. ⚠️ **Do NOT
+rollback if production packet rows or packet-stamped ack rows
+exist** — the audit trail requires preservation. The
+migration file's DOWN block (lines 562–588) documents the
+order: drop the RPC, restore mig 030's 3-branch parent SELECT
+policy, restore the mig 029 target_type CHECK to its
+2-value form, drop `acknowledgments.packet_id`, drop the
+`intake_packets` table + indexes + policies + trigger.
+Storage in the `consent-attachments` bucket is untouched
+(no objects are deleted by rollback).
