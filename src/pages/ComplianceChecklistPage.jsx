@@ -23,7 +23,10 @@ import { Printer } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useActiveModules } from '@/hooks/useActiveModules'
 import { computeProviderComplianceStateWithOverrides } from '@/lib/complianceStateLoader'
-import { CATEGORIES } from '@/lib/complianceState'
+// `CATEGORIES` is consumed by ChecklistCategoryCard directly from
+// `@/lib/complianceState`; no need to re-export through this page.
+// (Used to be imported here purely as a symbolic anchor; eslint
+// caught the dead `void CATEGORIES` reference that propped that up.)
 import { findChildDisplayName } from '@/lib/children'
 import {
   resolveComplianceChecklistGate,
@@ -272,11 +275,6 @@ export default function ComplianceChecklistPage() {
       </p>
     </div>
   )
-  // CATEGORIES is referenced symbolically inside ChecklistCategoryCard;
-  // imported here so consumers see one canonical import surface.
-  // (The void expression that used to live here was stale lint-
-  // suppression scaffolding — removed on the Phase 3 redirect-race fix.)
-  void CATEGORIES   // eslint-disable-line no-unused-expressions
 }
 
 function Totals({ state }) {

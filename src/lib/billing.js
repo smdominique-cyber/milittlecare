@@ -109,6 +109,7 @@ export function getNextInvoicePeriod(family, today, lastInvoicePeriodEnd = null)
   if (freq === 'weekly' || freq === 'biweekly' || freq === 'custom') {
     const cycleWeeks = getCycleWeeks(family)
     // Advance cycleStart in cycleWeeks×7 jumps until cycleEnd >= today
+    // eslint-disable-next-line no-constant-condition -- walk-cycles-until-break idiom
     while (true) {
       const fullCycleEnd = addDays(cycleStart, cycleWeeks * 7 - 1)
       // Apply end-day override: roll back to the most recent occurrence of end_day
@@ -143,6 +144,7 @@ export function getNextInvoicePeriod(family, today, lastInvoicePeriodEnd = null)
   } else if (freq === 'monthly') {
     if (family.billing_monthly_mode === 'four_weeks') {
       const cycleDays = 28
+      // eslint-disable-next-line no-constant-condition -- walk-cycles-until-break idiom
       while (true) {
         const fullEnd = addDays(cycleStart, cycleDays - 1)
         let candidateEnd

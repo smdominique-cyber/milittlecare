@@ -94,15 +94,22 @@ export default function DocumentSlot({
   parentScope,
   onChanged,
 }) {
-  if (!table || !bucket || !documentType || !config) {
-    if (typeof console !== 'undefined') {
-      console.warn(
-        'DocumentSlot: missing required props ' +
-        `{ table, bucket, documentType, config } (got ${table} / ${bucket} / ${documentType})`
-      )
-    }
-    return null
-  }
+  // ─── ALL HOOKS GO ABOVE THE PROP-VALIDITY GUARD ─────────────────────
+  //
+  // 2026-06-15 — rules-of-hooks correction. The prop-validity guard
+  // that follows this block used to sit ABOVE these hooks; that meant
+  // a caller who re-rendered DocumentSlot with present-then-missing
+  // props would skip every hook on the missing-props cycle, leaving
+  // React's hook-order tracking out of sync on the next present-props
+  // cycle (subsequent useStates would receive each other's values).
+  // In production the bug never fired — every caller
+  // (ComplianceDocumentSlot, FundingDocumentSlot, etc.) supplies all
+  // required props at compile time — but the rule exists for the
+  // exact case where a future caller doesn't. Hooks moved up; guard
+  // returns null below.
+  //
+  // Hook bodies that read from `config` use optional chaining so they
+  // don't throw when this render is going to be a no-op anyway.
 
   const { user } = useAuth()
   const [documents, setDocuments] = useState([])
@@ -117,7 +124,10 @@ export default function DocumentSlot({
   // failing client-side surfaces the error where the provider can
   // act on it). For non-cycle slots this state is ignored and the
   // input never renders.
-  const requiresDueDate = !!config.requiresDueDate
+  // `config?.requiresDueDate` — optional chaining so the
+  // missing-prop render path (handled by the guard below) doesn't
+  // throw before the guard runs.
+  const requiresDueDate = !!config?.requiresDueDate
   const [dueDate, setDueDate] = useState('')
 
   // Compose the WHERE clause once. `parentScope` is opt-in: when
@@ -136,6 +146,14 @@ export default function DocumentSlot({
 
   // Initial fetch + refetch on key change.
   useEffect(() => {
+    // Guard inside the effect body — required props might be missing
+    // on this render (the component guard below returns null in that
+    // case, but the effect still scheduled and would otherwise call
+    // supabase.from(undefined)).
+    if (!table || !documentType) {
+      setLoading(false)
+      return undefined
+    }
     if (!user) {
       setLoading(false)
       return undefined
@@ -182,11 +200,31 @@ export default function DocumentSlot({
   // because there's no single "current" doc to pre-fill from; the
   // requiresDueDate / multi=true combination would need its own UX
   // and isn't shipping today.
+  //
+  // `config?.multi` — same optional-chaining reason as above; the
+  // hook runs even on the missing-prop render and `config` can be
+  // undefined until the prop-validity guard below returns null.
   useEffect(() => {
-    if (!requiresDueDate || config.multi) return
+    if (!requiresDueDate || config?.multi) return
     const current = (documents || []).find(d => !d.archived_at)
     setDueDate(current?.next_due_on || '')
-  }, [requiresDueDate, config.multi, documents])
+  }, [requiresDueDate, config?.multi, documents])
+
+  // ─── PROP-VALIDITY GUARD (moved BELOW the hooks per rules-of-hooks) ──
+  //
+  // The guard preserves the original null-render behavior — if a
+  // caller forgets a required prop, we still bail. We just bail
+  // AFTER the hooks have registered, so the hook-order contract is
+  // honored on every render regardless of which props are present.
+  if (!table || !bucket || !documentType || !config) {
+    if (typeof console !== 'undefined') {
+      console.warn(
+        'DocumentSlot: missing required props ' +
+        `{ table, bucket, documentType, config } (got ${table} / ${bucket} / ${documentType})`
+      )
+    }
+    return null
+  }
 
   // Build the INSERT payload. parentScope inserts the column on
   // funding_documents; without it, the row is provider-level. For

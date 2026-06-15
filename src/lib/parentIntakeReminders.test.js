@@ -26,11 +26,7 @@ function mockSupabaseWithRpc(impl) {
   const client = {
     rpc: vi.fn(async (name, args) => {
       calls.push({ name, args })
-      try {
-        return impl(name, args)
-      } catch (err) {
-        throw err
-      }
+      return impl(name, args)
     }),
   }
   return { client, calls }
