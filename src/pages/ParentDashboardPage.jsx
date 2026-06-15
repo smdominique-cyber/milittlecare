@@ -6,7 +6,14 @@ import AutopayEnrollment from '@/components/parent/AutopayEnrollment'
 import BusinessInfoSection from '@/components/parent/BusinessInfoSection'
 import AcknowledgmentBanner from '@/components/parent/AcknowledgmentBanner'
 import EnrollmentConsentsPendingBanner from '@/components/parent/EnrollmentConsentsPendingBanner'
+import IntakePendingBanner from '@/components/parent/IntakePendingBanner'
 import InstallBanner from '@/components/ui/InstallBanner'
+import {
+  resolveParentPortalProviderName,
+  resolveHasPasswordState,
+  shouldShowPasswordBanner,
+  PASSWORD_BANNER_STATE,
+} from '@/lib/parentPortal'
 import '@/styles/parent.css'
 
 function formatCurrency(n) {
@@ -63,8 +70,15 @@ export default function ParentDashboardPage() {
   const [attendance, setAttendance] = useState([])
   const [working, setWorking] = useState(null)
 
-  // Password setup state
-  const [hasPassword, setHasPassword] = useState(null)
+  // Password setup state.
+  //
+  // `passwordBannerState` is a tri-state — HAS_PASSWORD / EXPLICITLY_NO_PASSWORD
+  // / UNKNOWN — derived from `parent_profiles.has_password`. The banner shows
+  // ONLY on EXPLICITLY_NO_PASSWORD; UNKNOWN hides it. See `resolveHasPasswordState`
+  // in `src/lib/parentPortal.js` for the bug history (in short: signup never
+  // writes `has_password=true`, so coercing null→false caused the banner to
+  // fire for parents who DID have a working password).
+  const [passwordBannerState, setPasswordBannerState] = useState(null)
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [pwFields, setPwFields] = useState({ password: '', confirm: '' })
@@ -115,12 +129,20 @@ export default function ParentDashboardPage() {
   }, [session, families])
 
   async function checkHasPassword(userId) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('parent_profiles')
       .select('has_password')
       .eq('id', userId)
       .maybeSingle()
-    setHasPassword(!!data?.has_password)
+    // Rule 2 — check `.error` on every Supabase call. A failed RLS read here
+    // should leave the banner state UNKNOWN (banner hidden) rather than
+    // implying the parent has no password set.
+    if (error) {
+      console.warn('[ParentDashboard] checkHasPassword read failed:', error.message)
+      setPasswordBannerState(resolveHasPasswordState(null))
+      return
+    }
+    setPasswordBannerState(resolveHasPasswordState(data))
   }
 
   async function loadData(parentId) {
@@ -337,12 +359,18 @@ export default function ParentDashboardPage() {
       return
     }
     if (session?.user?.id) {
-      await supabase
+      const { error: writeErr } = await supabase
         .from('parent_profiles')
         .update({ has_password: true })
         .eq('id', session.user.id)
+      // Rule 2 — surface the write failure so the banner doesn't lie. If the
+      // write fails the page just hides the banner; it won't claim success
+      // and re-fire on next mount.
+      if (writeErr) {
+        console.warn('[ParentDashboard] has_password write failed:', writeErr.message)
+      }
     }
-    setHasPassword(true)
+    setPasswordBannerState(resolveHasPasswordState({ has_password: true }))
     setPwSaving(false)
     setShowPasswordModal(false)
     setMessage({ type: 'success', text: '✓ Password saved. You can now sign in with email + password.' })
@@ -410,9 +438,15 @@ export default function ParentDashboardPage() {
 
   const primaryFamily = families[0]
   const primaryProvider = providers[primaryFamily.user_id]
-  const primaryProviderName = primaryProvider?.daycare_name || primaryProvider?.full_name || 'Your provider'
+  // Brand-header name — same fallback chain `api/send-invitation.js:152` uses
+  // so the name in the parent's invite email matches the portal header.
+  const primaryProviderName = resolveParentPortalProviderName(primaryProvider)
 
-  const showPasswordBanner = hasPassword === false && !bannerDismissed
+  const showPasswordBanner = shouldShowPasswordBanner(passwordBannerState) && !bannerDismissed
+  // Settings-menu copy (Change vs Set a password). Only flip to "Change" when
+  // we're sure the parent already has a password set; otherwise stay on "Set a
+  // password" — same default as before the tri-state refactor.
+  const hasPassword = passwordBannerState === PASSWORD_BANNER_STATE.HAS_PASSWORD
 
   return (
     <div className="parent-shell">
@@ -421,7 +455,7 @@ export default function ParentDashboardPage() {
           <div className="parent-brand">
             <div className="parent-brand-mark">🏠</div>
             <div>
-              <div className="parent-brand-name">MI Little Care</div>
+              <div className="parent-brand-name">{primaryProviderName}</div>
               <div className="parent-brand-tag">FAMILY PORTAL</div>
             </div>
           </div>
@@ -438,6 +472,18 @@ export default function ParentDashboardPage() {
 
         {/* Acknowledgment digest banner (PR #12) */}
         {session?.user?.id && <AcknowledgmentBanner parentId={session.user.id} />}
+
+        {/* Intake-packet pending banner (2026-06-15) — surfaces the
+            `intake_acknowledgment_pending` reminder loop on the dashboard. The
+            dispatcher still emails the parent (fire-once); this banner is the
+            in-portal mirror so a parent who's already logged in doesn't have
+            to wait for the email to know there's an unsigned packet. */}
+        {session?.user?.id && (
+          <IntakePendingBanner
+            parentId={session.user.id}
+            children={children}
+          />
+        )}
 
         {/* Consents Phase A (2026-05-30) — enrollment-consent discovery banner.
             Informational only: in Phase A there is no parent-portal
