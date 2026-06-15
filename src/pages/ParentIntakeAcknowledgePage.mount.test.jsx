@@ -60,6 +60,15 @@ function chainFor(table) {
   //   - INSERT call:      .insert(rows)             -> awaitable { error }
   // For UPDATE and INSERT we record the call so the test can assert
   // shape; SELECT just resolves from `tableData[table]`.
+  //
+  // 2026-06-14 mig 041 — the page now dispatches via
+  // findPendingPacketForChild before calling the legacy
+  // intake_confirm_for_parent RPC; that query terminates with
+  // .order().limit().maybeSingle(). The chain has to handle all
+  // three. maybeSingle resolves from `tableData[table]` shaped as
+  // a single object (or null if missing) so a default empty
+  // tableData implies "no pending packet" → the page falls through
+  // to the legacy RPC, preserving every existing test's contract.
   let mode = 'select'
   let updatePayload = null
   const chain = {
@@ -67,6 +76,15 @@ function chainFor(table) {
     eq() { return chain },
     in() { return chain },
     is() { return chain },
+    order() { return chain },
+    limit() { return chain },
+    maybeSingle() {
+      const raw = tableData[table]
+      const single = Array.isArray(raw)
+        ? (raw[0] ?? null)
+        : (raw ?? null)
+      return Promise.resolve({ data: single, error: null })
+    },
     update(payload) {
       mode = 'update'
       updatePayload = payload
