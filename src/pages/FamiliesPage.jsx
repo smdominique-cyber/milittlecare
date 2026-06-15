@@ -351,7 +351,17 @@ export default function FamiliesPage() {
       )}
 
       {(creating || selectedFamily) && (
+        // 2026-06-14 deep-link reactivity (Issue: clicking a
+        // Families fixTarget while already inside the modal did
+        // nothing because the modal's internal state was initialized
+        // once and never re-read). The `key` makes a different
+        // family unmount + remount cleanly so its useState
+        // initializers pick up the new family. Same-family deep-
+        // links (just tab/child changing) keep the modal mounted and
+        // are handled by the in-modal useEffect on initialTab +
+        // focusChildId — see FamilyDetailModal below.
         <FamilyDetailModal
+          key={creating ? '__new__' : selectedFamily?.id}
           userId={user.id}
           family={selectedFamily}
           licenseeProfile={licenseeProfile}
@@ -359,6 +369,12 @@ export default function FamiliesPage() {
           guardians={guardians.filter(g => g.family_id === selectedFamily?.id)}
           emergencyContacts={emergency.filter(e => e.family_id === selectedFamily?.id)}
           initialTab={modalInitialTab}
+          // 2026-06-14 deep-link reactivity. The child param is now
+          // wired all the way through to the Children tab so a
+          // /families?…&child=Y deep-link scrolls/highlights child Y.
+          // Sourced from the URL, so it updates reactively alongside
+          // initialTab.
+          focusChildId={params.get('child')}
           onClose={() => {
             setSelectedFamily(null)
             setCreating(false)
@@ -374,13 +390,31 @@ export default function FamiliesPage() {
 }
 
 // ════════════════════════════════════════════════════════════
-function FamilyDetailModal({ userId, family, licenseeProfile, children: initialChildren, guardians: initialGuardians, emergencyContacts: initialEC, initialTab = 'overview', onClose, onChange }) {
+//
+// Exported as a named export 2026-06-14 so the deep-link reactivity
+// test (FamiliesPage.deepLink.test.jsx) can mount it without
+// dragging the whole FamiliesPage in. The default export of this
+// file is still the page component.
+export function FamilyDetailModal({ userId, family, licenseeProfile, children: initialChildren, guardians: initialGuardians, emergencyContacts: initialEC, initialTab = 'overview', focusChildId = null, onClose, onChange }) {
   const isNew = !family
   // Phase 3 fix-forward (Finding #5): initialTab is the parent's
   // deep-link target (e.g. 'compliance' when the user clicks "Open
   // child's compliance tab" on /compliance). When opening a new
   // family or no deep-link, defaults to 'overview' — pre-fix behavior.
   const [tab, setTab] = useState(isNew ? 'overview' : initialTab)
+
+  // 2026-06-14 deep-link reactivity. The pre-fix code used initialTab
+  // ONLY in the useState initializer above, so a same-page navigation
+  // that updated the URL (e.g. clicking a compliance fixTarget while
+  // the modal was already open) changed the prop but left `tab` stuck
+  // on whatever the user had set. This effect re-syncs tab with
+  // initialTab when the URL changes. Manual tab clicks call setTab
+  // without touching the URL, so initialTab stays the same and this
+  // effect does NOT fight the user's navigation.
+  useEffect(() => {
+    if (isNew) return
+    setTab(initialTab)
+  }, [initialTab, isNew])
   const [form, setForm] = useState({
     family_name:                 family?.family_name || '',
     billing_type:                family?.billing_type || 'weekly',
@@ -521,6 +555,7 @@ function FamilyDetailModal({ userId, family, licenseeProfile, children: initialC
               children={initialChildren}
               licenseeProfile={licenseeProfile}
               primaryGuardianName={primaryGuardianName(initialGuardians)}
+              focusChildId={focusChildId}
               onChange={onChange}
             />
           )}
@@ -873,7 +908,40 @@ function primaryGuardianName(guardians) {
   return [primary.first_name, primary.last_name].filter(Boolean).join(' ').trim()
 }
 
-function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuardianName: primaryGuardian, onChange }) {
+function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuardianName: primaryGuardian, focusChildId = null, onChange }) {
+  // 2026-06-14 deep-link reactivity — Children-tab focus. When the
+  // URL carries ?child=<id> AND we land on this tab, find that
+  // child's person-card and bring it into view with a brief highlight
+  // so the provider sees WHICH row the deep-link is pointing at.
+  // No imperative ref map — we tag each card with a data-attribute
+  // and look it up by selector, so a child re-render that produces a
+  // fresh DOM node still resolves.
+  useEffect(() => {
+    if (!focusChildId) return undefined
+    // Defer a frame so the just-rendered card exists in the DOM. The
+    // tab switch + focus arrive in the same render, so the effect
+    // body's querySelector would otherwise race the children list's
+    // first paint.
+    const raf = requestAnimationFrame(() => {
+      // Child ids are UUIDs (mig 016 + 021 — `[0-9a-f-]`); no CSS
+      // escaping needed. If a future id source uses non-UUID
+      // characters, switch to `CSS.escape(focusChildId)`.
+      const card = document.querySelector(
+        `[data-focus-child="${focusChildId}"]`
+      )
+      if (!card) return
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      card.classList.add('person-card-focus-flash')
+      // 1500ms is the existing chip-fade cadence elsewhere on the
+      // page; matches the rhythm of the success chips.
+      const t = setTimeout(() => {
+        card.classList.remove('person-card-focus-flash')
+      }, 1500)
+      return () => clearTimeout(t)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [focusChildId, children])
+
   const [adding, setAdding] = useState(false)
   // PR #16: intake-form modal target. null when closed.
   const [intakeTarget, setIntakeTarget] = useState(null)
@@ -960,7 +1028,11 @@ function ChildrenTab({ userId, familyId, children, licenseeProfile, primaryGuard
             onSaved={async () => { setEditing(null); await onChange() }}
           />
         ) : (
-          <div key={child.id} className="person-card">
+          <div
+            key={child.id}
+            className="person-card"
+            data-focus-child={child.id}
+          >
             <div className="person-avatar">{getInitials(child.first_name + ' ' + (child.last_name || ''))}</div>
             <div className="person-info">
               <div className="person-name">{child.first_name} {child.last_name}</div>
