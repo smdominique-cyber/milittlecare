@@ -23,6 +23,12 @@ import {
   findActiveAck,
   requiredSubTypesForChild,
 } from '@/lib/acknowledgments'
+import {
+  INTAKE_PACKET_COVERABLE_TYPES,
+  packetCoverableForChild,
+  sendPacketForSignature,
+  saveUploadedPacket,
+} from '@/lib/intakePackets'
 
 // Copy version strings are stamped into each ack row's snapshot_hash via
 // the payload. Bumping a version invalidates prior acks of that type
@@ -110,6 +116,14 @@ export default function ChildIntakeModal({
   const [providerReason, setProviderReason] = useState(
     'Captured at child intake; parent acknowledged in person.'
   )
+
+  // 2026-06-14 mig 041 — intake packet capture (opt-in alternative
+  // to the per-element form). When packetMode=true, the modal body
+  // swaps in the packet sub-form; the existing per-element capture
+  // stays the default. See src/lib/intakePackets.js for the write
+  // contract on both paths (a digital_signature_request and
+  // b uploaded_signed_copy).
+  const [packetMode, setPacketMode] = useState(false)
 
   // Inline success confirmation per save (2026-06-02 fix — same
   // pattern as MedicationModal and EnrollmentConsentsModal). The
@@ -528,6 +542,48 @@ export default function ChildIntakeModal({
             plus one row per applicable disclosure below.
           </p>
 
+          {/* mig-041 packet capture entry point. When the provider
+              has a single signed PDF (or wants to send a single
+              PDF for digital signature) that covers multiple
+              intake elements, they switch into the packet sub-flow
+              here. The existing per-element form stays the default
+              path so providers who capture acks one-at-a-time see
+              no UX change. */}
+          {!packetMode ? (
+            <button
+              type="button"
+              onClick={() => setPacketMode(true)}
+              style={{
+                alignSelf: 'flex-start',
+                padding: '8px 12px',
+                border: '1px dashed var(--clr-warm-mid)',
+                borderRadius: 'var(--radius-md)',
+                background: 'transparent',
+                color: 'var(--clr-ink-mid)',
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+              }}
+            >
+              Use a signed intake packet (single PDF) instead
+            </button>
+          ) : (
+            <PacketCaptureForm
+              providerId={userId}
+              child={child}
+              profile={profile}
+              primaryGuardianName={primaryGuardianName}
+              onCancel={() => setPacketMode(false)}
+              onSaved={async (kind) => {
+                setPacketMode(false)
+                showSuccess(`packet:${kind}`,
+                  kind === 'pending_parent'
+                    ? 'Intake packet sent — waiting for parent signature.'
+                    : 'Intake packet recorded.')
+                onSaved?.()
+              }}
+            />
+          )}
+
           {/* PR consent-attachments Part 2 — bundle-level attach.
               Per scope §12, attach a scanned/photographed copy of the
               signed paper intake bundle at the ENVELOPE level (one
@@ -852,4 +908,212 @@ function subTypePayload(type, ctx) {
     default:
       return {}
   }
+}
+
+// -----------------------------------------------------------------------------
+// PacketCaptureForm — mig 041 sub-form
+// -----------------------------------------------------------------------------
+//
+// Opt-in alternative to the per-element capture. Provider picks a
+// path (a — send for signature; b — upload signed copy), sees the
+// coverable intake elements ALL PRE-CHECKED for this child, and
+// unchecks any the packet does NOT cover. On submit, the write
+// helpers in src/lib/intakePackets.js handle the full sequence
+// (packet row + path-specific artifact + covering acks); covered
+// elements get acks (in_person_paper or provider_override per
+// path), uncovered elements get nothing — so they stay
+// missing_required in the per-row checklist.
+function PacketCaptureForm({
+  providerId,
+  child,
+  profile,
+  primaryGuardianName,
+  onCancel,
+  onSaved,
+}) {
+  const [path, setPath] = useState('uploaded_signed_copy')
+  const coverableForThisChild = useMemo(
+    () => packetCoverableForChild({ child, profile }),
+    [child, profile]
+  )
+  // Default: all coverable types checked.
+  const [coveredSet, setCoveredSet] = useState(() => new Set(coverableForThisChild))
+  const [file, setFile] = useState(null)
+  const [parentLabel, setParentLabel] = useState(primaryGuardianName || '')
+  const [attestation, setAttestation] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  function toggle(type) {
+    setCoveredSet(prev => {
+      const next = new Set(prev)
+      if (next.has(type)) next.delete(type)
+      else next.add(type)
+      return next
+    })
+  }
+
+  // Path-(b) guardrail mirror: button disabled until the file is
+  // picked. The lib helper also refuses without it (defense in
+  // depth — same write-layer guardrail tested in
+  // intakePackets.test.js).
+  const canSubmit =
+    coveredSet.size > 0 &&
+    (path === 'uploaded_signed_copy'
+      ? !!file && parentLabel.trim().length > 0
+      : true)
+
+  async function submit() {
+    setError(null)
+    setSaving(true)
+    try {
+      const coveredTypes = Array.from(coveredSet)
+      if (path === 'uploaded_signed_copy') {
+        await saveUploadedPacket({
+          providerId,
+          child,
+          profile,
+          file,
+          signedByLabel: parentLabel,
+          coveredTypes,
+          attestationText: attestation || null,
+        })
+        onSaved?.('signed')
+      } else {
+        await sendPacketForSignature({
+          providerId,
+          child,
+          profile,
+          coveredTypes,
+          attestationText: attestation || null,
+        })
+        onSaved?.('pending_parent')
+      }
+    } catch (e) {
+      console.error('PacketCaptureForm: submit failed', e)
+      setError(e?.message || 'Couldn’t save the packet. Try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{
+      border: '1px solid var(--clr-warm-mid)',
+      borderRadius: 'var(--radius-md)',
+      padding: 12,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12,
+    }}>
+      <strong style={{ fontSize: '0.9375rem' }}>Intake packet</strong>
+
+      {/* Path picker */}
+      <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+        <legend style={{ padding: 0, fontWeight: 500, fontSize: '0.875rem', marginBottom: 4 }}>
+          How are you handling the signature?
+        </legend>
+        <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: 4 }}>
+          <input type="radio" name="packet-path" value="uploaded_signed_copy"
+            checked={path === 'uploaded_signed_copy'}
+            onChange={() => setPath('uploaded_signed_copy')}
+            disabled={saving} />
+          {' '}I have a signed copy to upload
+        </label>
+        <label style={{ display: 'block', fontSize: '0.875rem' }}>
+          <input type="radio" name="packet-path" value="digital_signature_request"
+            checked={path === 'digital_signature_request'}
+            onChange={() => setPath('digital_signature_request')}
+            disabled={saving} />
+          {' '}Send to parent's portal for digital signature
+        </label>
+      </fieldset>
+
+      {/* Coverage checklist */}
+      <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+        <legend style={{ padding: 0, fontWeight: 500, fontSize: '0.875rem', marginBottom: 4 }}>
+          What does this packet cover? (Uncheck anything it does NOT cover.)
+        </legend>
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {INTAKE_PACKET_COVERABLE_TYPES.filter(t => coverableForThisChild.includes(t)).map(t => (
+            <li key={t} style={{ fontSize: '0.875rem' }}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={coveredSet.has(t)}
+                  onChange={() => toggle(t)}
+                  disabled={saving}
+                />
+                {' '}{SUB_TYPE_LABEL[t] || t}
+              </label>
+            </li>
+          ))}
+        </ul>
+      </fieldset>
+
+      {path === 'uploaded_signed_copy' && (
+        <>
+          <div style={{ fontSize: '0.875rem' }}>
+            <label htmlFor="packet-file" style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>
+              Signed packet file (PDF, JPG, PNG, HEIC — max 10 MB)
+            </label>
+            <input
+              id="packet-file"
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.heic,.heif,application/pdf,image/jpeg,image/png,image/heic,image/heif"
+              onChange={e => setFile(e.target.files?.[0] || null)}
+              disabled={saving}
+            />
+          </div>
+          <div style={{ fontSize: '0.875rem' }}>
+            <label htmlFor="packet-parent-label" style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>
+              Parent's name (as signed on the packet) *
+            </label>
+            <input
+              id="packet-parent-label"
+              className="field-input"
+              value={parentLabel}
+              onChange={e => setParentLabel(e.target.value)}
+              disabled={saving}
+            />
+          </div>
+        </>
+      )}
+
+      <div style={{ fontSize: '0.875rem' }}>
+        <label htmlFor="packet-attestation" style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>
+          Notes (optional)
+        </label>
+        <textarea
+          id="packet-attestation"
+          className="field-input"
+          value={attestation}
+          onChange={e => setAttestation(e.target.value)}
+          disabled={saving}
+          rows={2}
+        />
+      </div>
+
+      {error && (
+        <div role="alert" style={{ color: 'var(--clr-danger, #b00020)', fontSize: '0.875rem' }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button type="button" className="btn-discard" onClick={onCancel} disabled={saving}>
+          Back to per-item capture
+        </button>
+        <button
+          type="button"
+          className="btn-save"
+          onClick={submit}
+          disabled={saving || !canSubmit}
+          style={{ flex: 'initial', padding: '0.5rem var(--space-4)' }}
+        >
+          {saving ? 'Saving…' : path === 'uploaded_signed_copy' ? 'Save packet' : 'Send for signature'}
+        </button>
+      </div>
+    </div>
+  )
 }

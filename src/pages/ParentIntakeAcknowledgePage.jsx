@@ -50,6 +50,10 @@ import {
 // the reminder inline as part of the same atomic transaction that writes
 // the parent_portal acks.
 import { listPendingForParent } from '@/lib/parentIntakeReminders'
+import {
+  findPendingPacketForChild,
+  confirmIntakePacketAsParent,
+} from '@/lib/intakePackets'
 import '@/styles/parent.css'
 
 export default function ParentIntakeAcknowledgePage() {
@@ -218,25 +222,32 @@ export default function ParentIntakeAcknowledgePage() {
       //
       // intake_confirm_for_parent (migration 025) is a SECURITY
       // DEFINER RPC that does archive + insert + resolve in one
-      // transaction. The pre-fix JS issued the archive UPDATE and the
-      // parent_portal INSERT as two separate HTTP requests. The
-      // archive ran under the parent's session and was silently
-      // filtered to zero rows by RLS — the only UPDATE policy on
-      // acknowledgments is provider-scoped (`provider_id =
-      // auth.uid()`), and the parent isn't the provider. The INSERT
-      // then collided with the still-active provider_override rows on
-      // the `acknowledgments_active_unique` partial index. See
-      // migration 025's header for the root-cause writeup.
+      // transaction. See migration 025's header for the root-cause
+      // writeup of the parent-confirm bug it fixes.
       //
-      // The RPC also resolves any pending
-      // intake_acknowledgment_pending reminder for this child inline,
-      // so we no longer need the separate resolvePendingForChild call
-      // that confirmChild used to make.
-      const { error: rpcErr } = await supabase.rpc(
-        'intake_confirm_for_parent',
-        { p_child_id: child.id, p_rows: rowsForRpc },
-      )
-      if (rpcErr) throw rpcErr
+      // 2026-06-14 (mig 041 intake-packet capture): if this child
+      // has an active pending intake_packets row, route to the
+      // mirror RPC `intake_packet_confirm_for_parent` instead.
+      // Same archive + insert + resolve shape PLUS packet_id
+      // stamping + intake_packets.status flip in one transaction.
+      // Falls through to the legacy RPC when there's no packet
+      // (free-standing provider_override rows from the original
+      // ChildIntakeModal.handleSendToPortal path keep working
+      // unchanged).
+      const pendingPacket = await findPendingPacketForChild(child.id)
+      if (pendingPacket) {
+        await confirmIntakePacketAsParent({
+          childId: child.id,
+          packetId: pendingPacket.id,
+          rows: rowsForRpc,
+        })
+      } else {
+        const { error: rpcErr } = await supabase.rpc(
+          'intake_confirm_for_parent',
+          { p_child_id: child.id, p_rows: rowsForRpc },
+        )
+        if (rpcErr) throw rpcErr
+      }
 
       // Optimistic: clear this child's acks + pending reminders so the
       // card disappears.
