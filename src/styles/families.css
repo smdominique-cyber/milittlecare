@@ -306,6 +306,16 @@
   border: 1px solid var(--clr-warm-mid);
   border-radius: var(--radius-md);
   margin-bottom: var(--space-2);
+  transition: box-shadow 0.35s ease, border-color 0.35s ease;
+}
+
+/* 2026-06-14 v2 deep-link focus flash — applied for ~1.5s when the
+   Children tab is opened with ?child=<id>. Lets the provider see
+   WHICH row the deep-link is pointing at without rendering a
+   sticky highlight that would survive past the navigation. */
+.person-card-focus-flash {
+  border-color: var(--clr-sage-dark, #4f7959);
+  box-shadow: 0 0 0 3px var(--clr-sage-pale, #d6e4d6);
 }
 
 .person-avatar {
