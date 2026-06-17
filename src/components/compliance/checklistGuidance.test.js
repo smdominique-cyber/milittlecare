@@ -608,6 +608,21 @@ describe('registry-wide invariants', () => {
       'property_heating_inspection_quadrennial:expired',
       'property_licensing_notebook_archive:missing_required',
       'property_licensing_notebook_archive:expired',
+      // 2026-06-17 PR #21 inventory batch (mig 043). All five rows
+      // are existence-only (no cycle), so only missing_required is
+      // expected to fire. The :expired allowlist entries are
+      // belt-and-suspenders against a future flip to a cycle-mode
+      // resolver — adding both kinds keeps the gate stable.
+      'property_co_detectors_per_level:missing_required',
+      'property_co_detectors_per_level:expired',
+      'property_smoke_detectors_per_floor:missing_required',
+      'property_smoke_detectors_per_floor:expired',
+      'property_fire_extinguishers_per_floor:missing_required',
+      'property_fire_extinguishers_per_floor:expired',
+      'property_animal_notification:missing_required',
+      'property_animal_notification:expired',
+      'property_smoking_prohibition_posted:missing_required',
+      'property_smoking_prohibition_posted:expired',
     ])
     const kinds = ['missing_required', 'expired', 'pending_parent']
     for (const key of Object.keys(REQUIREMENT_REGISTRY)) {

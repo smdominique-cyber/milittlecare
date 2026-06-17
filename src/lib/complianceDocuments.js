@@ -35,10 +35,21 @@ export const BUCKET = 'compliance-documents'
 // A regression test asserts the catalog is the same length as the
 // config map and that every key is recognized by both.
 export const COMPLIANCE_DOCUMENT_TYPES = Object.freeze([
-  'fingerprint_reprint',           // G4   — Phase A (mig 038)
-  'property_radon_test',           // J1   — Phase A batch (mig 039)
-  'property_heating_inspection',   // J2   — Phase A batch (mig 039)
-  'property_licensing_notebook',   // J8   — Phase A batch (mig 039)
+  'fingerprint_reprint',                    // G4   — Phase A (mig 038)
+  'property_radon_test',                    // J1   — Phase A batch (mig 039)
+  'property_heating_inspection',            // J2   — Phase A batch (mig 039)
+  'property_licensing_notebook',            // J8   — Phase A batch (mig 039)
+  // 2026-06-17 PR #21 inventory batch (mig 043). The original mig 039
+  // header classified these as "OUT — evidence type does NOT fit the
+  // doc store" (inventory / per-floor counts / boolean attestations).
+  // Reversed per user-level product call: a photo of the installed
+  // device, the posted sign, or a copy of the parent notification IS
+  // a sufficient on-file artifact for an auditor walking the home.
+  'property_co_detectors_per_level',        // J3   — mig 043
+  'property_smoke_detectors_per_floor',     // J4   — mig 043
+  'property_fire_extinguishers_per_floor',  // J5   — mig 043
+  'property_animal_notification',           // J6   — mig 043
+  'property_smoking_prohibition_posted',    // J7   — mig 043
 ])
 
 /**
@@ -151,6 +162,77 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
       'to see per R 400.1906(3). Replace whenever your notebook ' +
       'changes; the prior copy stays in archive for the retention ' +
       'window.',
+    multi: false,
+  },
+
+  // ── PR #21 inventory batch (mig 043) ────────────────────────────────
+  //
+  // Each row's slot accepts a photo OR a written attestation as the
+  // on-file artifact. The auditor's question for each is "show me one"
+  // — a single phone photo of the device, sign, or notification
+  // satisfies that question for everything except recurring-cycle
+  // inspections. None of these are cycle-tracked (no requiresDueDate).
+
+  property_co_detectors_per_level: {
+    title: 'Carbon-monoxide detectors per level',
+    badge: { text: 'Required', tone: 'required' },
+    help:
+      'A photo (or short attestation PDF) showing CO detectors are ' +
+      'installed and operational on every level of the home — R ' +
+      '400.1915(3) (the heating/ventilation rule, where CO lives — ' +
+      'NOT R 400.1948, which covers smoke detectors and fire ' +
+      'extinguishers only). The rule requires an operational CO ' +
+      'detector bearing a recognized-laboratory safety mark on all ' +
+      'levels approved for child care. One image per level is fine; ' +
+      'the slot keeps the most recent upload and archives the prior. ' +
+      'Re-photograph after a battery swap or replacement so the ' +
+      'on-file image matches what is installed.',
+    multi: false,
+  },
+  property_smoke_detectors_per_floor: {
+    title: 'Smoke detectors per floor',
+    badge: { text: 'Required', tone: 'required' },
+    help:
+      'A photo (or short attestation PDF) showing working smoke ' +
+      'detectors on every floor — R 400.1948. One image per floor is ' +
+      'fine; this slot keeps the latest. Re-upload after a battery ' +
+      'change or new install so the on-file evidence matches what is ' +
+      'currently in the home. (R 400.1934 is the water-hazards rule; ' +
+      'this row is the detectors rule R 400.1948.)',
+    multi: false,
+  },
+  property_fire_extinguishers_per_floor: {
+    title: 'Fire extinguishers per floor (2A-10BC+)',
+    badge: { text: 'Required', tone: 'required' },
+    help:
+      'A photo (or service-tag attestation PDF) showing at least one ' +
+      'fire extinguisher rated 2A-10BC or higher on every floor — R ' +
+      '400.1948. The image should show the rating label and the ' +
+      'service tag with the most recent inspection date. Re-upload ' +
+      'after the annual service tag is renewed.',
+    multi: false,
+  },
+  property_animal_notification: {
+    title: 'Animal/pet notification to parents',
+    badge: { text: 'Required', tone: 'required' },
+    help:
+      'A copy of the written notification you give parents listing the ' +
+      'animals/pets on the premises — R 400.1917. One PDF (or photo of ' +
+      'the form) is sufficient. Re-upload whenever the animals on the ' +
+      'home change. This slot only matters once you have answered ' +
+      '"yes" to the animals question on the What-applies questionnaire; ' +
+      'if you have no animals, the row resolves as Does-not-apply.',
+    multi: false,
+  },
+  property_smoking_prohibition_posted: {
+    title: 'Smoking / vaping prohibition posted',
+    badge: { text: 'Required', tone: 'required' },
+    help:
+      'A photo showing the smoking and vaping prohibition sign posted ' +
+      'where parents and staff can see it — R 400.1918. The image ' +
+      'should show the sign in its actual location (door, foyer, etc.) ' +
+      'so an auditor can see both the wording and that it is posted. ' +
+      'Re-photograph if you move the sign or replace it.',
     multi: false,
   },
 })

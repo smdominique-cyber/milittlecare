@@ -558,14 +558,22 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
 
   // ── Property (questionnaire-driven applicability, 3.1b-1) ────────
   property_animal_notification: {
-    // not_yet_modelled row, but applicability autoDefaults to UNKNOWN
-    // (complianceState.js §2a) and applicability is resolved BEFORE
-    // data_state — so it reaches awaiting_input until the provider
-    // answers the animals question. Awaiting copy stays generic (the
-    // generic sentence already names the questionnaire); the
-    // feature_not_yet_shipped state falls to the `property` category
-    // entry in TRACKING_SHIPS_WITH.
+    // 2026-06-17 PR #21 inventory batch (mig 043). The applicability
+    // is still questionnaire-gated (animals?), so the awaiting-input
+    // surface stays the What-applies questionnaire. ONCE the
+    // questionnaire resolves to "yes," the resolver looks for a
+    // compliance_documents row and surfaces MISSING_REQUIRED until
+    // one is uploaded; that uses the Property surface like the rest
+    // of the property batch.
     awaitingSurface: SURFACE.BUSINESS_INFO_APPLICABILITY,
+    surface: SURFACE.BUSINESS_INFO_PROPERTY,
+    missing:
+      'Upload a copy of the written notification you give parents ' +
+      'listing the animals on the premises in Business Info → ' +
+      'Property. R 400.1917 — the rule applies once you have ' +
+      'animals on the home; if you do not, answer "no" on the ' +
+      'What-applies questionnaire and this row resolves as does-not-' +
+      'apply.',
   },
 
   // ── Property batch (2026-06-14) — document-backed, mig 038 + 039 ──
@@ -634,6 +642,52 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
       'certificate plus recent licensing correspondence and inspection ' +
       'reports) in Business Info → Property. R 400.1906(3) — these ' +
       'are the records parents may ask to see.',
+  },
+
+  // ── PR #21 inventory batch (2026-06-17, mig 043) ─────────────────
+  //
+  // Five property rows flipped from feature_not_yet_shipped to
+  // document-backed. Each accepts a photo or short attestation
+  // PDF as the on-file artifact. All point at the Property surface;
+  // none are cycle-tracked (no expired-state guidance).
+
+  property_co_detectors_per_level: {
+    surface: SURFACE.BUSINESS_INFO_PROPERTY,
+    missing:
+      'Upload a photo (one image per level is fine) showing CO ' +
+      'detectors installed and operational in Business Info → ' +
+      'Property. R 400.1915(3) — the heating/ventilation rule, where ' +
+      'CO lives in the ruleset — requires an operational CO detector ' +
+      'on every level approved for child care. Re-photograph after a ' +
+      'battery swap or replacement so the on-file image matches what ' +
+      'is installed.',
+  },
+  property_smoke_detectors_per_floor: {
+    surface: SURFACE.BUSINESS_INFO_PROPERTY,
+    missing:
+      'Upload a photo (one image per floor is fine) showing working ' +
+      'smoke detectors in Business Info → Property. R 400.1948 ' +
+      'requires detectors on every floor. Re-upload after a battery ' +
+      'swap or new install so the on-file image matches what is ' +
+      'installed.',
+  },
+  property_fire_extinguishers_per_floor: {
+    surface: SURFACE.BUSINESS_INFO_PROPERTY,
+    missing:
+      'Upload a photo of each floor’s fire extinguisher rated ' +
+      '2A-10BC or higher, showing the rating label and the service ' +
+      'tag with the most recent inspection date, in Business Info → ' +
+      'Property. R 400.1948 requires at least one extinguisher per ' +
+      'floor. Re-upload after the annual service tag is renewed.',
+  },
+  property_smoking_prohibition_posted: {
+    surface: SURFACE.BUSINESS_INFO_PROPERTY,
+    missing:
+      'Upload a photo of your posted smoking / vaping prohibition ' +
+      'sign in Business Info → Property. R 400.1918 requires the ' +
+      'sign be posted where parents and staff can see it; the image ' +
+      'should show the sign in its actual location so an auditor can ' +
+      'see both the wording and that it is posted.',
   },
 
   // ── Group H — attendance acks (category C surface — text-only) ───

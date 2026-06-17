@@ -902,16 +902,23 @@ describe('Pattern E — feature-not-yet-shipped', () => {
   // 2026-06-14 batch (mig 039): radon, heating, and licensing_notebook
   // flipped from Pattern E to compliance_documents-backed; their
   // resolver tests live in the "compliance_documents-backed resolvers"
-  // describe below. Everything else here remains Pattern E.
+  // describe below.
+  //
+  // 2026-06-17 PR #21 inventory batch (mig 043): CO detectors, smoke
+  // detectors, fire extinguishers, animal notification, and smoking
+  // prohibition ALSO flipped to compliance_documents-backed. Their
+  // resolver tests now live in the same "compliance_documents-backed
+  // resolvers" describe below (animal notification is split out
+  // because its applicability is questionnaire-gated).
+  //
+  // What remains here: drills, the emergency response plan, and the
+  // three caregiver rows that need a per-caregiver scoping column
+  // before they fit the doc substrate.
   const PATTERN_E_KEYS = [
     'drill_fire_quarterly',
     'drill_tornado_seasonal',
     'drill_other_emergencies_annual',
     'emergency_response_plan_on_file',
-    'property_co_detectors_per_level',
-    'property_smoke_detectors_per_floor',
-    'property_fire_extinguishers_per_floor',
-    'property_smoking_prohibition_posted',
     'caregiver_physician_attestation_annual',
     'caregiver_discipline_policy_ack_at_hire',
     'caregiver_daily_arrival_departure',
@@ -931,20 +938,6 @@ describe('Pattern E — feature-not-yet-shipped', () => {
       expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
     })
   }
-
-  it('property_animal_notification: even with applies override, state is unknown (Pattern E source) — but reason differs', () => {
-    const requirement = REQUIREMENT_REGISTRY.property_animal_notification
-    const overrides = new Map([[requirement.key, APPLICABILITY_RESULT.APPLIES]])
-    const state = getRequirementState({
-      requirement,
-      provider: makeLicensedProvider(),
-      sourceRows: makeSourceRows(),
-      overrides,
-      now: FIXED_NOW,
-    })
-    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
-    expect(state.reason).toBe('feature-not-yet-shipped')
-  })
 })
 
 // -----------------------------------------------------------------------------
@@ -968,12 +961,24 @@ describe('compliance_documents-backed resolvers (J1/J2/J8 — mig 039 + mig 040)
   const PAST_YMD        = '2026-06-14'
 
   // requiresDueDate=true → cycle mode (mig 040); false → existence-only
-  // mode (mig 039). The third value is the SQL CHECK token in
-  // chk_compliance_documents_document_type the registry row targets.
+  // mode (mig 039 / mig 043). The third value is the SQL CHECK token
+  // in chk_compliance_documents_document_type the registry row targets.
+  //
+  // 2026-06-17 PR #21 inventory batch (mig 043): added four rows here
+  // (CO, smoke, fire, smoking) — all use existence-only mode. The
+  // fifth new row (property_animal_notification) is split out below
+  // because its applicability `autoDefault: UNKNOWN` short-circuits
+  // the engine BEFORE the state_resolver runs unless an override is
+  // present. Testing it through the CASES loop would conflate two
+  // distinct behaviors.
   const CASES = [
-    { key: 'property_radon_test_quadrennial',          docType: 'property_radon_test',          requiresDueDate: true  },
-    { key: 'property_heating_inspection_quadrennial',  docType: 'property_heating_inspection',  requiresDueDate: true  },
-    { key: 'property_licensing_notebook_archive',      docType: 'property_licensing_notebook',  requiresDueDate: false },
+    { key: 'property_radon_test_quadrennial',          docType: 'property_radon_test',                    requiresDueDate: true  },
+    { key: 'property_heating_inspection_quadrennial',  docType: 'property_heating_inspection',            requiresDueDate: true  },
+    { key: 'property_licensing_notebook_archive',      docType: 'property_licensing_notebook',            requiresDueDate: false },
+    { key: 'property_co_detectors_per_level',          docType: 'property_co_detectors_per_level',        requiresDueDate: false },
+    { key: 'property_smoke_detectors_per_floor',       docType: 'property_smoke_detectors_per_floor',     requiresDueDate: false },
+    { key: 'property_fire_extinguishers_per_floor',    docType: 'property_fire_extinguishers_per_floor',  requiresDueDate: false },
+    { key: 'property_smoking_prohibition_posted',      docType: 'property_smoking_prohibition_posted',    requiresDueDate: false },
   ]
 
   // §2a sourceRowsLoaded with everything true (helper for the
@@ -1205,6 +1210,128 @@ describe('compliance_documents-backed resolvers (J1/J2/J8 — mig 039 + mig 040)
       })
       expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
       expect(state.reason).toBeUndefined()
+    })
+  })
+
+  // -- PR #21 inventory batch — animal-notification questionnaire gate ---
+  //
+  // The animal row's applicability has `autoDefault: UNKNOWN` per §2a:
+  // a silent default to "applies" would manufacture a false-positive
+  // compliance gap for the typical home with no animals, and a silent
+  // default to "does not apply" would silently mask a real gap for a
+  // home that DOES have animals. The engine returns
+  // APPLICABILITY_UNKNOWN until an override explicitly resolves it via
+  // the What-applies questionnaire (Phase 3 seam). These tests pin
+  // both branches.
+
+  describe('property_animal_notification — applicability gate (mig 043 + §2a)', () => {
+    const requirement = REQUIREMENT_REGISTRY.property_animal_notification
+
+    it('data_state has flipped to shipped (was not_yet_modelled before PR #21 inventory batch)', () => {
+      expect(requirement.data_state).toBe(DATA_STATE.SHIPPED)
+    })
+
+    it('no override → engine returns UNKNOWN (the questionnaire-awaiting path; applicability autoDefault is UNKNOWN per §2a)', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({ compliance_documents: [] }),
+        overrides: new Map(),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+    })
+
+    it('override = DOES_NOT_APPLY → NOT_APPLICABLE (provider answered "no animals on premises")', () => {
+      const overrides = new Map([[requirement.key, APPLICABILITY_RESULT.DOES_NOT_APPLY]])
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({ compliance_documents: [] }),
+        overrides,
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.NOT_APPLICABLE)
+    })
+
+    it('override = APPLIES + no doc → MISSING_REQUIRED (provider said "yes" but no notification uploaded yet)', () => {
+      const overrides = new Map([[requirement.key, APPLICABILITY_RESULT.APPLIES]])
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({ compliance_documents: [] }),
+        overrides,
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+
+    it('override = APPLIES + a doc of type "property_animal_notification" → ON_FILE (the full happy path)', () => {
+      const overrides = new Map([[requirement.key, APPLICABILITY_RESULT.APPLIES]])
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          compliance_documents: [{
+            id: 'd-animal',
+            document_type: 'property_animal_notification',
+            uploaded_at: '2026-06-17T00:00:00Z',
+            archived_at: null,
+            next_due_on: null,
+          }],
+        }),
+        overrides,
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+    })
+
+    it('override = APPLIES + a doc of the WRONG type → MISSING_REQUIRED (discriminator works)', () => {
+      const overrides = new Map([[requirement.key, APPLICABILITY_RESULT.APPLIES]])
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          compliance_documents: [{
+            id: 'd-wrong',
+            document_type: 'property_smoking_prohibition_posted',   // wrong type
+            uploaded_at: '2026-06-17T00:00:00Z',
+            archived_at: null,
+            next_due_on: null,
+          }],
+        }),
+        overrides,
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+  })
+
+  // -- PR #21 inventory batch — citation corrections -----------------------
+  //
+  // The pre-2026-06-17 registry shared a blanket 'R 400.1934' citation
+  // across seven property rows during Phase 1 scaffolding. That rule is
+  // water hazards — not detectors, not animals, not smoking. The
+  // crosswalk in `docs/regulatory-rule-mapping.md` is the source of
+  // truth here. These assertions pin the correct citations so a future
+  // copy-paste regression is caught loudly at test time, BEFORE it gets
+  // baked into the audit-trail evidence the checklist renders.
+
+  describe('PR #21 inventory rows — rule_citation correctness (mig 043 cites)', () => {
+    it('property_co_detectors_per_level cites R 400.1915(3) — the heating/ventilation rule where CO lives (combustion hazard), not R 400.1934 (water hazards) and not R 400.1948 (smoke + fire detectors)', () => {
+      expect(REQUIREMENT_REGISTRY.property_co_detectors_per_level.rule_citation).toBe('R 400.1915(3)')
+    })
+    it('property_smoke_detectors_per_floor cites R 400.1948 — the detectors-and-extinguishers rule, not R 400.1934 (water hazards)', () => {
+      expect(REQUIREMENT_REGISTRY.property_smoke_detectors_per_floor.rule_citation).toBe('R 400.1948')
+    })
+    it('property_fire_extinguishers_per_floor cites R 400.1948 — same rule as smoke detectors, not R 400.1934 (water hazards)', () => {
+      expect(REQUIREMENT_REGISTRY.property_fire_extinguishers_per_floor.rule_citation).toBe('R 400.1948')
+    })
+    it('property_animal_notification cites R 400.1917 — the animals-and-pets rule, not R 400.1937 (the food-allergy rule it was wrongly under)', () => {
+      expect(REQUIREMENT_REGISTRY.property_animal_notification.rule_citation).toBe('R 400.1917')
+    })
+    it('property_smoking_prohibition_posted cites R 400.1918 — the smoking-or-vaping rule, not R 400.1934 (water hazards)', () => {
+      expect(REQUIREMENT_REGISTRY.property_smoking_prohibition_posted.rule_citation).toBe('R 400.1918')
     })
   })
 })
@@ -2755,11 +2882,17 @@ describe('Phase 3 — filterByDataState', () => {
   it('filtering to not_yet_modelled keeps only Pattern E rows', () => {
     const full = makeState()
     const nyM = filterByDataState({ state: full, dataState: DATA_STATE.NOT_YET_MODELLED })
-    // Drills and property are all not_yet_modelled.
+    // 2026-06-17 PR #21 inventory batch (mig 043): the five property
+    // rows that flipped to compliance_documents-backed are now SHIPPED;
+    // the property category still has not_yet_modelled rows because
+    // some are deferred (e.g. caregiver-scoped ones in this category
+    // bucket if any), but the row count may now be zero. The
+    // load-bearing assertion is just that drills (still Pattern E
+    // across the board) is non-zero — that proves the filter actually
+    // ran. Property's count is now decoupled from this filter's smoke
+    // test.
     const drillsCount = nyM.provider_level.per_category.drills?.requirements.length || 0
-    const propertyCount = nyM.provider_level.per_category.property?.requirements.length || 0
     expect(drillsCount).toBeGreaterThan(0)
-    expect(propertyCount).toBeGreaterThan(0)
   })
 
   it('filtered totals recompute correctly', () => {
@@ -2872,17 +3005,15 @@ describe('Phase 3 — §2a override round-trip', () => {
         overrides,
         now: FIXED_NOW,
       })
-      // property_animal_notification is also Pattern E (data_state=
-      // 'not_yet_modelled') — even with applies override, its
-      // state_resolver returns unknown(feature-not-yet-shipped).
-      if (key === 'property_animal_notification') {
-        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
-        expect(state.reason).toBe('feature-not-yet-shipped')
-      } else {
-        // The two shipped consent rows fall through to Pattern A,
-        // which returns missing_required when no ack is on file.
-        expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
-      }
+      // 2026-06-17 PR #21 inventory batch (mig 043): the
+      // property_animal_notification row flipped from Pattern E to
+      // compliance_documents-backed. With an applies override and
+      // no doc present, the resolver now returns MISSING_REQUIRED
+      // (same as the shipped consent rows below). The old
+      // unknown(feature-not-yet-shipped) branch is gone; the
+      // questionnaire gate behavior is covered in the dedicated
+      // "property_animal_notification — applicability gate" describe.
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
     })
 
     it(`${key}: mode='does_not_apply' override → state = not_applicable`, () => {

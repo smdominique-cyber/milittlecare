@@ -2116,76 +2116,114 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
 
   property_co_detectors_per_level: Object.freeze({
     key: 'property_co_detectors_per_level',
+    // 2026-06-17 — citation corrected. The blanket 'R 400.1934'
+    // citation in the pre-2026-06-17 row was an artifact of seven
+    // property rows all sharing the same placeholder during Phase 1
+    // scaffolding. Initial correction attempt cited 'R 400.1934(3)'
+    // (assuming CO was a subrule of the water-hazards rule); the
+    // real rule is R 400.1915(3) — 'Heating; ventilation; lighting;
+    // radon' subrule (3) requires an operational carbon-monoxide
+    // detector bearing a recognized-laboratory safety mark on all
+    // levels approved for child care. The ruleset groups CO with
+    // its hazard source (combustion / heating) rather than with
+    // smoke + fire detectors. R 400.1948 is detectors-and-
+    // extinguishers and applies to smoke + fire only.
+    rule_citation: 'R 400.1915(3)',
     category: 'property',
-    rule_citation: 'R 400.1934',
     label: 'Carbon-monoxide detectors per level',
     subject_type: 'provider',
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'critical',
-    data_state: 'not_yet_modelled',
+    // 2026-06-17 PR #21 inventory batch (mig 043): flipped from
+    // 'not_yet_modelled' to 'shipped'; resolver reads compliance_documents
+    // of type 'property_co_detectors_per_level'.
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildComplianceDocResolver('property_co_detectors_per_level'),
   }),
 
   property_smoke_detectors_per_floor: Object.freeze({
     key: 'property_smoke_detectors_per_floor',
+    // 2026-06-17 — citation corrected from 'R 400.1934' (water hazards)
+    // to 'R 400.1948' (the smoke detectors + fire extinguishers rule,
+    // per docs/regulatory-rule-mapping.md).
+    rule_citation: 'R 400.1948',
     category: 'property',
-    rule_citation: 'R 400.1934',
     label: 'Smoke detectors per floor',
     subject_type: 'provider',
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'critical',
-    data_state: 'not_yet_modelled',
+    // 2026-06-17 PR #21 inventory batch (mig 043).
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildComplianceDocResolver('property_smoke_detectors_per_floor'),
   }),
 
   property_fire_extinguishers_per_floor: Object.freeze({
     key: 'property_fire_extinguishers_per_floor',
+    // 2026-06-17 — citation corrected from 'R 400.1934' (water hazards)
+    // to 'R 400.1948' (the smoke detectors + fire extinguishers rule,
+    // per docs/regulatory-rule-mapping.md and user directive).
+    rule_citation: 'R 400.1948',
     category: 'property',
-    rule_citation: 'R 400.1934',
     label: 'Fire extinguishers per floor (2A-10BC+)',
     subject_type: 'provider',
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'critical',
-    data_state: 'not_yet_modelled',
+    // 2026-06-17 PR #21 inventory batch (mig 043).
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildComplianceDocResolver('property_fire_extinguishers_per_floor'),
   }),
 
   property_animal_notification: Object.freeze({
     key: 'property_animal_notification',
+    // 2026-06-17 — citation corrected from 'R 400.1937' (food allergy
+    // plan, the WRONG rule) to 'R 400.1917' (animals and pets, per
+    // docs/regulatory-rule-mapping.md and user directive). The food-
+    // allergy rule cross-pollinated into this row during Phase 1
+    // scaffolding; correcting before any provider has acted on it.
+    rule_citation: 'R 400.1917',
     category: 'property',
-    rule_citation: 'R 400.1937',
     label: 'Animal/pet notification to parents',
     subject_type: 'provider',
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'low',
-    data_state: 'not_yet_modelled',
+    // 2026-06-17 PR #21 inventory batch (mig 043). The applicability
+    // autoDefault below stays as UNKNOWN per §2a — the row reaches
+    // the resolver only once the provider answers "do you have
+    // animals?" YES on the What-applies questionnaire. If they
+    // answer NO, applicability resolves to does_not_apply; if YES,
+    // the resolver looks for a 'property_animal_notification' doc.
+    data_state: 'shipped',
     applicability: {
       // §2a: default unknown until Phase 3 onboarding resolves.
       universalFor: LICENSED_HOME_LICENSE_TYPES,
       autoDefault: APPLICABILITY_RESULT.UNKNOWN,
     },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildComplianceDocResolver('property_animal_notification'),
   }),
 
   property_smoking_prohibition_posted: Object.freeze({
     key: 'property_smoking_prohibition_posted',
+    // 2026-06-17 — citation corrected from 'R 400.1934' (water hazards)
+    // to 'R 400.1918' (smoking or vaping, per docs/regulatory-rule-
+    // mapping.md and user directive).
+    rule_citation: 'R 400.1918',
     category: 'property',
-    rule_citation: 'R 400.1934',
     label: 'Smoking prohibition posted',
     subject_type: 'provider',
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'medium',
-    data_state: 'not_yet_modelled',
+    // 2026-06-17 PR #21 inventory batch (mig 043).
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildComplianceDocResolver('property_smoking_prohibition_posted'),
   }),
 
   property_licensing_notebook_archive: Object.freeze({

@@ -56,16 +56,21 @@ describe('compliance_documents catalog ↔ config alignment (the B1-style enum t
     }
   })
 
-  it('Phase A + 2026-06-14 batch types — order locked, count locked (forces a deliberate revisit on the next addition)', () => {
-    // Each addition needs both the SQL CHECK (mig 038, then 039)
-    // and this catalog updated in lockstep. A new entry forces
+  it('Phase A + 2026-06-14 batch + 2026-06-17 PR #21 inventory batch — order locked, count locked (forces a deliberate revisit on the next addition)', () => {
+    // Each addition needs both the SQL CHECK (mig 038, then 039, then
+    // 043) and this catalog updated in lockstep. A new entry forces
     // this test to fail until the migration is named in the same
     // commit — the same enum-trap discipline as B1.
     expect(COMPLIANCE_DOCUMENT_TYPES).toEqual([
-      'fingerprint_reprint',           // G4   — mig 038
-      'property_radon_test',           // J1   — mig 039
-      'property_heating_inspection',   // J2   — mig 039
-      'property_licensing_notebook',   // J8   — mig 039
+      'fingerprint_reprint',                    // G4   — mig 038
+      'property_radon_test',                    // J1   — mig 039
+      'property_heating_inspection',            // J2   — mig 039
+      'property_licensing_notebook',            // J8   — mig 039
+      'property_co_detectors_per_level',        // J3   — mig 043
+      'property_smoke_detectors_per_floor',     // J4   — mig 043
+      'property_fire_extinguishers_per_floor',  // J5   — mig 043
+      'property_animal_notification',           // J6   — mig 043
+      'property_smoking_prohibition_posted',    // J7   — mig 043
     ])
   })
 

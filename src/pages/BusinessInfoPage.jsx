@@ -1125,27 +1125,41 @@ export default function BusinessInfoPage() {
   )
 }
 
-// PropertyRecordsSection — 2026-06-14 batch. Hosts the J1/J2/J8
-// ComplianceDocumentSlots (radon test, heating inspection, licensing
-// notebook). Each slot is provider-level by construction (no parent
-// FK on compliance_documents); the slot writes a row whose user_id
-// is the licensee and whose document_type discriminates between the
-// three uploads. Gated to licensed homes by the same parent check
-// that gates the compliance_applicability tab.
+// PropertyRecordsSection — 2026-06-14 batch (radon, heating, notebook)
+// plus 2026-06-17 PR #21 inventory batch (CO detectors, smoke detectors,
+// fire extinguishers, animal notification, smoking prohibition). All
+// rows use the same ComplianceDocumentSlot substrate — provider-level
+// by construction (no parent FK on compliance_documents); the slot
+// writes a row whose user_id is the licensee and whose document_type
+// discriminates the upload. Gated to licensed homes by the same parent
+// check that gates the compliance_applicability tab.
+//
+// Order on the page mirrors the auditor's natural walkthrough sequence:
+// recurring inspections first, then life-safety devices floor-by-floor,
+// then parent notifications, then the licensing notebook last. The
+// What-applies questionnaire gates the animal notification's
+// applicability — the slot still renders regardless so a provider who
+// later answers "yes" doesn't have to navigate back here to find it.
 function PropertyRecordsSection() {
   return (
     <div className="bi-section">
       <div className="bi-section-header">
         <h3>Property records</h3>
         <p>
-          Three records an auditor will ask to see. Upload your latest
-          report into each slot; the Replace button rotates them after
-          the next test or inspection, keeping the prior copy in
+          The records an auditor will ask to see during a walkthrough.
+          For each row, upload a photo, attestation, or report into the
+          slot; the Replace button rotates the upload after the next
+          inspection, photo, or change, keeping the prior copy in
           archive for retention.
         </p>
       </div>
       <ComplianceDocumentSlot documentType="property_radon_test" />
       <ComplianceDocumentSlot documentType="property_heating_inspection" />
+      <ComplianceDocumentSlot documentType="property_co_detectors_per_level" />
+      <ComplianceDocumentSlot documentType="property_smoke_detectors_per_floor" />
+      <ComplianceDocumentSlot documentType="property_fire_extinguishers_per_floor" />
+      <ComplianceDocumentSlot documentType="property_animal_notification" />
+      <ComplianceDocumentSlot documentType="property_smoking_prohibition_posted" />
       <ComplianceDocumentSlot documentType="property_licensing_notebook" />
     </div>
   )
