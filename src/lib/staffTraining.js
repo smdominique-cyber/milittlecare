@@ -72,7 +72,10 @@ export const CATEGORY_META = Object.freeze({
     help:
       'A CPR and pediatric first aid certification. It expires on the ' +
       'date printed on the certification card; log that date so the ' +
-      'dashboard can warn you before it lapses (R 400.1924(8)).',
+      'dashboard can warn you before it lapses (R 400.1924(8)). The ' +
+      'hours you log here ALSO count toward your annual ' +
+      'professional-development total per R 400.1924(5) — no need to ' +
+      'duplicate the hours under Professional development.',
     expires: true,
   },
   [CATEGORY.PROFESSIONAL_DEVELOPMENT]: {
@@ -80,8 +83,11 @@ export const CATEGORY_META = Object.freeze({
     short: 'Prof. dev.',
     help:
       'Clock-hour training counted per calendar year. The required ' +
-      'number of hours varies by role (R 400.1924). Distinct from ' +
-      'MiRegistry’s December 16 CDC deadline.',
+      'number of hours varies by role (R 400.1924): 10/yr for the ' +
+      'licensee, 5/yr for child-care staff. Hours from CPR / pediatric ' +
+      'first aid records ALSO count toward this total per R 400.1924(5). ' +
+      'The year is anchored on each record’s completion date. Distinct ' +
+      'from MiRegistry’s December 16 CDC deadline, which is LEP-only.',
     expires: false,
   },
   [CATEGORY.HEALTH_SAFETY_UPDATE_ACK]: {
@@ -291,9 +297,30 @@ export function getHireDeadlineStatus(dateOfHire, offsetDays, today) {
   return { hasDeadline: true, dueDate, daysRemaining, isOverdue: daysRemaining < 0 }
 }
 
+// Categories that contribute hours toward the annual PD total.
+//
+// 2026-06-16 — added CPR_FIRST_AID per R 400.1924(5): the rule
+// explicitly counts CPR and pediatric first aid hours toward the
+// annual professional-development total. Pre-2026-06-16 the
+// aggregator only counted PROFESSIONAL_DEVELOPMENT rows, which
+// undercounted licensed homes' real PD against the 10/yr licensee
+// or 5/yr staff thresholds. Exported so the matrix / drill-in / PD
+// progress widgets can render a consistent "counts toward PD"
+// indicator.
+export const PD_CONTRIBUTING_CATEGORIES = Object.freeze([
+  CATEGORY.PROFESSIONAL_DEVELOPMENT,
+  CATEGORY.CPR_FIRST_AID,
+])
+
 /**
  * Professional-development progress for one caregiver in a calendar
  * year — a per-calendar-year clock-hour total (R 400.1924(1)–(4)).
+ *
+ * Per R 400.1924(5), CPR / pediatric first aid hours count toward
+ * the same annual total. So this function sums hours from BOTH
+ * `CATEGORY.PROFESSIONAL_DEVELOPMENT` and `CATEGORY.CPR_FIRST_AID`
+ * rows whose `completed_on` falls within the calendar year. See
+ * `PD_CONTRIBUTING_CATEGORIES` above.
  *
  * @param {object}   args
  * @param {object[]} args.records        The caregiver's training records.
@@ -308,7 +335,7 @@ export function getProfessionalDevelopmentStatus({ records, year, requiredHours 
   const safe = Array.isArray(records) ? records : []
   const loggedHours = safe
     .filter(isActive)
-    .filter(r => r && r.category === CATEGORY.PROFESSIONAL_DEVELOPMENT)
+    .filter(r => r && PD_CONTRIBUTING_CATEGORIES.includes(r.category))
     .filter(r => r.completed_on >= yearStart && r.completed_on <= yearEnd)
     .reduce((sum, r) => sum + (Number(r.hours) || 0), 0)
   return { loggedHours, requiredHours: req, satisfied: loggedHours >= req }

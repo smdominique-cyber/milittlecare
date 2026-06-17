@@ -81,16 +81,24 @@ export function getActiveModules({ profile, fundingSources, isTrackedStaffCaregi
     else if (setting === 'force_off') modules.delete(key)
   }
 
-  // miregistry_tracker: active iff a MiRegistry ID is on file OR the
-  // provider is license-exempt. License-exempt providers get the
-  // tracker even before they enter their ID so the empty-state page
-  // can prompt them for it (chicken-and-egg: without auto-activation,
-  // a brand-new license-exempt provider would never see the screen
-  // that asks for the ID). See miregistry_tracker_spec.md § 4.
-  if (
-    safeProfile.miregistry_id ||
-    safeProfile.is_license_exempt === true
-  ) {
+  // miregistry_tracker: active iff the provider is license-exempt.
+  //
+  // 2026-06-16 — narrowed from "miregistry_id present OR license-exempt"
+  // to "license-exempt only." The page (Level 2 progress, December 16
+  // Annual Ongoing deadline, LEPPT completion, $10 enrollment language)
+  // is by-design LEP-targeted. Licensed-home providers who happen to
+  // have a MiRegistry ID on file were ending up here too, seeing
+  // LEP-framed copy that doesn't apply to them. Their training-record
+  // surface is Staff Training (R 400.1923 / R 400.1924), not this
+  // tracker. The `miregistry_id`-presence branch is removed.
+  //
+  // Chicken-and-egg for brand-new LEPs is unchanged: an LEP without a
+  // MiRegistry ID yet still gets the tracker (so the empty-state can
+  // prompt them for one).
+  //
+  // See miregistry_tracker_spec.md § 4 for the original rule + this
+  // commit's rationale for the narrowing.
+  if (safeProfile.is_license_exempt === true) {
     modules.add(MODULE_KEYS.MIREGISTRY_TRACKER)
   }
   // staff_training: the staff-training-tracking feature for LICENSED

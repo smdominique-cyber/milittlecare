@@ -154,14 +154,77 @@ describe('getProfessionalDevelopmentStatus — annual PD hours', () => {
     expect(pd.satisfied).toBe(true)
   })
 
-  it('ignores archived PD records and other categories', () => {
+  it('ignores archived PD records and ignores non-PD-contributing categories', () => {
+    // 2026-06-16 — CPR_FIRST_AID was REMOVED from the "ignored" set
+    // per R 400.1924(5) (it now contributes to PD). The remaining
+    // non-PD-contributing categories include HEALTH_SAFETY_UPDATE_ACK,
+    // NEW_HIRE_TRAINING, MIREGISTRY_ACCOUNT, BACKGROUND_CHECK, OTHER.
     const records = [
       rec({ category: CATEGORY.PROFESSIONAL_DEVELOPMENT, completed_on: '2026-03-01', hours: 5, archived_at: '2026-04-01T00:00:00Z' }),
-      rec({ category: CATEGORY.CPR_FIRST_AID, completed_on: '2026-03-01', hours: 8 }),
+      rec({ category: CATEGORY.HEALTH_SAFETY_UPDATE_ACK, completed_on: '2026-03-01', hours: 8 }),
+      rec({ category: CATEGORY.NEW_HIRE_TRAINING, completed_on: '2026-03-01', hours: 14 }),
+      rec({ category: CATEGORY.OTHER, completed_on: '2026-03-01', hours: 3 }),
     ]
     const pd = getProfessionalDevelopmentStatus({ records, year: 2026, requiredHours: 5 })
     expect(pd.loggedHours).toBe(0)
     expect(pd.satisfied).toBe(false)
+  })
+
+  // 2026-06-16 — R 400.1924(5): CPR / pediatric first aid hours count
+  // toward the annual PD total. Pre-fix the aggregator only summed
+  // PROFESSIONAL_DEVELOPMENT rows; licensed homes were undercounting
+  // their real PD progress against the 10/yr (licensee) / 5/yr
+  // (staff) thresholds.
+
+  it('R 400.1924(5): CPR / first aid hours count toward the annual PD total', () => {
+    const records = [
+      rec({ category: CATEGORY.CPR_FIRST_AID, completed_on: '2026-03-15', hours: 6.5 }),
+    ]
+    const pd = getProfessionalDevelopmentStatus({ records, year: 2026, requiredHours: 5 })
+    expect(pd.loggedHours).toBe(6.5)
+    expect(pd.satisfied).toBe(true)
+  })
+
+  it('R 400.1924(5): CPR + PD hours sum together to the annual total', () => {
+    const records = [
+      rec({ category: CATEGORY.PROFESSIONAL_DEVELOPMENT, completed_on: '2026-02-01', hours: 4 }),
+      rec({ category: CATEGORY.CPR_FIRST_AID, completed_on: '2026-04-15', hours: 6 }),
+    ]
+    const pd = getProfessionalDevelopmentStatus({ records, year: 2026, requiredHours: 10 })
+    expect(pd.loggedHours).toBe(10)
+    expect(pd.satisfied).toBe(true)
+  })
+
+  it('R 400.1924(5): an archived CPR record does NOT count toward PD', () => {
+    const records = [
+      rec({ category: CATEGORY.CPR_FIRST_AID, completed_on: '2026-03-15', hours: 6.5, archived_at: '2026-04-01T00:00:00Z' }),
+    ]
+    const pd = getProfessionalDevelopmentStatus({ records, year: 2026, requiredHours: 5 })
+    expect(pd.loggedHours).toBe(0)
+    expect(pd.satisfied).toBe(false)
+  })
+
+  it('R 400.1924(5): a CPR record outside the calendar year does NOT count', () => {
+    const records = [
+      rec({ category: CATEGORY.CPR_FIRST_AID, completed_on: '2025-12-31', hours: 6 }),
+      rec({ category: CATEGORY.CPR_FIRST_AID, completed_on: '2027-01-01', hours: 6 }),
+    ]
+    const pd = getProfessionalDevelopmentStatus({ records, year: 2026, requiredHours: 5 })
+    expect(pd.loggedHours).toBe(0)
+  })
+
+  it('R 400.1924(5): the per-card expiry on a CPR record does NOT affect its PD-hour contribution (a current-year CPR with an expired-in-future card still counts for the year it was completed)', () => {
+    const records = [
+      rec({
+        category: CATEGORY.CPR_FIRST_AID,
+        completed_on: '2026-06-01',
+        hours: 5,
+        expires_on: '2028-06-01',
+      }),
+    ]
+    const pd = getProfessionalDevelopmentStatus({ records, year: 2026, requiredHours: 5 })
+    expect(pd.loggedHours).toBe(5)
+    expect(pd.satisfied).toBe(true)
   })
 })
 

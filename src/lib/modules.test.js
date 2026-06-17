@@ -71,12 +71,18 @@ describe('getActiveModules', () => {
       expect(modules.has(MODULE_KEYS.CORE)).toBe(true)
     })
 
-    it('miregistry_id alone activates the MiRegistry tracker', () => {
+    it('miregistry_id alone does NOT activate the MiRegistry tracker for licensed-home providers (2026-06-16 rule narrowing)', () => {
+      // The tracker page is by-design LEP-framed (LEPPT, December 16,
+      // Level 2 pay rate, $10 enrollment). Licensed-home providers
+      // who have a MiRegistry ID on file but are NOT license-exempt
+      // should NOT see this page. Their training surface is Staff
+      // Training (R 400.1923 / R 400.1924). The pre-2026-06-16 rule
+      // activated on `miregistry_id` presence and was wrong.
       const modules = getActiveModules({
-        profile: { program_settings: {}, miregistry_id: 'MR-12345' },
+        profile: { program_settings: {}, miregistry_id: 'MR-12345', is_license_exempt: false },
         fundingSources: [fs('private_pay')],
       })
-      expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(true)
+      expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(false)
       expect(modules.has(MODULE_KEYS.CDC)).toBe(false)
     })
 
@@ -89,8 +95,8 @@ describe('getActiveModules', () => {
     })
   })
 
-  describe('MiRegistry tracker activation (combined rule per miregistry_tracker_spec.md § 4)', () => {
-    it('is_license_exempt = true with no miregistry_id activates the tracker (the new rule)', () => {
+  describe('MiRegistry tracker activation (LEP-only rule, 2026-06-16 narrowing — see miregistry_tracker_spec.md § 4)', () => {
+    it('is_license_exempt = true with no miregistry_id activates the tracker (LEP chicken-and-egg: empty state prompts for the ID)', () => {
       const modules = getActiveModules({
         profile: { program_settings: {}, is_license_exempt: true },
         fundingSources: [],
@@ -98,7 +104,7 @@ describe('getActiveModules', () => {
       expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(true)
     })
 
-    it('is_license_exempt = true AND miregistry_id set still activates (both paths overlap, no double-add)', () => {
+    it('is_license_exempt = true AND miregistry_id set activates (LEP path, full state)', () => {
       const modules = getActiveModules({
         profile: {
           program_settings: {},
@@ -126,7 +132,12 @@ describe('getActiveModules', () => {
       expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(false)
     })
 
-    it('miregistry_id set with is_license_exempt = false (licensed provider opt-in) still activates via the existing rule', () => {
+    it('miregistry_id set with is_license_exempt = false does NOT activate (2026-06-16 narrowing — LEP framing was wrong for licensed homes)', () => {
+      // The page surfaces LEPPT, December 16 Annual Ongoing, Level 2
+      // pay rate, $10 enrollment — all LEP-only concepts. A licensed-
+      // home provider who entered a MiRegistry ID was incorrectly
+      // dropped into this surface under the prior rule. Their
+      // training surface is Staff Training (R 400.1923 / R 400.1924).
       const modules = getActiveModules({
         profile: {
           program_settings: {},
@@ -135,7 +146,23 @@ describe('getActiveModules', () => {
         },
         fundingSources: [],
       })
-      expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(true)
+      expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(false)
+    })
+
+    it('miregistry_id set with is_license_exempt = null (legacy onboarding) does NOT activate (defensive: null is not true)', () => {
+      // Defensive regression — the activation check is strict
+      // `=== true`, so a null license-status (unanswered onboarding)
+      // does NOT activate even with a MiRegistry ID. Forces a
+      // deliberate "I am LEP" answer.
+      const modules = getActiveModules({
+        profile: {
+          program_settings: {},
+          miregistry_id: 'MR-67890',
+          is_license_exempt: null,
+        },
+        fundingSources: [],
+      })
+      expect(modules.has(MODULE_KEYS.MIREGISTRY_TRACKER)).toBe(false)
     })
   })
 
