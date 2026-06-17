@@ -2724,3 +2724,222 @@ policy, restore the mig 029 target_type CHECK to its
 `intake_packets` table + indexes + policies + trigger.
 Storage in the `consent-attachments` bucket is untouched
 (no objects are deleted by rollback).
+
+### 2026-06-16 — Migration 042: auditor portal Phase 1 — sessions + access log + universal RLS seal
+
+Applied to production on **2026-06-16**, manually via the
+Supabase web SQL Editor. Companion to the Phase 1 rebuild
+(branch `feature/auditor-portal-phase1-rebuild`, unmerged at
+time of apply). Two commits ship the migration:
+
+- **`7d8fba2`** — initial migration + Edge Functions
+  (`api/auditor-mint.js`, `api/auditor-read.js`,
+  `api/auditor-revoke.js`, `api/cron-auditor-lifecycle.js`)
+  + helpers (`src/lib/auditorPassword.js`) + 76 new tests.
+- **`ccf8a98`** — 42P17 fix. The first apply attempt failed
+  with `ERROR: 42P17: functions in index predicate must be
+  marked IMMUTABLE` against the `auditor_sessions_active_
+  unique_idx` partial unique index, which carried predicate
+  `where revoked_at is null AND expires_at > now()`. Postgres
+  rejects `now()` in partial-index predicates (it's `STABLE`,
+  not `IMMUTABLE`). Fix: predicate is now `where revoked_at
+  is null` only; the non-expired half of the constraint is
+  enforced at the app layer (`api/auditor-read.js` denies
+  expired sessions; `api/cron-auditor-lifecycle.js` rotates
+  the password once all of an auditor's sessions are
+  terminated). The mint endpoint's 409 message text was
+  updated in the same commit to drop the now-stale "or wait
+  for it to expire" advice — expired rows still hold the
+  index slot until explicitly revoked.
+
+Replaces the earlier unmerged HMAC-signed-link Phase 1 on
+branch `feature/auditor-portal-phase1` (now abandoned).
+Authoritative design: `docs/auditor-portal-auth-design.md`
+(temp-account + universal-seal model, Seth's chosen auth
+model from `docs/auditor-portal-design.md` § 2 Option B).
+
+What the migration does:
+
+- **`profiles` columns added:**
+  - `is_audit_account boolean NOT NULL DEFAULT false` — set
+    by the replaced `handle_new_user` trigger from
+    `raw_app_meta_data.role` at signup. Persistent flag used
+    by the mint endpoint's email-uniqueness gate to
+    distinguish auditor-identity profiles from
+    parent/provider profiles.
+  - `password_disabled_at timestamptz` — set by the
+    lifecycle cron when an auditor's password is rotated to
+    a fresh random value. Idempotency marker so the cron
+    doesn't re-rotate already-disabled accounts.
+
+- **`handle_new_user` REPLACED.** The migration 001 trigger
+  body is swapped to populate `is_audit_account` from
+  `raw_app_meta_data->>'role' = 'auditor'`. The
+  `on_auth_user_created` trigger itself (mig 001) is
+  untouched; only the function body changes. Canonical
+  revoke/grant trailer applied per CLAUDE.md rule 4.
+
+- **`public.is_auditor_jwt()` SECURITY DEFINER helper.**
+  The seal's single point of truth.
+  `coalesce((auth.jwt()->'app_metadata'->>'role') = 'auditor',
+  false)`. `STABLE`, `SECURITY DEFINER`, `search_path = public,
+  pg_catalog` (015 hardening convention). Canonical
+  revoke/grant trailer — execute granted to `authenticated`
+  only, revoked from `public` and `anon`.
+
+- **`auditor_sessions` table.** Provider-minted; one row
+  per audit. Columns: `id`, `provider_id` (FK profiles, ON
+  DELETE CASCADE), `auditor_user_id` (FK `auth.users`, ON
+  DELETE SET NULL), `email_at_creation` (NOT NULL),
+  `starts_at`, `expires_at` (NOT NULL), `revoked_at`,
+  `revoked_by_user_id`, `auditor_label`,
+  `auditor_acknowledged_at`, `auditor_acknowledged_label`,
+  `notes`, `created_at`, `updated_at`.
+  - **DB-floor CHECK constraints:**
+    - `auditor_sessions_expiry_window` — `expires_at >
+      starts_at AND expires_at <= starts_at + interval
+      '72 hours'`. The 72h cap holds at the database layer
+      even if app code is bypassed.
+    - `auditor_sessions_revoked_at_after_start` —
+      `revoked_at IS NULL OR revoked_at >= starts_at`.
+  - **Partial unique index** `auditor_sessions_active_unique_idx`
+    on `(auditor_user_id, provider_id) WHERE revoked_at IS
+    NULL` — enforces "one non-revoked session per (auditor,
+    provider) pair." See the `ccf8a98` note above for the
+    42P17 history; expiry is app-layer-enforced.
+  - **RLS:** provider-only SELECT/INSERT/UPDATE
+    (`auth.uid() = provider_id`). NO DELETE policy —
+    sessions are audit-retained; never hard-deleted.
+  - Updated_at trigger (`set_updated_at()`).
+
+- **`auditor_session_access_log` table.** Append-only audit
+  trail. Columns: `id`, `session_id` (FK auditor_sessions,
+  ON DELETE RESTRICT), `event_kind` (CHECK whitelist:
+  `read`, `denied`, `session_created`, `session_revoked`,
+  `session_extended`, `signed_url_minted`,
+  `password_rotated`), `read_resource_type`,
+  `read_resource_id`, `read_resource_descriptor` (jsonb),
+  `denial_reason` (CHECK whitelist), `ip_address` (inet),
+  `user_agent`, `occurred_at`. Composite CHECK enforces
+  `(event_kind='denied') iff (denial_reason IS NOT NULL)`.
+  - **RLS:** provider-only SELECT (via sub-select on
+    `auditor_sessions.provider_id`). **NO INSERT / UPDATE /
+    DELETE policy at all** — service-role-only writes from
+    the Edge Functions. Authenticated providers cannot
+    tamper with the log.
+
+- **THE UNIVERSAL SEAL.** A `DO` block iterates
+  `information_schema.tables WHERE table_schema='public' AND
+  table_type='BASE TABLE'`. For each table:
+  - `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` (idempotent;
+    no-op if already enabled).
+  - `DROP POLICY IF EXISTS "auditor jwt denied"` on the table.
+  - `CREATE POLICY "auditor jwt denied" ... AS RESTRICTIVE
+    FOR ALL USING (NOT public.is_auditor_jwt()) WITH CHECK
+    (NOT public.is_auditor_jwt())`.
+
+  PostgreSQL RESTRICTIVE policies are AND-combined with all
+  permissive policies — an auditor JWT fails on every table
+  it tries to read, regardless of what other policies
+  otherwise grant. The seal applies the policy uniformly,
+  named identically on every table, so coverage is verifiable
+  by one query.
+
+Verification — Seth ran in Supabase SQL Editor at apply time:
+
+- **`(c) SEAL-COVERAGE CHECK` — the load-bearing query:**
+  ```sql
+  select tablename from pg_policies
+   where policyname = 'auditor jwt denied' and schemaname='public'
+   order by tablename;
+  ```
+  **Returned 56 rows — every base table in `public`
+  schema.** (Reported: "Seal verified: 56 sealed_tables =
+  56 total_public_tables, zero unsealed.")
+- **`(d) INVERSE CHECK` — zero rows expected:**
+  ```sql
+  select t.tablename from pg_tables t
+   where t.schemaname = 'public'
+     and not exists (
+       select 1 from pg_policies p
+        where p.schemaname='public' and p.tablename=t.tablename
+          and p.policyname='auditor jwt denied'
+     );
+  ```
+  **Returned 0 rows.** The seal has no holes.
+- **`(g) INDEX VERIFICATION` — the 42P17-fix confirmation:**
+  ```sql
+  select indexname, indexdef
+    from pg_indexes
+   where schemaname='public' and tablename='auditor_sessions'
+   order by indexname;
+  ```
+  Confirmed `auditor_sessions_active_unique_idx UNIQUE
+  (auditor_user_id, provider_id) WHERE (revoked_at IS NULL)`
+  — predicate is `revoked_at IS NULL` only, no `now()`. The
+  42P17 fix from commit `ccf8a98` is in place.
+
+Together (c) + (d) prove "every public base table is
+sealed, no exceptions"; (g) proves the 42P17 fix is in
+production schema.
+
+Env vars at deploy time:
+
+- **Already in use:** `SUPABASE_URL`,
+  `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET`.
+- **Not required after the auth re-scope:** the abandoned
+  HMAC-era `AUDITOR_TOKEN_SIGNING_KEY_V1` env var, if it
+  was set in Vercel during the unmerged
+  `feature/auditor-portal-phase1` build, can be removed.
+  No code on the rebuild branch reads it.
+
+Phase boundaries — what this migration enables and what is
+NOT yet built:
+
+- **Phase 1 (this migration + its companion Edge Functions):
+  shipped.** Schema, universal seal, mint/read/revoke
+  endpoints, lifecycle cron, tests.
+- **Phase 2 (separate PR, NOT BUILT):** provider-side
+  BusinessInfoPage panel — list sessions, mint new, revoke,
+  view per-session log. Calls `/api/auditor-mint`.
+- **Phase 3 (separate PR, NOT BUILT):** auditor-facing SPA
+  at `/auditor/inspect?session=<id>` — sign-in (email +
+  provider-handed temp password), then `POST
+  /api/auditor-read` with the JWT + `{ session_id }`,
+  renders the bundle into a tabbed read-only surface.
+- **Phase 4 (separate PR, NOT BUILT):** expanded 8-step
+  live verification gate per the design doc § 7. Browser
+  evidence required before any Phase-3 merge.
+
+The seal is active in production NOW. Without Phase 2/3,
+no auditor account can be minted via UI — but the seal
+already protects against any future failure of the Edge
+Function boundary, AND covers the case where a developer
+or admin manually creates a Supabase user with
+`app_metadata.role = 'auditor'` via the dashboard (they
+would be unable to read any data via PostgREST).
+
+Lifecycle UX consequence flagged in `ccf8a98` for future
+follow-up:
+
+- A session that expires without being revoked still holds
+  the unique-index slot. A re-mint for the same (auditor,
+  provider) pair fails 23505 → 409 until the provider
+  explicitly revokes the prior session. Three resolution
+  options are documented in commit `ccf8a98`'s message:
+  (a) cron also revokes on expiry, (b) mint self-heals,
+  (c) status quo. **No decision recorded yet — status
+  quo until a follow-up PR.**
+
+Rollback — destructive on the universal seal across all
+~56 public tables. ⚠️ **Do NOT rollback after Phase 2 or
+Phase 3 have shipped** without a coordinated plan to drop
+their UI/API surfaces first. The migration file's ROLLBACK
+note at the header bottom (lines 134-141) outlines the
+order: drop the "auditor jwt denied" policy on every
+public table (regenerate the DROP list from query (c)
+above); drop `public.auditor_session_access_log`; drop
+`public.auditor_sessions`; drop function
+`public.is_auditor_jwt()`; drop the two new `profiles`
+columns; restore the migration-001 body of
+`handle_new_user`.
