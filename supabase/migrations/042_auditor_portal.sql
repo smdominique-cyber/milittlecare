@@ -122,8 +122,12 @@
 --   --   auditor_sessions_expiry_window CHECK (expires_at > starts_at AND expires_at <= starts_at + '72:00:00'::interval)
 --   --   auditor_sessions_revoked_at_after_start CHECK (revoked_at IS NULL OR revoked_at >= starts_at)
 --
---   -- (g) Partial unique index for active-session-per-(auditor,
---   --     provider) exists.
+--   -- (g) Partial unique index for non-revoked-session-per-(auditor,
+--   --     provider) exists. NOTE: predicate is `revoked_at IS NULL`
+--   --     ONLY — Postgres rejects now() in index predicates (42P17,
+--   --     STABLE not IMMUTABLE). Expiry is enforced at the app layer
+--   --     (api/auditor-read denies expired sessions; mint endpoint
+--   --     409s a duplicate active row regardless of expiry).
 --   select indexname, indexdef
 --     from pg_indexes
 --    where schemaname = 'public' and tablename = 'auditor_sessions'
@@ -131,7 +135,7 @@
 --   -- Expect to include:
 --   --   auditor_sessions_active_unique_idx
 --   --     UNIQUE (auditor_user_id, provider_id)
---   --     WHERE revoked_at IS NULL AND expires_at > now()
+--   --     WHERE (revoked_at IS NULL)
 --
 -- ROLLBACK (destructive — restores schema to pre-042 state. Do NOT
 -- run after Phase 2 / Phase 3 have shipped):
@@ -283,11 +287,22 @@ create index if not exists auditor_sessions_expires_idx
 create index if not exists auditor_sessions_auditor_user_idx
   on public.auditor_sessions (auditor_user_id);
 
--- Unique active session per (auditor_user_id, provider_id). A
--- second active mint for the same pair fails the unique index.
+-- Unique non-revoked session per (auditor_user_id, provider_id).
+--
+-- 2026-06-16 — predicate is `where revoked_at is null` only. The
+-- original intent was "one ACTIVE session per pair" (non-revoked
+-- AND non-expired), but Postgres rejects `now()` in an index
+-- predicate (it's STABLE, not IMMUTABLE — error 42P17). The
+-- expiry half of the constraint is enforced at the app layer:
+-- api/auditor-read.js denies expired sessions and
+-- api/cron-auditor-lifecycle.js rotates their passwords. The DB
+-- enforces "one non-revoked row per pair"; if a row has expired
+-- without being revoked, a re-mint for the same pair will 23505
+-- — api/auditor-mint.js surfaces a 409 telling the provider to
+-- revoke the existing session first.
 create unique index if not exists auditor_sessions_active_unique_idx
   on public.auditor_sessions (auditor_user_id, provider_id)
-  where revoked_at is null and expires_at > now();
+  where revoked_at is null;
 
 alter table public.auditor_sessions enable row level security;
 

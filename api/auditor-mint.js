@@ -330,8 +330,13 @@ export default async function handler(req) {
       // error code 23505 for unique_violation; the REST body usually
       // includes that code).
       if (errBody.includes('23505') || errBody.includes('auditor_sessions_active_unique_idx')) {
+        // 2026-06-16 — message no longer says "wait for it to expire."
+        // The DB unique index predicate is `revoked_at IS NULL` only
+        // (Postgres 42P17 forbade now() in the predicate); expired
+        // sessions still hold the slot until explicitly revoked.
+        // The provider MUST revoke before re-minting.
         return new Response(JSON.stringify({
-          error: 'This auditor already has an active session for this provider. Revoke it first or wait for it to expire.',
+          error: 'This auditor already has an active or expired session for this provider. Revoke it first, then re-mint.',
           code: 'active_session_exists',
         }), { status: 409, headers: { 'Content-Type': 'application/json' } })
       }

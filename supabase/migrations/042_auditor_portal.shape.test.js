@@ -97,9 +97,18 @@ describe('042 — auditor_sessions table', () => {
     expect(SQL).toMatch(/expires_at\s*<=\s*starts_at\s*\+\s*interval\s+'72 hours'/i)
   })
 
-  it('declares the partial unique index for active sessions', () => {
+  it('declares the partial unique index for non-revoked sessions per (auditor, provider)', () => {
     expect(SQL).toMatch(/create unique index if not exists auditor_sessions_active_unique_idx/i)
-    expect(SQL).toMatch(/where revoked_at is null and expires_at > now\(\)/i)
+    // 2026-06-16 — predicate is `revoked_at is null` ONLY. Postgres
+    // rejected the prior `expires_at > now()` clause with 42P17
+    // (now() is STABLE, not IMMUTABLE; partial indexes require
+    // IMMUTABLE predicates). Expiry is enforced at the app layer.
+    expect(SQL).toMatch(/auditor_sessions_active_unique_idx[\s\S]*?where revoked_at is null\s*(?:;|$)/im)
+    // Belt + suspenders: an SQL CODE line that still says
+    // `expires_at > now()` in this index predicate would be a
+    // regression of the fix.
+    const codeOnly = SQL.split('\n').filter(l => !/^\s*--/.test(l)).join('\n')
+    expect(codeOnly).not.toMatch(/auditor_sessions_active_unique_idx[\s\S]{0,200}expires_at\s*>\s*now\(\)/i)
   })
 
   it('enables RLS and creates the provider-scoped SELECT/INSERT/UPDATE policies', () => {
