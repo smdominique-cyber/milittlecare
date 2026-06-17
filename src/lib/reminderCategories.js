@@ -94,12 +94,16 @@ export const REMINDER_CATEGORIES = Object.freeze({
   intake_acknowledgment_pending: Object.freeze({
     key: 'intake_acknowledgment_pending',
     label: 'Parent has not yet signed intake acknowledgment',
+    // 2026-06-17 — rewritten in plain provider language; previously
+    // referenced internal build artifacts ("PR #16 § B.6 parent-portal
+    // extension") that mean nothing to a provider reading the settings
+    // page.
     description:
-      'Fires when the licensee has triggered parent-portal collection of an intake ' +
-      'acknowledgment (PR #16 § B.6 parent-portal extension) and the parent has not ' +
-      'completed it. Subject is the affected child; the per-acknowledgment row carries ' +
-      'the disclosure type. Fires immediately on trigger (lead 0) and is cleared on ' +
-      'parent confirm.',
+      'Reminds you when a parent you\'ve sent an intake acknowledgment to ' +
+      'hasn\'t completed it yet. The reminder is sent to the parent (not ' +
+      'you) so they finish signing — the per-child setting controls ' +
+      'whether that email goes out at all. Fires as soon as you send the ' +
+      'request, and clears the moment the parent confirms.',
     default_lead_time_days: 0,
     license_type_gating: ['family_home', 'group_home'],
     subject_type: 'child',
@@ -129,12 +133,17 @@ export const REMINDER_CATEGORIES = Object.freeze({
   staff_discipline_policy_ack_pending: Object.freeze({
     key: 'staff_discipline_policy_ack_pending',
     label: 'New hire owes discipline-policy acknowledgment',
+    // 2026-06-17 — rewritten in plain provider language; previously
+    // referenced internal build artifacts ("PR #17", "scope § B.4") that
+    // mean nothing to a provider.
     description:
-      'Per R 400.1906 / R 400.1942, every personnel member must acknowledge the ' +
-      'discipline policy at hire. Fires when caregivers.date_of_hire is set and no ' +
-      'active staff_discipline_policy_receipt acknowledgment exists for that caregiver. ' +
-      'Lead 0 = fires on the hire date; PR #17 also marks acks stale when the policy ' +
-      'version bumps (see scope § B.4).',
+      'Per R 400.1906 / R 400.1942, every staff member must acknowledge ' +
+      'your discipline policy at hire. Reminds you when a new caregiver ' +
+      'is on the roster but hasn\'t signed off on the policy yet. Fires ' +
+      'on the hire date you entered for that caregiver. If you update ' +
+      'the discipline policy text after staff have signed, their prior ' +
+      'signatures become stale and the reminder fires again for each ' +
+      'staff member who needs to re-acknowledge the new version.',
     default_lead_time_days: 0,
     license_type_gating: ['family_home', 'group_home'],
     subject_type: 'caregiver',
@@ -156,11 +165,15 @@ export const REMINDER_CATEGORIES = Object.freeze({
   physician_attestation_expiration: Object.freeze({
     key: 'physician_attestation_expiration',
     label: 'Physician attestation renewal due',
+    // 2026-06-17 — rewritten in plain provider language; previously
+    // referenced internal build artifacts ("PR #18") that mean nothing
+    // to a provider.
     description:
-      'Per R 400.1933, every personnel member (including the licensee themselves) ' +
-      'needs an annual physician attestation of mental and physical health. Fires N ' +
-      'days before the prior attestation\'s anniversary. PR #18 contributes the ' +
-      'physician_attestation value to staff_training_category.',
+      'Per R 400.1933, every staff member (including the licensee ' +
+      'themselves) needs a physician\'s attestation of mental and ' +
+      'physical health on file each year. Reminds you the configured ' +
+      'number of days before the anniversary of the prior attestation, ' +
+      'so you have time to get the staff member in for an appointment.',
     default_lead_time_days: 30,
     license_type_gating: ['family_home', 'group_home'],
     subject_type: 'caregiver',

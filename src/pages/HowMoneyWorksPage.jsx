@@ -130,16 +130,31 @@ export default function HowMoneyWorksPage() {
         </p>
       </Section>
 
-      {/* Section: 1099-K */}
+      {/* Section: 1099-K
+          2026-06-17 — rewritten after IRS Fact Sheet 2025-08 (Oct 2025)
+          recorded the One Big Beautiful Bill Act reinstating the pre-2022
+          thresholds: BOTH > $20,000 in gross payments AND > 200
+          transactions in a calendar year. The prior copy used the
+          short-lived $5,000 threshold and claimed "most providers hit it
+          within 7-8 weeks" — both wrong as of current law. */}
       <Section icon={<FileText size={22} />} iconClass="sage" title="The Form 1099-K — what you need to know">
         <p>
-          <strong>This is important.</strong> Once you receive more than <strong>$5,000 in
-          payments per year</strong> through Stripe, the IRS requires Stripe to issue you a
-          <strong> Form 1099-K</strong> at tax time.
+          As of 2026, the IRS requires Stripe to issue a <strong>Form 1099-K</strong>
+          {' '}only when <em>both</em> of these are true in a calendar year:
+        </p>
+        <ul className="hmw-list">
+          <li>More than <strong>$20,000</strong> in gross payments processed through Stripe, <strong>and</strong></li>
+          <li>More than <strong>200 separate transactions</strong>.</li>
+        </ul>
+        <p>
+          <strong>Both thresholds must be met</strong> — clearing the dollar amount alone
+          isn't enough. Many small home providers easily clear the dollar amount (a few
+          families paying monthly adds up) but stay well under 200 transactions for the year,
+          and so receive no 1099-K at all.
         </p>
         <p>
-          For most active providers, this happens within the <strong>first 7-8 weeks</strong> of accepting payments.
-          You'll receive your 1099-K in late January for the previous year's payments.
+          <strong>If you do cross both thresholds</strong>, Stripe will notify you and issue
+          the form in late January for the previous year's payments.
         </p>
         <div style={{
           background: 'var(--clr-warning-pale)',
@@ -148,13 +163,16 @@ export default function HowMoneyWorksPage() {
           padding: 'var(--space-4)',
           marginTop: 'var(--space-3)',
         }}>
-          <strong style={{ color: 'var(--clr-warning)', display: 'block', marginBottom: 4 }}>What to do with it:</strong>
+          <strong style={{ color: 'var(--clr-warning)', display: 'block', marginBottom: 4 }}>If you receive one, here's what to do:</strong>
           The 1099-K reports your gross payment income to the IRS. You'll use it (along with
           your tracked deductions in MI Little Care) when filing your taxes. Most providers
           give it to their tax preparer. <strong>You're not in trouble — this is normal.</strong>
         </div>
-        <p style={{ marginTop: 'var(--space-3)' }}>
-          We'll send you a reminder when your 1099-K is available each January.
+        <p style={{ marginTop: 'var(--space-3)', fontSize: '0.8125rem', color: 'var(--clr-ink-soft)' }}>
+          Threshold current as of 2026 per IRS Fact Sheet 2025-08 (Oct 2025), reflecting the
+          One Big Beautiful Bill Act's reinstatement of the pre-2022 rules. Whether you owe
+          income tax on your daycare earnings is a separate question from whether you receive
+          a 1099-K — talk to your tax preparer.
         </p>
       </Section>
 
