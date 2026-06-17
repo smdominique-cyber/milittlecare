@@ -50,6 +50,12 @@ export const COMPLIANCE_DOCUMENT_TYPES = Object.freeze([
   'property_fire_extinguishers_per_floor',  // J5   — mig 043
   'property_animal_notification',           // J6   — mig 043
   'property_smoking_prohibition_posted',    // J7   — mig 043
+  // 2026-06-17 PR #19 drills + Emergency Response Plan (mig 044).
+  // The plan is a written document the provider uploads; the row
+  // resolves via the same buildComplianceDocResolver as the property
+  // docs. The three sibling drill rows in PR #19 resolve from the
+  // new drill_logs table (different substrate), not from this list.
+  'emergency_response_plan',                // PR #19 — mig 044
 ])
 
 /**
@@ -233,6 +239,29 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
       'should show the sign in its actual location (door, foyer, etc.) ' +
       'so an auditor can see both the wording and that it is posted. ' +
       'Re-photograph if you move the sign or replace it.',
+    multi: false,
+  },
+
+  // ── PR #19 (mig 044) — Emergency Response Plan ──────────────────────
+  //
+  // The written plan covering staff roles, evacuation routes, parent
+  // notification, reunification, and the other R 400.1939 elements.
+  // This row uses the document substrate; the three sibling drill
+  // rows resolve from drill_logs (different mechanism — see
+  // src/lib/drillSchedule.js).
+
+  emergency_response_plan: {
+    title: 'Emergency Response Plan',
+    badge: { text: 'Required', tone: 'required' },
+    help:
+      'Upload your written Emergency Response Plan (PDF or photo of ' +
+      'the document). R 400.1939 — the plan covers fire / tornado / ' +
+      'lockdown / shelter-in-place / reunification response, staff ' +
+      'roles, evacuation routes, and parent notification. This slot ' +
+      'is the PLAN itself; the per-drill execution log (fire drills, ' +
+      'tornado drills, etc.) lives in the Drills section above. ' +
+      'Re-upload whenever you revise the plan; the prior copy stays in ' +
+      'archive for the retention window.',
     multi: false,
   },
 })

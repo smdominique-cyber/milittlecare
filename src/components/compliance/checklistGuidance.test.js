@@ -623,6 +623,19 @@ describe('registry-wide invariants', () => {
       'property_animal_notification:expired',
       'property_smoking_prohibition_posted:missing_required',
       'property_smoking_prohibition_posted:expired',
+      // 2026-06-17 PR #19 (mig 044). Three drill rows + ERP. The
+      // drill rows have BOTH missing and expired states (cycle /
+      // window / annual); the ERP is existence-only but the
+      // :expired entry is belt-and-suspenders, same pattern as
+      // the property batch.
+      'drill_fire_quarterly:missing_required',
+      'drill_fire_quarterly:expired',
+      'drill_tornado_seasonal:missing_required',
+      'drill_tornado_seasonal:expired',
+      'drill_other_emergencies_annual:missing_required',
+      'drill_other_emergencies_annual:expired',
+      'emergency_response_plan_on_file:missing_required',
+      'emergency_response_plan_on_file:expired',
     ])
     const kinds = ['missing_required', 'expired', 'pending_parent']
     for (const key of Object.keys(REQUIREMENT_REGISTRY)) {
