@@ -140,7 +140,7 @@ export default function Sidebar({ isOpen = false }) {
         { label: 'How Money Works', icon: Shield, path: '/how-money-works' },
         { label: 'Contact / Support', icon: MessageSquare, path: '/contact' },
         // Static asset, not a route: opens the manual PDF in a new tab.
-        { label: 'Provider Manual', icon: BookOpen, href: '/MILittleCare_Provider_Manual_v2.pdf', external: true },
+        { label: 'Provider Manual', icon: BookOpen, href: '/MILittleCare_Provider_Manual_v3.pdf', external: true },
       ],
     },
   ]
