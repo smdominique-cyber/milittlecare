@@ -444,6 +444,115 @@ function buildComplianceDocResolver(documentType, options = {}) {
 }
 
 /**
+ * PR #17/#18 foundation (mig 045) — resolver builder for per-caregiver
+ * compliance_documents rows. Mirrors buildComplianceDocResolver
+ * but iterates the caregiver roster and reports WORST across
+ * caregivers (same rollup discipline as the existing CPR / new-hire
+ * / background-check resolvers).
+ *
+ * For each caregiver, looks for a compliance_documents row of the
+ * given documentType whose subject_caregiver_id matches. Without
+ * one → MISSING_REQUIRED for that caregiver. With one + cycle mode
+ * + valid next_due_on → ON_FILE. With one + cycle mode + past
+ * next_due_on → EXPIRED.
+ *
+ * §2a load-failure guards on BOTH caregivers and compliance_documents.
+ *
+ * @param {string} documentType                  Catalog key
+ *   (mirrors COMPLIANCE_DOCUMENT_TYPES). Must be a per-caregiver
+ *   type — provider-level types use buildComplianceDocResolver.
+ * @param {{ requiresDueDate?: boolean }} options
+ * @returns {(ctx: { sourceRows, sourceRowsLoaded, now }) => RequirementState}
+ */
+function buildPerCaregiverComplianceDocResolver(documentType, options = {}) {
+  const requiresDueDate = !!options.requiresDueDate
+  return ({ sourceRows, sourceRowsLoaded, now }) => {
+    // §2a guards — both signals must be loaded cleanly. If either
+    // failed the load, return UNKNOWN with a recognisable reason
+    // rather than silently MISSING_REQUIRED. Mirrors the existing
+    // CPR / new-hire / background-check resolver shape.
+    if (sourceRowsLoaded && sourceRowsLoaded.caregivers === false) {
+      return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'caregivers-load-failure' }
+    }
+    if (sourceRowsLoaded && sourceRowsLoaded.compliance_documents === false) {
+      return {
+        kind: REQUIREMENT_STATE_KIND.UNKNOWN,
+        reason: 'compliance-documents-load-failure',
+      }
+    }
+
+    const caregivers = (sourceRows && sourceRows.caregivers || [])
+      .filter(c => c && !c.archived_at)
+    if (caregivers.length === 0) {
+      return {
+        kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED,
+        reason: 'no-active-caregivers',
+      }
+    }
+    const docs = (sourceRows && sourceRows.compliance_documents) || []
+
+    const today = now || new Date()
+    const todayYmd = today.toISOString().slice(0, 10)
+
+    // WORST-wins ranking. Same as the existing caregiver-subject
+    // resolvers (background_check_eligibility, cpr_first_aid_current).
+    const rank = {
+      [REQUIREMENT_STATE_KIND.ON_FILE]:           0,
+      [REQUIREMENT_STATE_KIND.PENDING_PARENT]:    1,
+      [REQUIREMENT_STATE_KIND.MISSING_REQUIRED]:  2,
+      [REQUIREMENT_STATE_KIND.EXPIRED]:           3,
+      [REQUIREMENT_STATE_KIND.UNKNOWN]:           4,
+    }
+    let worst = { kind: REQUIREMENT_STATE_KIND.ON_FILE }
+    let worstCaregiverId = null
+
+    for (const c of caregivers) {
+      const active = docs.find(d =>
+        d
+        && !d.archived_at
+        && d.document_type === documentType
+        && d.subject_caregiver_id === c.id
+      )
+
+      let state
+      if (!active) {
+        state = { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED, evidence_id: null }
+      } else if (!requiresDueDate) {
+        state = { kind: REQUIREMENT_STATE_KIND.ON_FILE, evidence_id: active.id }
+      } else {
+        const dueOn = active.next_due_on
+        if (!dueOn) {
+          state = {
+            kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED,
+            reason: 'due-date-missing',
+            evidence_id: active.id,
+          }
+        } else if (dueOn >= todayYmd) {
+          state = { kind: REQUIREMENT_STATE_KIND.ON_FILE, expires_at: dueOn, evidence_id: active.id }
+        } else {
+          state = { kind: REQUIREMENT_STATE_KIND.EXPIRED, expired_at: dueOn, evidence_id: active.id }
+        }
+      }
+
+      const currentRank = rank[state.kind] ?? 4
+      const worstRank   = rank[worst.kind] ?? 4
+      if (currentRank > worstRank) {
+        worst = state
+        worstCaregiverId = c.id
+      }
+    }
+
+    // Attach the worst caregiver id when the row is non-on_file so
+    // the UI can deep-link to that caregiver's drill-in. ON_FILE
+    // doesn't need an id (every caregiver passed).
+    if (worst.kind !== REQUIREMENT_STATE_KIND.ON_FILE && worstCaregiverId) {
+      return { ...worst, subject_caregiver_id: worstCaregiverId }
+    }
+    return worst
+  }
+}
+
+/**
  * PR #19 (mig 044) — resolver builder for the three drill compliance
  * rows. Reads sourceRows.drill_logs and computes state via
  * src/lib/drillSchedule.js, which itself wraps the pure
@@ -1672,9 +1781,21 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'high',
-    data_state: 'not_yet_modelled',
+    // 2026-06-17 PR #17/#18 foundation (mig 045): flipped from
+    // 'not_yet_modelled' to 'shipped'. Per-caregiver document via
+    // the new subject_caregiver_id column on compliance_documents +
+    // the new 'caregiver_physician_attestation' document_type.
+    // Cycle mode (requiresDueDate=true) — the provider enters the
+    // next-due date at upload time (typically attestation date + 1
+    // year per R 400.1933's annual rule). Reports WORST across the
+    // caregiver roster — same rollup discipline as the existing CPR
+    // / background-check resolvers.
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildPerCaregiverComplianceDocResolver(
+      'caregiver_physician_attestation',
+      { requiresDueDate: true }
+    ),
   }),
 
   caregiver_discipline_policy_ack_at_hire: Object.freeze({

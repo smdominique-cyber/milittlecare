@@ -56,11 +56,11 @@ describe('compliance_documents catalog ↔ config alignment (the B1-style enum t
     }
   })
 
-  it('Phase A + 2026-06-14 batch + 2026-06-17 PR #21 inventory batch + 2026-06-17 PR #19 ERP — order locked, count locked', () => {
+  it('Phase A + 2026-06-14 batch + 2026-06-17 PR #21 inventory batch + 2026-06-17 PR #19 ERP + 2026-06-17 PR #17/#18 foundation — order locked, count locked', () => {
     // Each addition needs both the SQL CHECK (mig 038, then 039, then
-    // 043, then 044) and this catalog updated in lockstep. A new
-    // entry forces this test to fail until the migration is named in
-    // the same commit — the same enum-trap discipline as B1.
+    // 043, then 044, then 045) and this catalog updated in lockstep.
+    // A new entry forces this test to fail until the migration is
+    // named in the same commit — the same enum-trap discipline as B1.
     expect(COMPLIANCE_DOCUMENT_TYPES).toEqual([
       'fingerprint_reprint',                    // G4   — mig 038
       'property_radon_test',                    // J1   — mig 039
@@ -72,6 +72,7 @@ describe('compliance_documents catalog ↔ config alignment (the B1-style enum t
       'property_animal_notification',           // J6   — mig 043
       'property_smoking_prohibition_posted',    // J7   — mig 043
       'emergency_response_plan',                // PR #19 — mig 044
+      'caregiver_physician_attestation',        // PR #17/#18 foundation — mig 045
     ])
   })
 

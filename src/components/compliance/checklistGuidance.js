@@ -116,7 +116,11 @@ export const SURFACE = Object.freeze({
   // hosts the drill log entry form + the ERP ComplianceDocumentSlot.
   BUSINESS_INFO_DRILLS:        'business_info_drills',
   // 3.1b-2 — StaffTrainingPage drill-in via ?caregiver=<id>;
-  // page-level without a caregiverId in context.
+  // page-level without a caregiverId in context. As of 2026-06-17,
+  // per-caregiver resolvers (PR #17/#18 foundation) attach
+  // state.subject_caregiver_id to their state; actionableGapPropsFor
+  // merges that into the fixTarget context so the deep-link uses
+  // the worst caregiver's id even from the provider-wide checklist.
   STAFF_TRAINING:              'staff_training',
 })
 
@@ -470,12 +474,12 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
       'applicable caregiver must read and acknowledge within the ' +
       'notice’s stated timeframe.',
   },
-  caregiver_physician_attestation_annual: {
-    notYetShipped:
-      'Tracking ships with PR #18 (staff file gaps). Keep paper records ' +
-      'of physician attestation of staff mental and physical health ' +
-      'annually — an auditor will ask.',
-  },
+  // 2026-06-17 PR #17/#18 foundation (mig 045): the row flipped to
+  // shipped, so the notYetShipped copy is no longer reachable.
+  // The provider-language missing / expired copy lives at the
+  // dedicated entry further down in this map (the PR #17/#18
+  // foundation block). The Pattern E "needs to ship" placeholder
+  // is gone.
   caregiver_discipline_policy_ack_at_hire: {
     notYetShipped:
       'Tracking ships with PR #17 (discipline policy receipt). Keep ' +
@@ -754,6 +758,49 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
       'sibling rows above.',
   },
 
+  // ── PR #17/#18 foundation (mig 045) — physician attestation ───────
+  //
+  // Per-caregiver document. The resolver attaches
+  // `subject_caregiver_id` to the state when not on_file, so the
+  // fixTarget's STAFF_TRAINING surface deep-links to the worst-
+  // caregiver's drill-in page.
+
+  caregiver_physician_attestation_annual: {
+    surface: SURFACE.STAFF_TRAINING,
+    missing: (state) => {
+      if (state && state.reason === 'due-date-missing') {
+        return (
+          'A physician attestation is on file for this caregiver, but ' +
+          'no next-due date is set — the requirement can\'t tell ' +
+          'whether it\'s still current. Re-upload in Staff Training ' +
+          '→ this caregiver and enter the next-due date (typically ' +
+          'the attestation date + 1 year per R 400.1933).'
+        )
+      }
+      if (state && state.reason === 'no-active-caregivers') {
+        return (
+          'No active caregivers on the roster yet. Add at least one ' +
+          'caregiver in Team — once you do, this row will compute the ' +
+          'per-caregiver physician attestation status (R 400.1933).'
+        )
+      }
+      return (
+        'Upload the signed annual physician attestation for each ' +
+        'caregiver in Staff Training → this caregiver. R 400.1933 ' +
+        'requires a physician\'s attestation of mental and physical ' +
+        'health for every personnel member, renewed each year. The ' +
+        'fix link opens whichever caregiver is currently missing the ' +
+        'attestation.'
+      )
+    },
+    expired:
+      'A caregiver\'s physician attestation has passed its annual due ' +
+      'date. Upload the new attestation in Staff Training → that ' +
+      'caregiver and enter the new next-due date. R 400.1933 — the ' +
+      'rule is an annual cycle. The fix link opens whichever ' +
+      'caregiver expired first.',
+  },
+
   // ── Group H — attendance acks (category C surface — text-only) ───
   attendance_parent_acknowledgment_per_day: {
     // 3.1b-2 copy fix: the engine emits AGGREGATED reasons
@@ -877,11 +924,23 @@ export function actionableGapPropsFor({ requirement, state, context } = {}) {
     (entry.severityOverride && entry.severityOverride[kind])
     || SEVERITY_BY_KIND[kind]
 
+  // 2026-06-17 PR #17/#18 foundation (mig 045) — merge
+  // state.subject_caregiver_id into context.caregiverId so a
+  // per-caregiver resolver's worst-caregiver pointer flows into
+  // the STAFF_TRAINING fixTarget's caregiver deep-link. Without
+  // this merge, the deep-link would only fire when an upstream
+  // surface (e.g. the per-caregiver checklist view) had already
+  // populated context.caregiverId, which the provider-wide
+  // checklist surface doesn't do.
+  const mergedContext = state.subject_caregiver_id
+    ? { ...(context || {}), caregiverId: state.subject_caregiver_id }
+    : context
+
   // pending_parent stays guidance-only in 3.1 (scope §3: the "send
   // reminder" action is deferred per Phase 3 decision #10).
   const fixTarget = kind === 'pending_parent'
     ? null
-    : buildFixTarget(entry.surface, context)
+    : buildFixTarget(entry.surface, mergedContext)
 
   return fixTarget
     ? { guidanceText, severity, fixTarget }

@@ -12,6 +12,9 @@ import {
   BACKGROUND_CHECK_STATUS_META,
   formatShortDate,
 } from '@/lib/staffTraining'
+// 2026-06-17 PR #17/#18 foundation (mig 045): per-caregiver physician
+// attestation slot mounted in the licensee drill-in view.
+import ComplianceDocumentSlot from '@/components/documents/ComplianceDocumentSlot'
 
 function recordMeta(record) {
   const parts = [`Completed ${formatShortDate(record.completed_on)}`]
@@ -120,6 +123,26 @@ export default function CaregiverTrainingLog({
           {archived.map(record => (
             <RecordRow key={record.id} record={record} archived />
           ))}
+        </div>
+      )}
+
+      {/* 2026-06-17 PR #17/#18 foundation (mig 045) — per-caregiver
+          physician attestation slot. Annual cycle (R 400.1933) backed
+          by compliance_documents (new subject_caregiver_id column).
+          Renders only in the licensee view (we treat `onAssignRoles`
+          as the licensee-context proxy — the same condition the
+          existing "Assign regulatory roles" button uses). Self-view
+          staff don't upload their own attestation in V1; the
+          licensee uploads on their behalf. */}
+      {onAssignRoles && caregiver?.id && (
+        <div style={{ marginTop: 'var(--space-4)' }}>
+          <h4 className="st-section-title" style={{ marginBottom: 'var(--space-2)' }}>
+            Physician attestation (annual)
+          </h4>
+          <ComplianceDocumentSlot
+            documentType="caregiver_physician_attestation"
+            subjectCaregiverId={caregiver.id}
+          />
         </div>
       )}
     </div>

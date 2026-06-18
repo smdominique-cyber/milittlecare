@@ -918,10 +918,16 @@ describe('Pattern E — feature-not-yet-shipped', () => {
   // compliance_documents-backed via the existing builder. Their
   // resolver tests live in dedicated describes below.
   //
-  // What remains here: the three caregiver rows that need a
-  // per-caregiver scoping column before they fit the doc substrate.
+  // 2026-06-17 PR #17/#18 foundation (mig 045): the per-caregiver
+  // scoping column ships, and caregiver_physician_attestation_annual
+  // flips to shipped via the new buildPerCaregiverComplianceDocResolver.
+  // Its resolver tests live in a dedicated describe below.
+  //
+  // What remains here: the two follow-up caregiver rows that ship in
+  // the next PR — discipline-policy ack (acknowledgments substrate)
+  // and daily arrival/departure (time-clock + non-app-user fallback,
+  // design recorded in mig 045 header).
   const PATTERN_E_KEYS = [
-    'caregiver_physician_attestation_annual',
     'caregiver_discipline_policy_ack_at_hire',
     'caregiver_daily_arrival_departure',
   ]
@@ -1354,6 +1360,226 @@ describe('compliance_documents-backed resolvers (J1/J2/J8 — mig 039 + mig 040)
 // load-failure UNKNOWN transitions. The drill-schedule wrapper and
 // the consistency-with-reminder regression net live in
 // src/lib/drillSchedule.test.js.
+
+// -----------------------------------------------------------------------------
+// PR #17/#18 foundation (mig 045) — per-caregiver compliance_documents resolver
+// -----------------------------------------------------------------------------
+//
+// The first per-caregiver row backed by compliance_documents: the
+// annual physician attestation (R 400.1933). Resolver iterates the
+// caregiver roster and reports WORST across caregivers (same
+// rollup discipline as the existing CPR / background-check
+// resolvers). On non-ON_FILE outcomes the resolver attaches
+// `subject_caregiver_id` to the state so the fixTarget deep-links
+// to that caregiver's drill-in page.
+
+describe('caregiver_physician_attestation_annual (per-caregiver, cycle, mig 045)', () => {
+  const requirement = REQUIREMENT_REGISTRY.caregiver_physician_attestation_annual
+
+  const cg = (overrides = {}) => ({
+    id: 'cg-1',
+    full_name: 'Sam Caregiver',
+    archived_at: null,
+    ...overrides,
+  })
+
+  const doc = (overrides = {}) => ({
+    id: 'd-1',
+    document_type: 'caregiver_physician_attestation',
+    subject_caregiver_id: 'cg-1',
+    uploaded_at: '2026-06-01T00:00:00Z',
+    archived_at: null,
+    next_due_on: '2027-06-01',   // 1 year out — future
+    ...overrides,
+  })
+
+  it('data_state has flipped to shipped (was not_yet_modelled before this PR)', () => {
+    expect(requirement.data_state).toBe(DATA_STATE.SHIPPED)
+  })
+
+  it('§2a guard — caregivers load failure → UNKNOWN with reason caregivers-load-failure', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({ caregivers: [], compliance_documents: [] }),
+      sourceRowsLoaded: { caregivers: false, compliance_documents: true },
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+    expect(state.reason).toBe('caregivers-load-failure')
+  })
+
+  it('§2a guard — compliance_documents load failure → UNKNOWN with reason compliance-documents-load-failure', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({ caregivers: [cg()], compliance_documents: [] }),
+      sourceRowsLoaded: { caregivers: true, compliance_documents: false },
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+    expect(state.reason).toBe('compliance-documents-load-failure')
+  })
+
+  it('no active caregivers → MISSING_REQUIRED with reason no-active-caregivers', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({ caregivers: [], compliance_documents: [] }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    expect(state.reason).toBe('no-active-caregivers')
+  })
+
+  it('every caregiver has a valid attestation → ON_FILE (no subject_caregiver_id attached)', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({
+        caregivers: [cg({ id: 'cg-1' }), cg({ id: 'cg-2' })],
+        compliance_documents: [
+          doc({ id: 'd-1', subject_caregiver_id: 'cg-1', next_due_on: '2027-06-01' }),
+          doc({ id: 'd-2', subject_caregiver_id: 'cg-2', next_due_on: '2027-09-15' }),
+        ],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+    expect(state.subject_caregiver_id).toBeUndefined()
+  })
+
+  it('one caregiver has no attestation → MISSING_REQUIRED for that caregiver, with subject_caregiver_id attached', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({
+        caregivers: [cg({ id: 'cg-1' }), cg({ id: 'cg-2' })],
+        compliance_documents: [
+          doc({ id: 'd-1', subject_caregiver_id: 'cg-1', next_due_on: '2027-06-01' }),
+          // cg-2 has no doc — that's the one MISSING.
+        ],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    expect(state.subject_caregiver_id).toBe('cg-2')
+  })
+
+  it('one caregiver has a doc but next_due_on is missing → MISSING_REQUIRED with reason due-date-missing', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({
+        caregivers: [cg({ id: 'cg-1' })],
+        compliance_documents: [doc({ subject_caregiver_id: 'cg-1', next_due_on: null })],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    expect(state.reason).toBe('due-date-missing')
+    expect(state.subject_caregiver_id).toBe('cg-1')
+  })
+
+  it('one caregiver has a doc whose next_due_on has passed → EXPIRED with subject_caregiver_id attached', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({
+        caregivers: [cg({ id: 'cg-1' })],
+        compliance_documents: [doc({ subject_caregiver_id: 'cg-1', next_due_on: '2026-01-15' })],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.EXPIRED)
+    expect(state.expired_at).toBe('2026-01-15')
+    expect(state.subject_caregiver_id).toBe('cg-1')
+  })
+
+  it('WORST-wins across caregivers: 1 OK + 1 expired + 1 missing → EXPIRED (rank: expired > missing > on_file)', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({
+        caregivers: [cg({ id: 'cg-ok' }), cg({ id: 'cg-missing' }), cg({ id: 'cg-expired' })],
+        compliance_documents: [
+          doc({ subject_caregiver_id: 'cg-ok',      next_due_on: '2027-06-01' }),
+          doc({ subject_caregiver_id: 'cg-expired', next_due_on: '2026-01-15' }),
+        ],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.EXPIRED)
+    expect(state.subject_caregiver_id).toBe('cg-expired')
+  })
+
+  it('archived caregiver is ignored (no MISSING for them)', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({
+        caregivers: [
+          cg({ id: 'cg-active' }),
+          cg({ id: 'cg-archived', archived_at: '2026-04-01T00:00:00Z' }),
+        ],
+        compliance_documents: [
+          doc({ subject_caregiver_id: 'cg-active', next_due_on: '2027-06-01' }),
+          // cg-archived has no doc but is excluded from the rollup.
+        ],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+  })
+
+  it('a doc whose subject_caregiver_id does NOT match any active caregiver does not satisfy any caregiver', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({
+        caregivers: [cg({ id: 'cg-1' })],
+        compliance_documents: [doc({ subject_caregiver_id: 'cg-someone-else', next_due_on: '2027-06-01' })],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    expect(state.subject_caregiver_id).toBe('cg-1')
+  })
+
+  it('archived doc of the right type for the right caregiver is ignored', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({
+        caregivers: [cg({ id: 'cg-1' })],
+        compliance_documents: [
+          doc({ subject_caregiver_id: 'cg-1', archived_at: '2026-06-10T00:00:00Z' }),
+        ],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+  })
+
+  it('doc of a DIFFERENT type (fingerprint_reprint) is ignored — discriminator works', () => {
+    const state = getRequirementState({
+      requirement,
+      provider: makeLicensedProvider(),
+      sourceRows: makeSourceRows({
+        caregivers: [cg({ id: 'cg-1' })],
+        compliance_documents: [
+          doc({
+            document_type: 'fingerprint_reprint',
+            subject_caregiver_id: 'cg-1',
+            next_due_on: '2027-06-01',
+          }),
+        ],
+      }),
+      now: FIXED_NOW,
+    })
+    expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+  })
+})
 
 describe('drill_logs-backed resolvers (PR #19 — mig 044)', () => {
   // Anchored against FIXED_NOW from this file's top (2026-06-15) so

@@ -15,6 +15,21 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+
+// 2026-06-17 PR #17/#18 foundation (mig 045) — CaregiverTrainingLog
+// now imports ComplianceDocumentSlot, which transitively imports
+// @/lib/supabase (a singleton that throws at import time if env vars
+// are missing — they are in the test env). This mock keeps the
+// hire-date tests focused on their original surface area without
+// pulling supabase into the import graph.
+vi.mock('@/components/documents/ComplianceDocumentSlot', () => ({
+  default: ({ documentType, subjectCaregiverId }) => (
+    <div data-testid={`compliance-doc-slot-${documentType}-${subjectCaregiverId || 'none'}`}>
+      doc slot {documentType} {subjectCaregiverId || 'provider-level'}
+    </div>
+  ),
+}))
+
 import CaregiverTrainingLog from './CaregiverTrainingLog'
 
 afterEach(cleanup)

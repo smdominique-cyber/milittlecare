@@ -56,6 +56,13 @@ export const COMPLIANCE_DOCUMENT_TYPES = Object.freeze([
   // docs. The three sibling drill rows in PR #19 resolve from the
   // new drill_logs table (different substrate), not from this list.
   'emergency_response_plan',                // PR #19 — mig 044
+  // 2026-06-17 PR #17/#18 foundation (mig 045). FIRST per-caregiver
+  // document type — every row is keyed on subject_caregiver_id
+  // (not user_id alone). The annual physician attestation per
+  // R 400.1933. The discipline-policy signed copy is the next
+  // candidate per-caregiver doc type; deferred to the next PR
+  // alongside its acknowledgments-table-based ack.
+  'caregiver_physician_attestation',        // PR #17/#18 — mig 045
 ])
 
 /**
@@ -263,5 +270,33 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
       'Re-upload whenever you revise the plan; the prior copy stays in ' +
       'archive for the retention window.',
     multi: false,
+  },
+
+  // ── PR #17/#18 foundation (mig 045) — per-caregiver physician attestation
+  //
+  // The first per-caregiver document_type. The DocumentSlot caller
+  // must supply a parentScope `{ columnName: 'subject_caregiver_id',
+  // value: <caregiver_id> }` so the slot reads/writes against the
+  // per-caregiver projection rather than the provider-level path.
+  // Single-instance per caregiver — annual cycle via the provider-
+  // entered next-due date (same pattern as radon).
+
+  caregiver_physician_attestation: {
+    title: 'Physician attestation of health',
+    badge: { text: 'Required', tone: 'required' },
+    help:
+      'Upload the signed physician attestation of mental and physical ' +
+      'health for this caregiver — R 400.1933(1)-(2). The form is ' +
+      'completed and signed by a licensed physician once a year. ' +
+      'Replace with the new form after each annual visit; the prior ' +
+      'copy stays in archive for the retention window.',
+    multi: false,
+    requiresDueDate: true,
+    dueDateLabel: 'Next attestation due',
+    dueDateHelp:
+      'Enter the date this caregiver\'s next annual physician ' +
+      'attestation is due — typically the date of the most recent ' +
+      'attestation plus 1 year. R 400.1933 — the rule is an annual ' +
+      'cycle, not a fixed calendar date.',
   },
 })

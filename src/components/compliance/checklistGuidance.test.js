@@ -249,6 +249,36 @@ describe('staff rows — /staff-training fixTargets (3.1b-2)', () => {
     })
   })
 
+  // 2026-06-17 PR #17/#18 foundation (mig 045) — per-caregiver
+  // resolver state can carry a subject_caregiver_id directly on
+  // the state, and actionableGapPropsFor merges it into the
+  // fixTarget context so the deep-link works from the
+  // provider-wide checklist (where ctx.caregiverId is not set).
+
+  it('state.subject_caregiver_id (without ctx.caregiverId) builds the per-caregiver deep-link', () => {
+    const gap = gapFor(
+      'caregiver_physician_attestation_annual',
+      { kind: 'missing_required', subject_caregiver_id: 'cg-worst' },
+      {} // empty context — the provider-wide checklist case
+    )
+    expect(gap.fixTarget).toEqual({
+      label: 'Open this caregiver in Staff Training',
+      to: '/staff-training?caregiver=cg-worst',
+    })
+  })
+
+  it('state.subject_caregiver_id overrides ctx.caregiverId when both are present', () => {
+    // The state's pointer is the worst caregiver computed by the
+    // resolver; ctx is the page-level scope. The merge picks the
+    // state's pointer because that\'s the row\'s own worst-case.
+    const gap = gapFor(
+      'caregiver_physician_attestation_annual',
+      { kind: 'expired', subject_caregiver_id: 'cg-state' },
+      { caregiverId: 'cg-context' }
+    )
+    expect(gap.fixTarget.to).toBe('/staff-training?caregiver=cg-state')
+  })
+
   it('caregiverId is URI-encoded in the built target', () => {
     const gap = gapFor('caregiver_cpr_first_aid_current', { kind: 'missing_required' },
       { caregiverId: 'cg/1&x' })
@@ -280,8 +310,14 @@ describe('staff rows — /staff-training fixTargets (3.1b-2)', () => {
     }
   })
 
-  it('ONLY the six E-rows ever link to /staff-training (registry-wide)', () => {
-    const staff = new Set(STAFF_ROWS)
+  it('ONLY the allowlisted caregiver rows ever link to /staff-training (registry-wide)', () => {
+    // 2026-06-17 PR #17/#18 foundation (mig 045): the
+    // caregiver_physician_attestation_annual row joins the staff-
+    // training surface. The allowlist grows by one. Same gate
+    // discipline as the property allowlist — any new row that
+    // links here forces this test to fail until it's added
+    // explicitly.
+    const staff = new Set([...STAFF_ROWS, 'caregiver_physician_attestation_annual'])
     const kinds = ['missing_required', 'expired', 'pending_parent']
     for (const key of Object.keys(REQUIREMENT_REGISTRY)) {
       for (const kind of kinds) {
