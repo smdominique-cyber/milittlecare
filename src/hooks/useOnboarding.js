@@ -23,6 +23,7 @@ import {
   buildProfileUpdate,
   STEPS_PER_PROVIDER,
 } from '@/lib/onboarding'
+import { ensureLicenseeSelfCaregiverRow } from '@/lib/licenseeRoster'
 import { onboardingReducer, initialOnboardingState, STATUS } from './onboardingReducer'
 
 // The profile columns the wizard reads and writes.
@@ -73,13 +74,42 @@ export function useOnboarding() {
   }, [user?.id])
 
   // Apply one wizard event to Supabase; throws on failure.
+  //
+  // SIDE EFFECT on first completion: when this persist transitions the
+  // profile from "not yet completed" → "completed" (i.e. the answer or
+  // skip that resolved the final step), it also ensures the licensee
+  // has a `caregivers` self-row. See src/lib/licenseeRoster.js for the
+  // rationale + the single-create-path discipline. The side effect is
+  // intentionally fired AFTER the primary profile write succeeds —
+  // never before — so a failed profile write cannot leave a stray
+  // self-row. The self-row create is best-effort: if it fails, we log
+  // and proceed; mig 046 catches up any licensee whose post-completion
+  // create did not stick (e.g., transient network) on next page load
+  // via a one-time sweep. Onboarding is not blocked.
   async function persist(event) {
     const profile = profileRef.current
     if (!profile) throw new Error('profile not loaded')
+    const wasCompleted = !!(profile.onboarding_state && profile.onboarding_state.completed_at)
     const { update, nextProfile } = buildProfileUpdate({ profile, event })
     const { error } = await supabase.from('profiles').update(update).eq('id', profile.id)
     if (error) throw error
     profileRef.current = nextProfile
+    const nowCompleted = !!(nextProfile.onboarding_state && nextProfile.onboarding_state.completed_at)
+    if (!wasCompleted && nowCompleted && user) {
+      // Onboarding only runs for licensees, but the helper itself is
+      // defensive (it gates on user.id and uses the unique
+      // (licensee_id, app_user_id) constraint for idempotency). A
+      // catch here is paranoid — the helper does not throw — but we
+      // wrap anyway so any future contract change is contained.
+      try {
+        const { error: roleErr } = await ensureLicenseeSelfCaregiverRow({ user })
+        if (roleErr) {
+          console.error('useOnboarding: licensee self-row create returned an error', roleErr)
+        }
+      } catch (selfErr) {
+        console.error('useOnboarding: licensee self-row create threw', selfErr)
+      }
+    }
   }
 
   const question = getQuestion(state.currentStep)

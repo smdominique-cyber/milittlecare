@@ -38,27 +38,23 @@ export function useStaffTraining() {
     setLoading(true)
     setError(null)
     try {
-      // Ensure the licensee has their own caregiver row. The
-      // unique (licensee_id, app_user_id) constraint makes this safe to
-      // attempt — a duplicate insert is rejected, not duplicated.
-      if (isLicensee) {
-        const { data: self, error: selfErr } = await supabase
-          .from('caregivers')
-          .select('id')
-          .eq('licensee_id', user.id)
-          .eq('app_user_id', user.id)
-          .maybeSingle()
-        if (selfErr) throw selfErr
-        if (!self) {
-          const { error: insErr } = await supabase.from('caregivers').insert({
-            licensee_id: user.id,
-            app_user_id: user.id,
-            full_name:
-              user.user_metadata?.full_name || user.email || 'You (licensee)',
-          })
-          if (insErr) throw insErr
-        }
-      }
+      // The licensee self-row used to be created HERE on page mount,
+      // gated on isLicensee. As of 2026-06-18, the create lives at
+      // onboarding completion (useOnboarding.js → persist on first
+      // completed_at transition) and existing licensees were
+      // backfilled by migration 046. This page now READS the roster
+      // and trusts that the self-row is already present for any
+      // licensee who has completed onboarding (or who was backfilled).
+      //
+      // If a licensee somehow lands here without a self-row (e.g.
+      // an account that bypassed both onboarding AND the backfill —
+      // not a path that exists in production today), the staff list
+      // simply will not include them. That is a degraded display, not
+      // a data corruption. Surfacing it explicitly would require
+      // adding a second create path here, which would defeat the
+      // single-create-path discipline; instead, the licenseeRoster
+      // helper is callable from anywhere if a future need arises.
+      // See src/lib/licenseeRoster.js for the canonical create.
 
       // The roster — scoped by role.
       const base = supabase.from('caregivers').select('*')

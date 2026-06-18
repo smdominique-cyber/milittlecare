@@ -1,0 +1,266 @@
+-- ============================================================
+-- MI Little Care — Licensee caregivers self-row backfill (mig 046).
+--
+-- 2026-06-18. One-time backfill of the `caregivers` self-row that
+-- represents each licensee in her own regulatory roster. After this
+-- migration applies, every licensee in `profiles` (license_type IS NOT
+-- NULL) AND every distinct licensee already referenced as
+-- caregivers.licensee_id will have a row in `caregivers` with
+-- app_user_id = licensee_id.
+--
+-- Why this exists:
+--   The per-caregiver compliance resolver shipped in PR #17/#18
+--   foundation (mig 045) iterates caregivers WHERE licensee_id =
+--   provider_id to cover R 400.1933(1) — the licensee's own physician
+--   attestation. Pre-2026-06-18 the self-row was created lazily on
+--   Staff Training page mount (useStaffTraining.js). A licensee who
+--   landed on /compliance before /staff-training would have no
+--   self-row, silently under-reporting subrule (1). The create is now
+--   relocated to onboarding completion (Approach A); this migration
+--   catches up every licensee who completed onboarding before the
+--   relocate landed.
+--
+-- ── What this migration does ────────────────────────────────────────
+--   ONE INSERT into public.caregivers, scoped to the universe of
+--   licensees that do not already have a self-row. The insert shape
+--   mirrors the historical useStaffTraining.js create exactly, so
+--   rows produced here are indistinguishable from rows the live code
+--   produces:
+--
+--     licensee_id  → the licensee's auth.users.id
+--     app_user_id  → same value (this is what marks a self-row)
+--     full_name    → COALESCE in priority order:
+--                      1. profiles.full_name (if set)
+--                      2. profiles.email     (if set)
+--                      3. 'You (licensee)'   (final fallback)
+--
+--   Every other column uses the table default — id (uuid),
+--   email (NULL), date_of_hire (NULL), archived_at (NULL),
+--   created_at (now()), updated_at (now()). Per mig 012:92-107.
+--
+-- ── What this migration does NOT change ─────────────────────────────
+--
+--   * No schema changes. No new tables, columns, indexes, constraints,
+--     enums, types, functions, triggers, or RLS policies.
+--
+--   * No changes to existing rows. The backfill only inserts;
+--     pre-existing self-rows are detected via the `unique
+--     (licensee_id, app_user_id)` constraint and the WHERE-NOT-EXISTS
+--     filter, so re-running the migration is a no-op.
+--
+--   * No new auditor-deny policy. The `caregivers` table predates
+--     migration 042 and was sealed by 042's universal DO block. This
+--     migration inserts rows into an already-sealed table — no inline
+--     policy is needed. Verified by re-reading mig 042's iterator
+--     (lines 426-453) which sweeps every `BASE TABLE in public`.
+--
+--   * No changes to migration 045. The per-caregiver scoping column +
+--     resolver are unchanged; this migration only guarantees the
+--     substrate the resolver iterates.
+--
+-- ── DEPENDENCY ──────────────────────────────────────────────────────
+-- Applies AFTER mig 045 (and effectively after mig 012, mig 022 — the
+-- caregivers table and profiles.license_type column must both exist).
+-- This migration MAY be applied before OR after mig 045; the only
+-- ordering constraint is that the code change relocating the create
+-- to onboarding completion is deployed first, so the steady-state
+-- create path is in place before the backfill catches up existing
+-- rows. The runbook entry for 046 specifies the deploy-then-apply
+-- order.
+--
+-- ── IDEMPOTENCY ─────────────────────────────────────────────────────
+--   - Single INSERT ... SELECT ... ON CONFLICT (licensee_id, app_user_id) DO NOTHING.
+--     The ON CONFLICT clause keys on the `unique (licensee_id,
+--     app_user_id)` constraint declared in migration 012:106. Any
+--     licensee who already has a self-row (active OR archived; see
+--     "ARCHIVED SELF-ROW POLICY" below) is skipped at the DB level
+--     atomically — no SELECT-then-INSERT race window.
+--   - Re-applying the migration is a no-op.
+--   - A concurrent live INSERT during the apply window (e.g. an
+--     onboarding completion firing at the same moment) is handled by
+--     the same ON CONFLICT — both paths land the same row, only one
+--     inserts.
+--
+-- ── ARCHIVED SELF-ROW POLICY ─────────────────────────────────────────
+--
+-- A licensee who archived her own self-row in the past (e.g. via a
+-- defensive "remove all caregivers" step that included her own row)
+-- WILL NOT receive a new self-row from this backfill. The
+-- WHERE-NOT-EXISTS check intentionally ignores `archived_at` — once
+-- an archived (licensee_id, app_user_id) pair exists, the unique
+-- constraint blocks the insert anyway. Such a licensee will appear
+-- in the post-apply census as "missing self-row" (the active count)
+-- but the migration treats them as already-present (the total count).
+--
+-- This is the right outcome: silently un-archiving someone's
+-- intentional removal would be a data-integrity overreach. If a
+-- licensee with an archived self-row hits the under-reporting bug,
+-- it is a one-off ticket — un-archive their row by hand.
+--
+-- The expected verification query (e) below flags any such cases so
+-- the deploy operator sees them explicitly.
+--
+-- ── LICENSEE UNIVERSE ───────────────────────────────────────────────
+--
+-- We union TWO definitions of "is a licensee":
+--   (a) profiles.license_type IS NOT NULL — the post-PR-#14 source of
+--       truth (mig 022). Covers every account that completed
+--       onboarding and set a license_type.
+--   (b) DISTINCT caregivers.licensee_id — empirical "they already
+--       act as a licensee somewhere in the system." Covers any
+--       account that pre-dates mig 022 or whose license_type is NULL
+--       but who already has staff caregivers.
+--
+-- The union is necessary because either set alone would miss real
+-- licensees. The post-apply census (query b below) breaks the count
+-- out by definition so the deploy operator can see the overlap.
+--
+-- ── LICENSE-EXEMPT SCOPE — DECISION ─────────────────────────────────
+--
+-- INCLUDE license-exempt providers in the backfill (the {family_home,
+-- group_home, license_exempt} set — all three values of license_type).
+-- Decided 2026-06-18.
+--
+-- Rationale:
+--   1. The self-row is a general roster-identity primitive, not a
+--      physician-attestation-specific artifact. It is consumed by:
+--        * the per-caregiver compliance resolver (mig 045) — R 400.1933
+--          applicability is gated separately at the row level, so an
+--          exempt licensee's self-row is harmless for that resolver
+--          (the row resolves as not_applicable, never as missing);
+--        * medication.js listCaregiversWithRoles — the licensee
+--          appearing in her own roster gates whether she can be
+--          selected as the administering caregiver in the meds flow,
+--          which applies regardless of license type (R 400.1931);
+--        * useStaffTraining.js — the licensee's own training records
+--          attach to her caregivers row regardless of license type.
+--      Excluding exempt providers would silently break two of three
+--      consumers for them.
+--
+--   2. The physician-attestation row has its own applicability gate
+--      (REQUIREMENT_REGISTRY.caregiver_physician_attestation_at_renewal
+--      uses `universalFor: LICENSED_HOME_LICENSE_TYPES`, which the
+--      Phase 1 applicability layer reads to mark exempt providers as
+--      not_applicable for that specific row). The self-row's presence
+--      does not change that gate; the resolver iterates the exempt
+--      provider's roster but reports not_applicable for the row.
+--
+--   3. Backfilling exempt providers now avoids a second migration
+--      later if/when product policy changes (e.g. if a future row
+--      uses the exempt provider's self-row for something it doesn't
+--      today). The unique constraint protects against duplicates
+--      either way.
+--
+-- The licensee subquery below therefore matches `license_type IS NOT
+-- NULL` without filtering on the specific value. If a future decision
+-- reverses this, the change is a one-line `AND license_type IN (...)`
+-- in the subquery (and a re-run of the verification census).
+--
+-- ── EXPECTED VERIFICATION ───────────────────────────────────────────
+-- Paste each query into the Supabase web SQL Editor and screenshot
+-- the result BEFORE promoting the migration to Migration History.
+-- Run (a) BEFORE applying, then (b)-(d) AFTER.
+--
+--   -- (a) Pre-apply census: how many self-rows are missing?
+--   with licensees as (
+--     select id from public.profiles where license_type is not null
+--     union
+--     select distinct licensee_id as id from public.caregivers
+--   )
+--   select
+--     (select count(*) from licensees)                                       as licensee_count,
+--     (select count(*) from public.caregivers
+--       where app_user_id = licensee_id and archived_at is null)             as self_rows_active,
+--     (select count(*) from public.caregivers
+--       where app_user_id = licensee_id)                                     as self_rows_total_incl_archived,
+--     (select count(*) from licensees l
+--       where not exists (select 1 from public.caregivers c
+--         where c.licensee_id = l.id and c.app_user_id = l.id))              as licensees_missing_self_row;
+--   -- expected before: licensees_missing_self_row > 0 (the backfill universe).
+--   -- expected after : licensees_missing_self_row = 0.
+--
+--   -- (b) Post-apply: every licensee now has a self-row.
+--   -- Re-run query (a). All four counts should hold the relationships:
+--   --   self_rows_total_incl_archived >= licensee_count
+--   --   licensees_missing_self_row    = 0   (assuming no archived
+--   --                                        self-rows; see (e))
+--
+--   -- (c) The unique constraint is intact — no licensee has more than
+--   --     one self-row.
+--   select licensee_id, count(*) as self_row_count
+--     from public.caregivers
+--    where app_user_id = licensee_id
+--    group by licensee_id
+--   having count(*) > 1;
+--   -- expect: 0 rows.
+--
+--   -- (d) The inserted rows match the expected shape — three columns
+--   --     set, others default.
+--   select count(*) filter (where email is null and date_of_hire is null
+--                            and archived_at is null) as backfilled_with_defaults,
+--          count(*)                                    as total_self_rows
+--     from public.caregivers
+--    where app_user_id = licensee_id;
+--   -- expected: backfilled_with_defaults equals the number of rows
+--   -- this migration just inserted (the rest are pre-existing
+--   -- self-rows that may or may not have email/date_of_hire set).
+--
+--   -- (e) Licensees with an ARCHIVED self-row (manually removed) —
+--   --     they will NOT be re-created by this backfill; the migration
+--   --     treats them as already-present. Surface them explicitly so
+--   --     the deploy operator can decide whether to un-archive by
+--   --     hand.
+--   select c.licensee_id, c.id as archived_self_row_id, c.archived_at
+--     from public.caregivers c
+--    where c.app_user_id = c.licensee_id
+--      and c.archived_at is not null;
+--   -- expected: 0 rows (typical). Non-zero means an admin
+--   -- intentionally removed a licensee's self-row in the past; the
+--   -- compliance resolver will silently under-report subrule (1) for
+--   -- those licensees until un-archived. Decide case-by-case.
+--
+-- ROLLBACK (destructive — only run if rolling forward isn't possible):
+--   -- ⚠️ A blanket rollback would remove every self-row this
+--   --   migration inserted, but cannot distinguish those from
+--   --   self-rows created later via the live onboarding-completion
+--   --   code path. We do NOT provide a blanket DELETE here.
+--   --
+--   -- If you must undo a specific licensee's backfilled row by hand,
+--   -- the safe shape is:
+--   --
+--   --   delete from public.caregivers
+--   --    where licensee_id = '<the-id>'
+--   --      and app_user_id  = '<the-id>'
+--   --      and created_at   < '<the-migration-apply-time>';
+--   --
+--   -- This deletes only rows older than the apply timestamp and
+--   -- restricts to the licensee in question. Verify with a SELECT
+--   -- first.
+-- ============================================================
+
+begin;
+
+-- The backfill itself. One INSERT ... SELECT ... ON CONFLICT DO NOTHING,
+-- driven by the union of the two licensee definitions described above.
+-- Per the policy in the header, ON CONFLICT keys on the
+-- (licensee_id, app_user_id) unique constraint — an archived self-row
+-- counts as "exists" and is skipped, not resurrected.
+
+insert into public.caregivers (licensee_id, app_user_id, full_name)
+select
+  l.id,
+  l.id,
+  coalesce(nullif(trim(p.full_name), ''), p.email, 'You (licensee)')
+from (
+  select id from public.profiles where license_type is not null
+  union
+  select distinct licensee_id as id from public.caregivers
+) l
+left join public.profiles p on p.id = l.id
+on conflict (licensee_id, app_user_id) do nothing;
+
+commit;
+
+-- ============================================================
+-- End of migration 046_licensee_caregivers_self_row_backfill.sql
+-- ============================================================
