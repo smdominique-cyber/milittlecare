@@ -2943,3 +2943,226 @@ above); drop `public.auditor_session_access_log`; drop
 `public.is_auditor_jwt()`; drop the two new `profiles`
 columns; restore the migration-001 body of
 `handle_new_user`.
+
+### 2026-06-17 — Migration 044: PR #19 drill_logs table + Emergency Response Plan document type
+
+Applied to production on **2026-06-17**, manually via the
+Supabase web SQL Editor. Companion to the PR #19 build on
+branch `feature/pr19-drills-and-erp` (commit `566c5dd` at
+time of apply; the runbook entry rides on the same branch
+so it lands with the merge). The migration backs four R
+400.1939 compliance rows that the registry has carried as
+`not_yet_modelled` since Phase 1 — three drill rows
+(fire / tornado / other-emergency) and the written
+Emergency Response Plan.
+
+The migration ships **two mechanisms in one file**, both
+required for PR #19's UI to function end-to-end:
+
+  1. NEW `public.drill_logs` table for per-drill row
+     history. The three drill compliance rows resolve from
+     this row history via `src/lib/drillSchedule.js` (the
+     pure domain wrapper around the existing
+     `src/lib/reminderSchedule.js` `nextOccurrence` helper
+     — consistency between compliance and reminder
+     due-dates is pinned by the regression net in
+     `drillSchedule.test.js`).
+
+  2. EXTENDS the `compliance_documents.document_type`
+     CHECK to accept `'emergency_response_plan'`. The
+     fourth PR #19 row reuses the proven
+     compliance_documents substrate (mig 038 / 039 / 043)
+     rather than the new drill_logs table — the ERP is a
+     written document, not a per-drill row.
+
+What the migration does:
+
+- **`public.drill_logs` table.** 10 columns:
+  - `id uuid PRIMARY KEY` (default `gen_random_uuid()`).
+  - `user_id uuid NOT NULL` references `auth.users(id)` on
+    delete cascade. The compliance row is provider-level
+    and resolves from the provider's own drill log
+    history; cascade-on-account-deletion is intentional
+    (the deleted provider's drill history goes with
+    them).
+  - `drill_type text NOT NULL` — CHECK whitelist (see
+    below).
+  - `performed_on date NOT NULL` — the date the drill was
+    conducted.
+  - `duration_minutes numeric(5,2)` — nullable; how long
+    the drill took.
+  - `notes text` — nullable free-text.
+  - `archived_at timestamptz` — soft delete. The provider
+    can correct a mis-entered drill by archiving the wrong
+    row and adding a corrected one; no hard-delete path
+    exists (CLAUDE.md "Audit retention" rule).
+  - `archived_by uuid` references `auth.users(id)` on
+    delete set null.
+  - `created_at`, `updated_at` (timestamptz NOT NULL
+    DEFAULT now()). The `set_updated_at()` trigger from
+    migration 001 maintains `updated_at`.
+
+- **3 CHECK constraints** (DB-floor guardrails):
+  - `drill_logs_drill_type_valid` — whitelist:
+    `'fire' | 'tornado' | 'lockdown' | 'shelter_in_place' | 'reunification' | 'other'`.
+    The set mirrors `src/lib/drillSchedule.js`'s
+    `DRILL_TYPES`; the catalog-alignment test in
+    `drillSchedule.test.js` pins them in lockstep so a
+    drift on either side fails loudly.
+  - `drill_logs_performed_on_not_future` — `performed_on
+    <= current_date`. A future-dated drill would silently
+    extend the next-due math; the DB CHECK is the load-
+    bearing guard. UI also enforces this in
+    `BusinessInfoPage.jsx` as belt + suspenders.
+  - `drill_logs_duration_positive` — `duration_minutes
+    IS NULL OR duration_minutes > 0`. Duration is
+    optional; when present it must be positive.
+
+- **2 indexes**, both filtered on `archived_at IS NULL`
+  (the resolver and the UI both only read non-archived
+  rows):
+  - `drill_logs_user_performed_idx` on `(user_id,
+    performed_on DESC)` — the primary "what has this
+    provider done recently?" read pattern (used by the
+    drill history list in the UI).
+  - `drill_logs_user_type_performed_idx` on `(user_id,
+    drill_type, performed_on DESC)` — the per-type
+    resolver's filter-then-sort path.
+
+- **RLS posture — provider-scoped, NO DELETE:**
+  - `SELECT own`: `auth.uid() = user_id`.
+  - `INSERT own`: `auth.uid() = user_id` (WITH CHECK).
+  - `UPDATE own`: enables in-place correction of a mis-
+    entered drill (typo on date, wrong type). The same
+    UPDATE path is also the soft-delete path — setting
+    `archived_at = now()` flips the row into the
+    audit-retention bucket.
+  - **NO DELETE policy.** Drill logs are audit-relevant
+    compliance artifacts; never hard-deleted. The
+    provider corrects via UPDATE and removes via
+    archived_at. Verified by the 4-row `pg_policies`
+    list returning no DELETE entry.
+
+- **`"auditor jwt denied"` RESTRICTIVE policy added
+  inline** on `drill_logs`. Migration 042's universal-
+  seal `DO` block runs once at apply time and does NOT
+  automatically seal tables created later. Without this
+  branch, an auditor JWT could SELECT directly from
+  `drill_logs` via PostgREST, bypassing the auditor
+  portal's Edge Function boundary. This row mirrors
+  what the 042 `DO` block would have produced for any
+  table that existed at 042's apply time.
+
+- **`compliance_documents.document_type` CHECK extension.**
+  Drops the mig 043 nine-value CHECK and recreates it as
+  a ten-value superset adding `'emergency_response_plan'`.
+  Wrapped in the same `BEGIN/COMMIT` as the drill_logs
+  table creation — a reader between the two statements
+  never sees an absent CHECK.
+
+- **Updated_at trigger** on `drill_logs` using the existing
+  `public.set_updated_at()` function from migration 001.
+
+Verification — Seth ran in the Supabase SQL Editor at
+apply time:
+
+- **(a) drill_logs column list.** 10 rows returned in
+  order: `id`, `user_id`, `drill_type`, `performed_on`,
+  `duration_minutes`, `notes`, `archived_at`,
+  `archived_by`, `created_at`, `updated_at`. NOT NULL on
+  `id`, `user_id`, `drill_type`, `performed_on`,
+  `created_at`, `updated_at`; nullable on the rest.
+- **(b) RLS-enabled check.** `relrowsecurity = true` on
+  `drill_logs`.
+- **(c) CHECK constraints.** Three rows in order:
+  - `drill_logs_drill_type_valid` — `CHECK (drill_type
+    = ANY (ARRAY['fire'::text, 'tornado'::text,
+    'lockdown'::text, 'shelter_in_place'::text,
+    'reunification'::text, 'other'::text]))`
+  - `drill_logs_duration_positive` — `CHECK
+    (duration_minutes IS NULL OR duration_minutes > 0::numeric)`
+  - `drill_logs_performed_on_not_future` — `CHECK
+    (performed_on <= CURRENT_DATE)`
+- **(d) THE 4-POLICY LIST.** Confirmed exactly 4 rows;
+  NO delete policy:
+  - `"Providers select own drill logs"` — SELECT —
+    `(auth.uid() = user_id)`
+  - `"Providers insert own drill logs"` — INSERT —
+    `with_check = (auth.uid() = user_id)`
+  - `"Providers update own drill logs"` — UPDATE — both
+    USING and WITH CHECK `(auth.uid() = user_id)`
+  - `"auditor jwt denied"` — ALL — `(NOT
+    public.is_auditor_jwt())` USING and WITH CHECK,
+    PERMISSIVE=`false` (RESTRICTIVE). This is the
+    load-bearing check that the auditor portal seal has
+    no hole on `drill_logs`.
+- **(e) compliance_documents CHECK extended.** Definition
+  now lists 10 doc-type values — the 9 from mig 043 plus
+  `'emergency_response_plan'`.
+- **(f) updated_at trigger.** `set_drill_logs_updated_at`
+  exists.
+
+Phase boundaries — what this migration enables and what
+is NOT separate from it:
+
+- **PR #19 build (this branch, unmerged at time of
+  apply)** ships the four registry-row flips, the
+  resolver wiring, the loader fan-out for `drill_logs`,
+  the checklist guidance entries, and the new Drills tab
+  on `BusinessInfoPage.jsx`. The tab hosts the ERP
+  document slot at the top (auditor-mental-model order:
+  plan first, then practice) and the drill log entry
+  form below it, with a reverse-chronological drill
+  history list and an Archive button that issues
+  `UPDATE archived_at` (never DELETE — matches the
+  no-DELETE-policy DB posture).
+- **No future-PR phasing on this migration itself.**
+  Unlike the auditor portal (042) which seeded a Phase 2
+  UI + Phase 3 SPA, mig 044 ships its UI in the same
+  branch. The migration is the durable artifact; the
+  build is the in-code consumer.
+
+Lifecycle / UX notes flagged for follow-up:
+
+- The drill_logs table has an UPDATE policy that allows
+  the provider to modify any column on their own rows,
+  including `performed_on`. A future tighter UPDATE
+  policy could restrict editable columns (e.g., notes
+  only, not performed_on — the date that drives the
+  cycle math). Acceptable for V1 because the provider
+  may legitimately need to correct a typo on the
+  performed date; restricting it would force them to
+  archive + re-create, which fragments the audit trail.
+  No decision recorded yet — status quo until a
+  follow-up PR.
+
+- The `'other'` drill subtype is a catch-all that
+  contributes to `drill_other_emergencies_annual` (per
+  the resolver in `src/lib/drillSchedule.js`'s
+  `OTHER_EMERGENCY_DRILL_TYPES` set). A provider could
+  log an `'other'` drill and let the notes field be the
+  description; the row resolves to ON_FILE on that basis.
+  The audit-trail-of-the-subtype lives in the `notes`
+  column. Flagged for future PR consideration if the UI
+  wants to enforce a "describe in notes" requirement on
+  `'other'` — the CHECK constraint accepts any text in
+  notes, so this is a UI-level question, not a DB-level
+  one.
+
+Rollback — destructive. ⚠️ **Do NOT rollback after PR
+#19's UI ships and a provider has logged drills in
+production** without exporting the drill_logs rows first;
+the rollback drops the table outright. The migration
+file's ROLLBACK block at the bottom is commented and is
+emergency-only:
+
+  - `drop table if exists public.drill_logs;`
+  - Restore the mig 043 nine-value
+    `chk_compliance_documents_document_type` CHECK (the
+    same `drop constraint + add constraint` swap shape
+    as the forward path).
+
+Note: rollback does NOT need to walk the auditor-portal
+seal because the `"auditor jwt denied"` policy on
+`drill_logs` goes with the table on `DROP TABLE`. The
+seal on every OTHER public table is unchanged.
