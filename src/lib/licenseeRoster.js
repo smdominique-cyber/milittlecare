@@ -27,6 +27,37 @@
 // then-insert pattern is fast in the steady state (the row already
 // exists, so the insert is skipped) and the unique constraint catches
 // any concurrent insert race at the DB.
+//
+// ── full_name source — tripwire (2026-06-18 Step 2 review) ──────────
+//
+// This helper reads `user.user_metadata.full_name` to match the rest
+// of the app's chrome-context reads (Sidebar, DashboardPage greeting,
+// StaffPage's licensee-row, AttendancePage closure email "from"
+// name, TaxExportButton / ReportsPage filename prefixes). The
+// value is identical to `profiles.full_name` in production today
+// because both are frozen-at-signup mirrors kept in sync by the
+// `handle_new_user` trigger (mig 001:39-53). Neither is updated by
+// any user-facing affordance — `BusinessInfoPage` only edits
+// `daycare_name`; `supabase.auth.updateUser` is called only for
+// password changes.
+//
+// FUTURE-PROOFING: if anyone ships a "rename yourself" affordance
+// that updates `profiles.full_name` WITHOUT also calling
+// `supabase.auth.updateUser({ data: { full_name } })` in the same
+// flow, the JWT's `user_metadata.full_name` will lag behind and new
+// self-rows produced here will carry the stale name. Two fixes when
+// that day arrives — pick one:
+//   (a) Update both fields in lockstep at the rename site (no change
+//       here). Keeps every other chrome-context read in sync too.
+//   (b) Switch this helper to read `profiles.full_name` (one extra
+//       Supabase round-trip — load the profile row inside the
+//       helper). Fixes the staleness only for this side effect; the
+//       other chrome-context reads listed above still risk staleness.
+//
+// Migration 046's backfill reads `profiles.full_name` directly (the
+// canonical record-shaped source). Both code paths produce identical
+// strings in production today; the divergence-detection plan above
+// covers the future.
 
 import { supabase } from '@/lib/supabase'
 
@@ -84,10 +115,18 @@ export async function ensureLicenseeSelfCaregiverRow({ user } = {}) {
   //    concurrent caller raced ahead between (1) and here, the unique
   //    constraint rejects the duplicate — we treat that as "already
   //    exists" (the desired end state) rather than an error.
-  const fullName =
-    (user.user_metadata && user.user_metadata.full_name)
-    || user.email
-    || 'You (licensee)'
+  //
+  //    full_name fallback is the JS equivalent of mig 046's SQL idiom
+  //    `coalesce(nullif(trim(full_name), ''), email, 'You (licensee)')`:
+  //    only the first candidate is trimmed (matching the SQL); an
+  //    empty-string or whitespace-only `user_metadata.full_name` falls
+  //    THROUGH to email rather than landing as a visibly-blank roster
+  //    label. email + the literal fallback are passed through as-is
+  //    (also matching the SQL — `coalesce` only NULLIF's the first
+  //    candidate after trim).
+  const rawName = user.user_metadata && user.user_metadata.full_name
+  const trimmedName = (typeof rawName === 'string') ? rawName.trim() : ''
+  const fullName = trimmedName || user.email || 'You (licensee)'
   const { error: insErr } = await supabase.from('caregivers').insert({
     licensee_id: user.id,
     app_user_id: user.id,

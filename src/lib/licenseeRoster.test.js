@@ -106,6 +106,42 @@ describe('ensureLicenseeSelfCaregiverRow', () => {
     expect(mockState.inserts[0].rows[0].full_name).toBe('You (licensee)')
   })
 
+  // 2026-06-18 Step 2 review — JS fallback chain must match mig 046's
+  // SQL idiom byte-for-byte: `coalesce(nullif(trim(full_name), ''),
+  // email, 'You (licensee)')`. The trim + nullif applies ONLY to the
+  // first candidate (user_metadata.full_name); the email and literal
+  // fallback are passed through as-is.
+
+  it('whitespace-only user_metadata.full_name falls THROUGH to email (not stored as blank)', async () => {
+    const userBlankName = { id: 'L4', email: 'venessa@example.com', user_metadata: { full_name: '   ' } }
+    await ensureLicenseeSelfCaregiverRow({ user: userBlankName })
+    // Without the trim, this would have inserted '   ' as the visible
+    // roster label. The trim collapses it to empty, so the chain
+    // falls through to email.
+    expect(mockState.inserts[0].rows[0].full_name).toBe('venessa@example.com')
+  })
+
+  it('empty-string user_metadata.full_name falls through to email', async () => {
+    const userEmptyName = { id: 'L5', email: 'venessa@example.com', user_metadata: { full_name: '' } }
+    await ensureLicenseeSelfCaregiverRow({ user: userEmptyName })
+    expect(mockState.inserts[0].rows[0].full_name).toBe('venessa@example.com')
+  })
+
+  it('whitespace-padded user_metadata.full_name is stored TRIMMED', async () => {
+    // Matches the SQL: `trim(full_name)` produces the trimmed value
+    // before the nullif check, so a padded name is stored without
+    // its padding. (The SQL stores the trimmed value, not the raw.)
+    const userPaddedName = { id: 'L6', email: 'x@y.com', user_metadata: { full_name: '  Venessa Provider  ' } }
+    await ensureLicenseeSelfCaregiverRow({ user: userPaddedName })
+    expect(mockState.inserts[0].rows[0].full_name).toBe('Venessa Provider')
+  })
+
+  it('non-string user_metadata.full_name (defensive — never expected, but possible if the auth payload is corrupt) falls through to email', async () => {
+    const userCorrupt = { id: 'L7', email: 'x@y.com', user_metadata: { full_name: 12345 } }
+    await ensureLicenseeSelfCaregiverRow({ user: userCorrupt })
+    expect(mockState.inserts[0].rows[0].full_name).toBe('x@y.com')
+  })
+
   it('treats a unique-violation (23505) as benign — the desired end state is already true', async () => {
     // Concurrent path: the SELECT showed no row, but by the time the
     // INSERT fired (e.g. another tab / the backfill migration), the
