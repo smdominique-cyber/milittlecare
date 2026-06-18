@@ -53,6 +53,14 @@ import { ACK_TYPES, PER_OCCURRENCE_CONSENT_TYPES } from './acknowledgments'
 // staffTraining.js is pure (no Supabase imports — see its header), so
 // unlike childFiles.js it is safe to import from this PURE module.
 import { getEffectiveRequirements } from './staffTraining'
+// PR #19 (mig 044) — drill schedule helpers. drillSchedule.js is pure
+// (it wraps the pure reminderSchedule.js's nextOccurrence). The three
+// drill registry rows use these summaries to resolve from drill_logs.
+import {
+  getFireDrillSummary,
+  getTornadoDrillSummary,
+  getOtherEmergencyDrillSummary,
+} from './drillSchedule'
 
 // Channel rule for parent-signed satisfaction. Duplicated from
 // childFiles.js's PARENT_SIGNED_SATISFYING_CHANNELS rather than
@@ -432,6 +440,77 @@ function buildComplianceDocResolver(documentType, options = {}) {
       return { kind: REQUIREMENT_STATE_KIND.ON_FILE, expires_at: dueOn }
     }
     return { kind: REQUIREMENT_STATE_KIND.EXPIRED, expired_at: dueOn }
+  }
+}
+
+/**
+ * PR #19 (mig 044) — resolver builder for the three drill compliance
+ * rows. Reads sourceRows.drill_logs and computes state via
+ * src/lib/drillSchedule.js, which itself wraps the pure
+ * src/lib/reminderSchedule.js nextOccurrence helper that the
+ * reminder system already uses. Both sides feed the SAME rule
+ * shapes through the SAME helper, so compliance and reminder
+ * due-dates cannot drift; the consistency test net in
+ * drillSchedule.test.js pins this.
+ *
+ * §2a load-failure guard: if sourceRowsLoaded.drill_logs === false,
+ * return UNKNOWN with reason 'drill-logs-load-failure' rather than
+ * silently MISSING_REQUIRED. Mirrors buildComplianceDocResolver.
+ *
+ * @param {'fire' | 'tornado' | 'other_emergency'} kind
+ * @returns {(ctx: { sourceRows, sourceRowsLoaded, now }) => RequirementState}
+ */
+function buildDrillResolver(kind) {
+  return ({ sourceRows, sourceRowsLoaded, now }) => {
+    if (sourceRowsLoaded && sourceRowsLoaded.drill_logs === false) {
+      return {
+        kind: REQUIREMENT_STATE_KIND.UNKNOWN,
+        reason: 'drill-logs-load-failure',
+      }
+    }
+    const drillLogs = (sourceRows && sourceRows.drill_logs) || []
+    const today = now || new Date()
+    const todayYmd = today.toISOString().slice(0, 10)
+
+    if (kind === 'fire') {
+      const summary = getFireDrillSummary({ drillLogs, today: todayYmd })
+      if (!summary.hasAny) return { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED }
+      const dueOn = summary.nextDueOn
+      if (!dueOn || dueOn >= todayYmd) {
+        return { kind: REQUIREMENT_STATE_KIND.ON_FILE, expires_at: dueOn }
+      }
+      return { kind: REQUIREMENT_STATE_KIND.EXPIRED, expired_at: dueOn }
+    }
+
+    if (kind === 'tornado') {
+      const summary = getTornadoDrillSummary({ drillLogs, today: todayYmd })
+      // Per the spec: row is satisfied when 2 drills are logged in the
+      // current Mar-Nov window. Otherwise surfaces as due/incomplete.
+      if (summary.satisfiedForCurrentYear) {
+        return { kind: REQUIREMENT_STATE_KIND.ON_FILE }
+      }
+      // Year incomplete. nextDueOn === null AND not satisfied means the
+      // window has closed for the year — explicit EXPIRED so the row
+      // reads loudly. nextDueOn !== null (today, or window-start) means
+      // there is still a way to satisfy → MISSING_REQUIRED.
+      if (summary.nextDueOn === null) {
+        return { kind: REQUIREMENT_STATE_KIND.EXPIRED }
+      }
+      return { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED }
+    }
+
+    if (kind === 'other_emergency') {
+      const summary = getOtherEmergencyDrillSummary({ drillLogs, today: todayYmd })
+      if (!summary.hasAny) return { kind: REQUIREMENT_STATE_KIND.MISSING_REQUIRED }
+      const dueOn = summary.nextDueOn
+      if (!dueOn || dueOn >= todayYmd) {
+        return { kind: REQUIREMENT_STATE_KIND.ON_FILE, expires_at: dueOn }
+      }
+      return { kind: REQUIREMENT_STATE_KIND.EXPIRED, expired_at: dueOn }
+    }
+
+    // Defensive — unknown kind never silently passes.
+    return { kind: REQUIREMENT_STATE_KIND.UNKNOWN, reason: 'unknown-drill-kind' }
   }
 }
 
@@ -2028,9 +2107,15 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'critical',
-    data_state: 'not_yet_modelled',
+    // 2026-06-17 PR #19 (mig 044): flipped from 'not_yet_modelled' to
+    // 'shipped'; resolver reads drill_logs and computes next-due via
+    // src/lib/drillSchedule.js → src/lib/reminderSchedule.js
+    // nextOccurrence (every_n_months, intervalMonths: 3). The
+    // consistency test net in drillSchedule.test.js pins that
+    // compliance + reminder due-dates can't drift.
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildDrillResolver('fire'),
   }),
 
   drill_tornado_seasonal: Object.freeze({
@@ -2042,9 +2127,13 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'critical',
-    data_state: 'not_yet_modelled',
+    // 2026-06-17 PR #19 (mig 044): seasonal_window mode — 2 drills in
+    // current Mar-Nov window → ON_FILE; <2 with window open or
+    // upcoming → MISSING_REQUIRED; <2 with window closed for the year
+    // → EXPIRED.
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildDrillResolver('tornado'),
   }),
 
   drill_other_emergencies_annual: Object.freeze({
@@ -2056,9 +2145,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'high',
-    data_state: 'not_yet_modelled',
+    // 2026-06-17 PR #19 (mig 044): annual mode. Lockdown,
+    // shelter_in_place, reunification, or 'other' subtype any of which
+    // satisfies the rule. Latest log + 1 year = next due.
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildDrillResolver('other_emergency'),
   }),
 
   emergency_response_plan_on_file: Object.freeze({
@@ -2070,9 +2162,13 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     data_authority: 'milittlecare',
     gsq_relevant: false,
     severity: 'critical',
-    data_state: 'not_yet_modelled',
+    // 2026-06-17 PR #19 (mig 044): the ERP is a written document.
+    // Uses the existing compliance_documents substrate (same as
+    // radon, heating, notebook, and the PR #21 inventory batch).
+    // The three drill rows above use drill_logs (different substrate).
+    data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
-    state_resolver: patternENotYetModelled,
+    state_resolver: buildComplianceDocResolver('emergency_response_plan'),
   }),
 
   // ─── property (8 — Pattern E) ────────────────────────────────────

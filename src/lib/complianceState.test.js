@@ -911,14 +911,16 @@ describe('Pattern E — feature-not-yet-shipped', () => {
   // resolvers" describe below (animal notification is split out
   // because its applicability is questionnaire-gated).
   //
-  // What remains here: drills, the emergency response plan, and the
-  // three caregiver rows that need a per-caregiver scoping column
-  // before they fit the doc substrate.
+  // 2026-06-17 PR #19 (mig 044): the three drill rows
+  // (fire_quarterly, tornado_seasonal, other_emergencies_annual)
+  // flipped to drill_logs-backed via src/lib/drillSchedule.js, and
+  // emergency_response_plan_on_file flipped to
+  // compliance_documents-backed via the existing builder. Their
+  // resolver tests live in dedicated describes below.
+  //
+  // What remains here: the three caregiver rows that need a
+  // per-caregiver scoping column before they fit the doc substrate.
   const PATTERN_E_KEYS = [
-    'drill_fire_quarterly',
-    'drill_tornado_seasonal',
-    'drill_other_emergencies_annual',
-    'emergency_response_plan_on_file',
     'caregiver_physician_attestation_annual',
     'caregiver_discipline_policy_ack_at_hire',
     'caregiver_daily_arrival_departure',
@@ -979,6 +981,10 @@ describe('compliance_documents-backed resolvers (J1/J2/J8 — mig 039 + mig 040)
     { key: 'property_smoke_detectors_per_floor',       docType: 'property_smoke_detectors_per_floor',     requiresDueDate: false },
     { key: 'property_fire_extinguishers_per_floor',    docType: 'property_fire_extinguishers_per_floor',  requiresDueDate: false },
     { key: 'property_smoking_prohibition_posted',      docType: 'property_smoking_prohibition_posted',    requiresDueDate: false },
+    // 2026-06-17 PR #19 (mig 044): the Emergency Response Plan uses
+    // the same builder. Existence-only (no cycle); a single upload
+    // satisfies the row.
+    { key: 'emergency_response_plan_on_file',          docType: 'emergency_response_plan',                requiresDueDate: false },
   ]
 
   // §2a sourceRowsLoaded with everything true (helper for the
@@ -1332,6 +1338,265 @@ describe('compliance_documents-backed resolvers (J1/J2/J8 — mig 039 + mig 040)
     })
     it('property_smoking_prohibition_posted cites R 400.1918 — the smoking-or-vaping rule, not R 400.1934 (water hazards)', () => {
       expect(REQUIREMENT_REGISTRY.property_smoking_prohibition_posted.rule_citation).toBe('R 400.1918')
+    })
+  })
+})
+
+// -----------------------------------------------------------------------------
+// PR #19 (mig 044) — drill_logs-backed resolvers
+// -----------------------------------------------------------------------------
+//
+// The three drill rows resolve from sourceRows.drill_logs via the
+// buildDrillResolver internal helper, which delegates to
+// src/lib/drillSchedule.js (in turn pure-wrapping
+// src/lib/reminderSchedule.js's nextOccurrence). The per-resolver
+// state tests below verify ON_FILE / MISSING_REQUIRED / EXPIRED /
+// load-failure UNKNOWN transitions. The drill-schedule wrapper and
+// the consistency-with-reminder regression net live in
+// src/lib/drillSchedule.test.js.
+
+describe('drill_logs-backed resolvers (PR #19 — mig 044)', () => {
+  // Anchored against FIXED_NOW from this file's top (2026-06-15) so
+  // every cycle/window date is deterministic.
+
+  const drillLog = (overrides = {}) => ({
+    id: 'dl-' + Math.random().toString(36).slice(2),
+    drill_type: 'fire',
+    performed_on: '2026-05-01',
+    duration_minutes: null,
+    notes: null,
+    archived_at: null,
+    ...overrides,
+  })
+
+  // ── data_state has flipped ────────────────────────────────────────
+
+  for (const key of [
+    'drill_fire_quarterly',
+    'drill_tornado_seasonal',
+    'drill_other_emergencies_annual',
+  ]) {
+    it(`${key}: data_state has flipped to shipped (was not_yet_modelled before this PR)`, () => {
+      expect(REQUIREMENT_REGISTRY[key].data_state).toBe(DATA_STATE.SHIPPED)
+    })
+  }
+
+  // ── §2a load-failure guard ────────────────────────────────────────
+
+  for (const key of [
+    'drill_fire_quarterly',
+    'drill_tornado_seasonal',
+    'drill_other_emergencies_annual',
+  ]) {
+    it(`${key}: sourceRowsLoaded.drill_logs === false → UNKNOWN with reason 'drill-logs-load-failure'`, () => {
+      const requirement = REQUIREMENT_REGISTRY[key]
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({ drill_logs: null }),
+        sourceRowsLoaded: { drill_logs: false },
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.UNKNOWN)
+      expect(state.reason).toBe('drill-logs-load-failure')
+    })
+  }
+
+  // ── Fire drill (every 3 months) ───────────────────────────────────
+
+  describe('drill_fire_quarterly (every_n_months, intervalMonths: 3)', () => {
+    const requirement = REQUIREMENT_REGISTRY.drill_fire_quarterly
+
+    it('no fire drills logged → MISSING_REQUIRED', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({ drill_logs: [] }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+
+    it('recent fire drill (within 3 months) → ON_FILE with expires_at = next-due', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          drill_logs: [drillLog({ drill_type: 'fire', performed_on: '2026-05-01' })],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+      expect(state.expires_at).toBe('2026-08-01')
+    })
+
+    it('fire drill > 3 months ago → EXPIRED with expired_at = next-due that has passed', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          drill_logs: [drillLog({ drill_type: 'fire', performed_on: '2026-01-01' })],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.EXPIRED)
+      expect(state.expired_at).toBe('2026-04-01')
+    })
+
+    it('ignores tornado / lockdown logs (drill_type discriminator works)', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          drill_logs: [
+            drillLog({ drill_type: 'tornado',  performed_on: '2026-05-01' }),
+            drillLog({ drill_type: 'lockdown', performed_on: '2026-05-15' }),
+          ],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+
+    it('ignores archived fire logs', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          drill_logs: [drillLog({ drill_type: 'fire', performed_on: '2026-05-01', archived_at: '2026-05-02T00:00:00Z' })],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+  })
+
+  // ── Tornado drill (seasonal_window, 2× Mar-Nov) ───────────────────
+
+  describe('drill_tornado_seasonal (seasonal_window, 2× Mar-Nov)', () => {
+    const requirement = REQUIREMENT_REGISTRY.drill_tornado_seasonal
+
+    it('no logs → MISSING_REQUIRED (window is open today; provider must do it)', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({ drill_logs: [] }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+
+    it('1 tornado drill in current window → MISSING_REQUIRED (still short)', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          drill_logs: [drillLog({ drill_type: 'tornado', performed_on: '2026-04-15' })],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+
+    it('2 tornado drills in current window → ON_FILE', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          drill_logs: [
+            drillLog({ drill_type: 'tornado', performed_on: '2026-04-15' }),
+            drillLog({ drill_type: 'tornado', performed_on: '2026-05-20' }),
+          ],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+    })
+
+    it('2 tornado drills from prior year → MISSING_REQUIRED (per-year reset)', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          drill_logs: [
+            drillLog({ drill_type: 'tornado', performed_on: '2025-04-15' }),
+            drillLog({ drill_type: 'tornado', performed_on: '2025-09-15' }),
+          ],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+  })
+
+  // ── Other emergency drills (annual) ───────────────────────────────
+
+  describe('drill_other_emergencies_annual (annual)', () => {
+    const requirement = REQUIREMENT_REGISTRY.drill_other_emergencies_annual
+
+    it('no other-emergency drills ever → MISSING_REQUIRED', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({ drill_logs: [] }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+
+    it('lockdown drill within last year → ON_FILE', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          drill_logs: [drillLog({ drill_type: 'lockdown', performed_on: '2026-03-01' })],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+      expect(state.expires_at).toBe('2027-03-01')
+    })
+
+    it('shelter_in_place / reunification / other ALSO satisfy', () => {
+      for (const subtype of ['shelter_in_place', 'reunification', 'other']) {
+        const state = getRequirementState({
+          requirement,
+          provider: makeLicensedProvider(),
+          sourceRows: makeSourceRows({
+            drill_logs: [drillLog({ drill_type: subtype, performed_on: '2026-03-01' })],
+          }),
+          now: FIXED_NOW,
+        })
+        expect(state.kind, `subtype ${subtype} should satisfy`).toBe(REQUIREMENT_STATE_KIND.ON_FILE)
+      }
+    })
+
+    it('fire and tornado logs do NOT count toward the annual rule', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          drill_logs: [
+            drillLog({ drill_type: 'fire',    performed_on: '2026-03-01' }),
+            drillLog({ drill_type: 'tornado', performed_on: '2026-04-01' }),
+          ],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.MISSING_REQUIRED)
+    })
+
+    it('drill > 12 months ago → EXPIRED', () => {
+      const state = getRequirementState({
+        requirement,
+        provider: makeLicensedProvider(),
+        sourceRows: makeSourceRows({
+          drill_logs: [drillLog({ drill_type: 'lockdown', performed_on: '2025-01-01' })],
+        }),
+        now: FIXED_NOW,
+      })
+      expect(state.kind).toBe(REQUIREMENT_STATE_KIND.EXPIRED)
+      expect(state.expired_at).toBe('2026-01-01')
     })
   })
 })
@@ -2868,31 +3133,35 @@ describe('Phase 3 — filterByDataState', () => {
     })
   }
 
-  it('filtering to shipped removes not_yet_modelled rows from provider_level', () => {
+  it('filtering to shipped keeps drill rows (PR #19 / mig 044 flipped them to shipped)', () => {
     const full = makeState()
     const shipped = filterByDataState({ state: full, dataState: DATA_STATE.SHIPPED })
     const fullDrills = full.provider_level.per_category.drills?.requirements || []
     const shippedDrills = shipped.provider_level.per_category.drills?.requirements || []
-    // The full rollup includes 4 drill rows (all not_yet_modelled).
-    // The shipped filter drops them all.
+    // 2026-06-17 PR #19 (mig 044): all 4 drill-category rows flipped
+    // to shipped. The shipped filter now KEEPS them, not drops them.
     expect(fullDrills.length).toBeGreaterThan(0)
-    expect(shippedDrills.length).toBe(0)
+    expect(shippedDrills.length).toBe(fullDrills.length)
   })
 
-  it('filtering to not_yet_modelled keeps only Pattern E rows', () => {
+  it('filtering to not_yet_modelled keeps the remaining Pattern E rows (the three caregiver-scoped ones)', () => {
     const full = makeState()
     const nyM = filterByDataState({ state: full, dataState: DATA_STATE.NOT_YET_MODELLED })
-    // 2026-06-17 PR #21 inventory batch (mig 043): the five property
-    // rows that flipped to compliance_documents-backed are now SHIPPED;
-    // the property category still has not_yet_modelled rows because
-    // some are deferred (e.g. caregiver-scoped ones in this category
-    // bucket if any), but the row count may now be zero. The
-    // load-bearing assertion is just that drills (still Pattern E
-    // across the board) is non-zero — that proves the filter actually
-    // ran. Property's count is now decoupled from this filter's smoke
-    // test.
-    const drillsCount = nyM.provider_level.per_category.drills?.requirements.length || 0
-    expect(drillsCount).toBeGreaterThan(0)
+    // 2026-06-17 PR #19 (mig 044): the four drill-category rows
+    // flipped to shipped, so the drills bucket no longer holds
+    // not_yet_modelled rows. The remaining Pattern E rows are the
+    // three caregiver-scoped ones (physician attestation, discipline
+    // policy ack, daily arrival/departure) which need a per-caregiver
+    // scoping column before they fit the document substrate. They
+    // live in the staff category, not drills. The load-bearing
+    // assertion is just that SOMETHING is still in the
+    // not_yet_modelled bucket — that proves the filter ran.
+    const allRemainingNyM = Object.values(nyM.provider_level.per_category)
+      .reduce((sum, cat) => sum + (cat?.requirements?.length || 0), 0)
+    expect(allRemainingNyM).toBeGreaterThan(0)
+    // And drills specifically is now empty under not_yet_modelled.
+    const drillsCount = nyM.provider_level.per_category.drills?.requirements?.length || 0
+    expect(drillsCount).toBe(0)
   })
 
   it('filtered totals recompute correctly', () => {

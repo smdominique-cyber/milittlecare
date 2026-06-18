@@ -334,13 +334,29 @@ export async function loadComplianceSourceRows({
 
   // 8a. Compliance documents (provider-level — migration 038 + 039).
   //     Fingerprint reprint (G4, 038) + the property batch (J1/J2/J8,
-  //     039). Each row that reads this opts into the loaded signal:
-  //     a failed load surfaces as `unknown / compliance-documents-
-  //     load-failure` per the §2a guard, never a false missing.
+  //     039) + PR #21 inventory batch (mig 043) + PR #19 emergency
+  //     response plan (mig 044). Each row that reads this opts into
+  //     the loaded signal: a failed load surfaces as `unknown /
+  //     compliance-documents-load-failure` per the §2a guard, never
+  //     a false missing.
   const complianceDocumentsResp = await safeQueryWithLoaded('compliance_documents', () =>
     supabase
       .from('compliance_documents')
       .select('id, document_type, uploaded_at, archived_at')
+      .eq('user_id', providerId)
+      .is('archived_at', null)
+  )
+
+  // 8b. Drill logs (provider-level — migration 044, PR #19). The
+  //     three drill rows resolve from this row history. The fetch
+  //     reads ALL non-archived drill_logs for the provider; the
+  //     resolver in complianceState.js filters by drill_type and
+  //     computes the next-due date via src/lib/drillSchedule.js (the
+  //     shared helper that the reminder scheduler also feeds).
+  const drillLogsResp = await safeQueryWithLoaded('drill_logs', () =>
+    supabase
+      .from('drill_logs')
+      .select('id, drill_type, performed_on, duration_minutes, notes, archived_at')
       .eq('user_id', providerId)
       .is('archived_at', null)
   )
@@ -395,8 +411,10 @@ export async function loadComplianceSourceRows({
       // 2026-06-14: J1/J2/J8 property rows (radon, heating,
       // licensing-notebook) + G4 fingerprint resolver consume this.
       compliance_documents: complianceDocumentsResp.rows,
+      // PR #19 (mig 044): drill_logs shipped, replaces the prior
+      // null placeholder.
+      drill_logs: drillLogsResp.rows,
       // Pattern E slots — sources not yet shipped.
-      drill_logs: null,
       property_records: null,
     },
     // §2a sibling signal (Option B per
@@ -420,6 +438,7 @@ export async function loadComplianceSourceRows({
       miregistry_training_entries: miregistryEntriesResp.loaded,
       attendance_acks:             attendanceAcksResp.loaded,
       compliance_documents:        complianceDocumentsResp.loaded,
+      drill_logs:                  drillLogsResp.loaded,
     },
   }
 }
@@ -493,6 +512,15 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
       .eq('user_id', providerId)
       .is('archived_at', null)
   )
+  // PR #19 (mig 044): drill_logs is provider-level, queried even in
+  // the no-children path so the drills compliance rows resolve.
+  const drillLogsResp = await safeQueryWithLoaded('drill_logs', () =>
+    supabase
+      .from('drill_logs')
+      .select('id, drill_type, performed_on, duration_minutes, notes, archived_at')
+      .eq('user_id', providerId)
+      .is('archived_at', null)
+  )
   return {
     sourceRows: {
       acks: [],
@@ -507,7 +535,7 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
       miregistry_training_entries: miregistryEntriesResp.rows,
       attendance_acks: [],
       compliance_documents: complianceDocumentsResp.rows,
-      drill_logs: null,
+      drill_logs: drillLogsResp.rows,
       property_records: null,
     },
     sourceRowsLoaded: {
@@ -527,6 +555,7 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
       training_requirements:       trainingRequirementsResp.loaded,
       miregistry_training_entries: miregistryEntriesResp.loaded,
       compliance_documents:        complianceDocumentsResp.loaded,
+      drill_logs:                  drillLogsResp.loaded,
     },
   }
 }
@@ -545,7 +574,7 @@ function emptySourceRows() {
     miregistry_training_entries: [],
     attendance_acks: [],
     compliance_documents: [],
-    drill_logs: null,
+    drill_logs: [],            // PR #19 (mig 044): empty array, not null.
     property_records: null,
   }
 }
@@ -572,6 +601,7 @@ function emptySourceRowsLoaded() {
     miregistry_training_entries: true,
     attendance_acks:             true,
     compliance_documents:        true,
+    drill_logs:                  true,
   }
 }
 

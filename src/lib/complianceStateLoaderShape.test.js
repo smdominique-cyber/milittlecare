@@ -679,6 +679,11 @@ describe('§2a loader — sourceRowsLoaded signal (loader integration)', () => {
       miregistry_training_entries: true,
       attendance_acks:             true,
       compliance_documents:        true,
+      // 2026-06-17 PR #19 (mig 044): drill_logs joins the opted-in
+      // §2a loaded-signal set. The no-providerId path reports true
+      // for the same reason every other table does — precondition
+      // failure preserves legacy DOES_NOT_APPLY behavior.
+      drill_logs:                  true,
     })
   })
 

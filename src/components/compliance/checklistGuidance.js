@@ -112,6 +112,9 @@ export const SURFACE = Object.freeze({
   // a new 'property' section on BusinessInfoPage that hosts the
   // three ComplianceDocumentSlots).
   BUSINESS_INFO_PROPERTY:      'business_info_property',
+  // 2026-06-17 PR #19 (mig 044) — Drills tab on BusinessInfoPage
+  // hosts the drill log entry form + the ERP ComplianceDocumentSlot.
+  BUSINESS_INFO_DRILLS:        'business_info_drills',
   // 3.1b-2 — StaffTrainingPage drill-in via ?caregiver=<id>;
   // page-level without a caregiverId in context.
   STAFF_TRAINING:              'staff_training',
@@ -144,6 +147,12 @@ function buildFixTarget(surface, context) {
     return {
       label: 'Open Business Info → Property',
       to: '/business-info?section=property',
+    }
+  }
+  if (surface === SURFACE.BUSINESS_INFO_DRILLS) {
+    return {
+      label: 'Open Business Info → Drills',
+      to: '/business-info?section=drills',
     }
   }
   if (surface === SURFACE.STAFF_TRAINING) {
@@ -688,6 +697,61 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
       'sign be posted where parents and staff can see it; the image ' +
       'should show the sign in its actual location so an auditor can ' +
       'see both the wording and that it is posted.',
+  },
+
+  // ── PR #19 (mig 044) — Drills + Emergency Response Plan ────────────
+  //
+  // The three drill rows resolve from drill_logs (new substrate);
+  // the ERP row resolves from compliance_documents. All four point
+  // at the new Drills tab on BusinessInfoPage.
+
+  drill_fire_quarterly: {
+    surface: SURFACE.BUSINESS_INFO_DRILLS,
+    missing:
+      'Log your most recent fire drill in Business Info → Drills. ' +
+      'R 400.1939 requires a fire drill every 3 months; this row ' +
+      'flips to expired the day after the next-due date passes ' +
+      '(last logged drill + 3 months).',
+    expired:
+      'Your fire-drill cycle is past due. Conduct a fire drill and ' +
+      'log it in Business Info → Drills. R 400.1939 — the cycle is ' +
+      'every 3 months from the last logged drill.',
+  },
+  drill_tornado_seasonal: {
+    surface: SURFACE.BUSINESS_INFO_DRILLS,
+    missing:
+      'Log your tornado drills in Business Info → Drills. R 400.1939 ' +
+      'requires 2 tornado drills inside the March-November window ' +
+      'each year. The row resolves the moment a 2nd drill is logged ' +
+      'in the current year’s window.',
+    expired:
+      'The March-November tornado-drill window has closed for the ' +
+      'year and you did not log 2 drills. The rule applies year by ' +
+      'year — the row will reset to on-track when next March opens, ' +
+      'but the current year is marked incomplete.',
+  },
+  drill_other_emergencies_annual: {
+    surface: SURFACE.BUSINESS_INFO_DRILLS,
+    missing:
+      'Log a lockdown / shelter-in-place / reunification drill in ' +
+      'Business Info → Drills. R 400.1939 requires at least one of ' +
+      'these annually; any of those subtypes (or “Other” with ' +
+      'a brief note) satisfies the row for 12 months from the ' +
+      'logged date.',
+    expired:
+      'Your annual lockdown / shelter-in-place / reunification drill ' +
+      'is past due. Conduct one and log it in Business Info → Drills ' +
+      '(R 400.1939).',
+  },
+  emergency_response_plan_on_file: {
+    surface: SURFACE.BUSINESS_INFO_DRILLS,
+    missing:
+      'Upload your written Emergency Response Plan in Business Info ' +
+      '→ Drills. R 400.1939 — the plan covers fire / tornado / ' +
+      'lockdown / shelter-in-place / reunification response, staff ' +
+      'roles, evacuation routes, and parent notification. This row ' +
+      'is the PLAN itself; the per-drill execution log is the three ' +
+      'sibling rows above.',
   },
 
   // ── Group H — attendance acks (category C surface — text-only) ───

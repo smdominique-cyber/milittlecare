@@ -36,6 +36,10 @@ const KNOWN_SECTIONS = Object.freeze(new Set([
   // licensing-notebook), backed by migration 039 +
   // ComplianceDocumentSlot.
   'property',
+  // 2026-06-17 PR #19 (mig 044) — drills tab. Hosts the drill log
+  // entry form (mechanism 1, drill_logs table) and the Emergency
+  // Response Plan slot (mechanism 2, compliance_documents substrate).
+  'drills',
 ]))
 
 const DAYS = [
@@ -549,6 +553,12 @@ export default function BusinessInfoPage() {
     // canonical signal).
     ...(profile?.license_type === 'family_home' || profile?.license_type === 'group_home'
       ? [{ id: 'property', label: 'Property', icon: ScrollText, done: false }]
+      : []),
+    // 2026-06-17 PR #19 (mig 044) — Drills tab. Hosts the drill log
+    // entry form (mechanism 1) and the Emergency Response Plan slot
+    // (mechanism 2). Same licensed-homes gate as Property.
+    ...(profile?.license_type === 'family_home' || profile?.license_type === 'group_home'
+      ? [{ id: 'drills', label: 'Drills', icon: ScrollText, done: false }]
       : []),
   ]
 
@@ -1121,6 +1131,10 @@ export default function BusinessInfoPage() {
       {activeSection === 'property' && (
         <PropertyRecordsSection />
       )}
+
+      {activeSection === 'drills' && (
+        <DrillsSection providerId={user?.id} />
+      )}
     </>
   )
 }
@@ -1161,6 +1175,305 @@ function PropertyRecordsSection() {
       <ComplianceDocumentSlot documentType="property_animal_notification" />
       <ComplianceDocumentSlot documentType="property_smoking_prohibition_posted" />
       <ComplianceDocumentSlot documentType="property_licensing_notebook" />
+    </div>
+  )
+}
+
+// PR #19 (2026-06-17): DrillsSection — hosts BOTH the drill log
+// entry form (mechanism 1, drill_logs table backing the three R
+// 400.1939 drill compliance rows) AND the Emergency Response Plan
+// document slot (mechanism 2, existing compliance_documents
+// substrate). Two mechanisms in one tab so the provider has one
+// place to think about R 400.1939.
+//
+// The drill log entry form supports the six drill_type values from
+// migration 044's CHECK whitelist: fire, tornado, lockdown,
+// shelter_in_place, reunification, other. Each log captures the
+// performed date, the drill_type, optional duration in minutes, and
+// optional free-text notes. The history list below the form renders
+// the provider's existing logs in reverse-chronological order with
+// an Archive action (RLS allows UPDATE of own rows, so the archive
+// is just a `archived_at = now()` PATCH; no DELETE policy exists).
+function DrillsSection({ providerId }) {
+  const [logs, setLogs] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [submitError, setSubmitError] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [form, setForm] = useState({
+    drill_type: 'fire',
+    performed_on: new Date().toISOString().slice(0, 10),
+    duration_minutes: '',
+    notes: '',
+  })
+  const todayYmd = new Date().toISOString().slice(0, 10)
+
+  useEffect(() => {
+    if (!providerId) return
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      setError(null)
+      const { data, error: err } = await supabase
+        .from('drill_logs')
+        .select('id, drill_type, performed_on, duration_minutes, notes, archived_at, created_at')
+        .eq('user_id', providerId)
+        .is('archived_at', null)
+        .order('performed_on', { ascending: false })
+      if (cancelled) return
+      // Rule 2 — check .error on every Supabase call.
+      if (err) {
+        console.error('DrillsSection: load failed', err)
+        setError('Could not load your drill logs. Refresh and try again.')
+        setLoading(false)
+        return
+      }
+      setLogs(Array.isArray(data) ? data : [])
+      setLoading(false)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [providerId])
+
+  const handleAdd = async (e) => {
+    e.preventDefault()
+    setSubmitError(null)
+    if (!form.drill_type || !form.performed_on) {
+      setSubmitError('Drill type and date are both required.')
+      return
+    }
+    if (form.performed_on > todayYmd) {
+      // Belt + suspenders: the DB CHECK also rejects future-dated logs.
+      setSubmitError('A drill cannot have been performed in the future.')
+      return
+    }
+    const durationNum = form.duration_minutes.trim() === ''
+      ? null
+      : Number(form.duration_minutes)
+    if (durationNum !== null && (!Number.isFinite(durationNum) || durationNum <= 0)) {
+      setSubmitError('Duration must be a positive number of minutes (or leave blank).')
+      return
+    }
+    setSubmitting(true)
+    const payload = {
+      user_id: providerId,
+      drill_type: form.drill_type,
+      performed_on: form.performed_on,
+      duration_minutes: durationNum,
+      notes: form.notes.trim() || null,
+    }
+    const { data, error: err } = await supabase
+      .from('drill_logs')
+      .insert(payload)
+      .select('id, drill_type, performed_on, duration_minutes, notes, archived_at, created_at')
+      .single()
+    setSubmitting(false)
+    if (err) {
+      console.error('DrillsSection: insert failed', err)
+      setSubmitError('Could not save the drill log. Try again, or email support@milittlecare.com.')
+      return
+    }
+    if (data) {
+      setLogs(prev => [data, ...prev])
+    }
+    // Reset the form (keep type so quick multi-entry of the same kind
+    // is easy; reset date to today for the next one).
+    setForm(f => ({
+      drill_type: f.drill_type,
+      performed_on: todayYmd,
+      duration_minutes: '',
+      notes: '',
+    }))
+  }
+
+  const handleArchive = async (logId) => {
+    if (typeof window !== 'undefined' && !window.confirm(
+      'Archive this drill log?\n\n' +
+      'It stays on file for the retention window — nothing is ' +
+      'permanently deleted. The compliance row will recompute without it.'
+    )) return
+    const nowIso = new Date().toISOString()
+    const { error: err } = await supabase
+      .from('drill_logs')
+      .update({ archived_at: nowIso, archived_by: providerId })
+      .eq('id', logId)
+      .eq('user_id', providerId)
+    if (err) {
+      console.error('DrillsSection: archive failed', err)
+      setError('Could not archive that drill log. Refresh and try again.')
+      return
+    }
+    setLogs(prev => prev.filter(l => l.id !== logId))
+  }
+
+  const DRILL_TYPE_LABEL = {
+    fire:             'Fire drill',
+    tornado:          'Tornado drill',
+    lockdown:         'Lockdown drill',
+    shelter_in_place: 'Shelter-in-place drill',
+    reunification:    'Reunification drill',
+    other:            'Other (describe in notes)',
+  }
+
+  return (
+    <div className="bi-section">
+      <div className="bi-section-header">
+        <h3>Drills & Emergency Response Plan</h3>
+        <p>
+          R 400.1939 covers two things: a written Emergency Response Plan
+          (the document), and the drills you conduct against it (the
+          execution history). This tab handles both — upload the plan
+          once, then log each drill as you do it.
+        </p>
+      </div>
+
+      {/* Mechanism 2 — the ERP document slot (compliance_documents
+          substrate). Above the drill log form so the provider sees
+          "plan first, then practice" — matches the auditor's mental
+          model. */}
+      <ComplianceDocumentSlot documentType="emergency_response_plan" />
+
+      <div className="bi-section-header" style={{ marginTop: 'var(--space-5)' }}>
+        <h3 style={{ fontSize: '1rem' }}>Log a drill</h3>
+        <p>
+          Each entry records one drill you conducted. The compliance rows
+          (fire every 3 months, tornado 2× March-November, annual
+          lockdown/shelter/reunification) recompute automatically from
+          the log history. If you mis-entered a date or type, archive
+          the row below and add a corrected one.
+        </p>
+      </div>
+
+      <form onSubmit={handleAdd} style={{ display: 'grid', gap: 'var(--space-3)' }}>
+        <label>
+          <span style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>Drill type *</span>
+          <select
+            className="bi-text-input"
+            value={form.drill_type}
+            onChange={e => setForm(f => ({ ...f, drill_type: e.target.value }))}
+            required
+          >
+            {Object.entries(DRILL_TYPE_LABEL).map(([v, l]) => (
+              <option key={v} value={v}>{l}</option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          <span style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>Date performed *</span>
+          <input
+            type="date"
+            className="bi-text-input"
+            max={todayYmd}
+            value={form.performed_on}
+            onChange={e => setForm(f => ({ ...f, performed_on: e.target.value }))}
+            required
+          />
+        </label>
+
+        <label>
+          <span style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>Duration (minutes, optional)</span>
+          <input
+            type="number"
+            min="0"
+            step="0.5"
+            inputMode="decimal"
+            className="bi-text-input"
+            value={form.duration_minutes}
+            onChange={e => setForm(f => ({ ...f, duration_minutes: e.target.value }))}
+            placeholder="e.g. 3"
+          />
+        </label>
+
+        <label>
+          <span style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>Notes (optional)</span>
+          <textarea
+            className="bi-text-input"
+            rows={3}
+            value={form.notes}
+            onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+            placeholder="What happened, who participated, anything unusual."
+          />
+        </label>
+
+        {submitError && (
+          <div role="alert" style={{ color: 'var(--clr-danger, #b00020)', fontSize: '0.875rem' }}>
+            {submitError}
+          </div>
+        )}
+
+        <button className="bi-save-btn" type="submit" disabled={submitting} style={{ marginTop: 4 }}>
+          {submitting ? 'Saving…' : 'Log drill'}
+        </button>
+      </form>
+
+      <div className="bi-section-header" style={{ marginTop: 'var(--space-6)' }}>
+        <h3 style={{ fontSize: '1rem' }}>Drill history</h3>
+        <p>
+          Reverse-chronological. Most recent first. Archive an entry if
+          you logged it wrong — the row stays for the retention window
+          but stops contributing to the compliance computation.
+        </p>
+      </div>
+
+      {error && (
+        <div role="alert" style={{ color: 'var(--clr-danger, #b00020)', fontSize: '0.875rem', marginBottom: 'var(--space-3)' }}>
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <p style={{ color: 'var(--clr-ink-soft)' }}>Loading drill history…</p>
+      ) : logs.length === 0 ? (
+        <p style={{ color: 'var(--clr-ink-soft)' }}>No drills logged yet. Use the form above to add the first one.</p>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+          {logs.map(log => (
+            <li
+              key={log.id}
+              style={{
+                background: 'var(--clr-cream)',
+                border: '1px solid var(--clr-warm-mid)',
+                borderRadius: 'var(--radius-md)',
+                padding: 'var(--space-3) var(--space-4)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 4,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 'var(--space-3)' }}>
+                <strong>{DRILL_TYPE_LABEL[log.drill_type] || log.drill_type}</strong>
+                <span style={{ color: 'var(--clr-ink-soft)', fontSize: '0.875rem' }}>
+                  {log.performed_on}
+                  {log.duration_minutes != null && ` · ${log.duration_minutes} min`}
+                </span>
+              </div>
+              {log.notes && (
+                <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--clr-ink-mid)' }}>
+                  {log.notes}
+                </p>
+              )}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => handleArchive(log.id)}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid var(--clr-warm-mid)',
+                    color: 'var(--clr-ink-soft)',
+                    padding: '4px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    cursor: 'pointer',
+                    fontSize: '0.8125rem',
+                  }}
+                >
+                  Archive
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
