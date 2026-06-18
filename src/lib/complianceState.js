@@ -1771,12 +1771,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     },
   }),
 
-  caregiver_physician_attestation_annual: Object.freeze({
-    key: 'caregiver_physician_attestation_annual',
+  caregiver_physician_attestation_at_renewal: Object.freeze({
+    key: 'caregiver_physician_attestation_at_renewal',
     category: 'staff_files',
     // Staff-file copy filed under R 400.1906(1)(c).
     rule_citation: 'R 400.1933(1)-(2)',
-    label: 'Physician attestation of staff health (annual)',
+    label: 'Physician attestation of staff health (renewal-tied)',
     subject_type: 'caregiver',
     data_authority: 'milittlecare',
     gsq_relevant: false,
@@ -1784,12 +1784,23 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
     // 2026-06-17 PR #17/#18 foundation (mig 045): flipped from
     // 'not_yet_modelled' to 'shipped'. Per-caregiver document via
     // the new subject_caregiver_id column on compliance_documents +
-    // the new 'caregiver_physician_attestation' document_type.
-    // Cycle mode (requiresDueDate=true) — the provider enters the
-    // next-due date at upload time (typically attestation date + 1
-    // year per R 400.1933's annual rule). Reports WORST across the
-    // caregiver roster — same rollup discipline as the existing CPR
-    // / background-check resolvers.
+    // the new 'caregiver_physician_attestation' document_type. The
+    // doc-type string keeps that name — only the registry key was
+    // renamed from _annual to _at_renewal.
+    //
+    // 2026-06-18 — cadence reframed. R 400.1933(1)-(2) says
+    // "renewed at the time of subsequent license renewals." Michigan
+    // child-care home licenses run ~2-3 years (R 400.1925's 29-month
+    // floor). The engine therefore does not enforce a calendar-year
+    // cycle; the provider enters the next-due date directly at
+    // upload time, exactly the way radon / heating cycle works.
+    // Many licensing consultants tell providers to refresh annually
+    // as a hedge — that recommendation lives in the help copy, not
+    // in the resolver. The resolver remains mechanism-unchanged
+    // (cycle mode, requiresDueDate=true, today-vs-due compare).
+    //
+    // Reports WORST across the caregiver roster — same rollup
+    // discipline as the existing CPR / background-check resolvers.
     data_state: 'shipped',
     applicability: { universalFor: LICENSED_HOME_LICENSE_TYPES },
     state_resolver: buildPerCaregiverComplianceDocResolver(

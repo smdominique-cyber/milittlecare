@@ -59,9 +59,13 @@ import { classifyUnknownReason } from '@/lib/complianceState'
 //      category tracks to the same PR (drills → #19, property → #21).
 //   3. Generic fallback — any row not enumerated.
 export const TRACKING_SHIPS_WITH = Object.freeze({
-  caregiver_physician_attestation_annual:  'PR #18 (staff file gaps)',
-  caregiver_discipline_policy_ack_at_hire: 'PR #17 (discipline policy receipt at hire)',
-  caregiver_daily_arrival_departure:       'PR #18 (staff file gaps)',
+  // 2026-06-18 — physician attestation row no longer tracks-to-PR
+  // (the foundation IS shipped on this branch). The entry stays in
+  // the map only as a defensive fallback if the row ever flips back
+  // to not_yet_modelled; the key was renamed from _annual.
+  caregiver_physician_attestation_at_renewal: 'PR #18 (staff file gaps)',
+  caregiver_discipline_policy_ack_at_hire:    'PR #17 (discipline policy receipt at hire)',
+  caregiver_daily_arrival_departure:          'PR #18 (staff file gaps)',
   drills:        'PR #19 (drills + emergency response plan)',
   property:      'PR #21 (property records)',
 })
@@ -765,7 +769,7 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
   // fixTarget's STAFF_TRAINING surface deep-links to the worst-
   // caregiver's drill-in page.
 
-  caregiver_physician_attestation_annual: {
+  caregiver_physician_attestation_at_renewal: {
     surface: SURFACE.STAFF_TRAINING,
     missing: (state) => {
       if (state && state.reason === 'due-date-missing') {
@@ -774,7 +778,7 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
           'no next-due date is set — the requirement can\'t tell ' +
           'whether it\'s still current. Re-upload in Staff Training ' +
           '→ this caregiver and enter the next-due date (typically ' +
-          'the attestation date + 1 year per R 400.1933).'
+          'your next license-renewal date per R 400.1933).'
         )
       }
       if (state && state.reason === 'no-active-caregivers') {
@@ -785,20 +789,21 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
         )
       }
       return (
-        'Upload the signed annual physician attestation for each ' +
-        'caregiver in Staff Training → this caregiver. R 400.1933 ' +
-        'requires a physician\'s attestation of mental and physical ' +
-        'health for every personnel member, renewed each year. The ' +
-        'fix link opens whichever caregiver is currently missing the ' +
-        'attestation.'
+        'Upload the signed physician attestation for each caregiver ' +
+        'in Staff Training → this caregiver. R 400.1933 requires a ' +
+        'physician\'s attestation of mental and physical health for ' +
+        'every personnel member, renewed at the time of each license ' +
+        'renewal. The fix link opens whichever caregiver is currently ' +
+        'missing the attestation.'
       )
     },
     expired:
-      'A caregiver\'s physician attestation has passed its annual due ' +
+      'A caregiver\'s physician attestation has passed its next-due ' +
       'date. Upload the new attestation in Staff Training → that ' +
-      'caregiver and enter the new next-due date. R 400.1933 — the ' +
-      'rule is an annual cycle. The fix link opens whichever ' +
-      'caregiver expired first.',
+      'caregiver and enter the new next-due date. R 400.1933 requires ' +
+      'renewal at the time of each license renewal; many licensing ' +
+      'consultants recommend a yearly refresh as a hedge. The fix ' +
+      'link opens whichever caregiver expired first.',
   },
 
   // ── Group H — attendance acks (category C surface — text-only) ───

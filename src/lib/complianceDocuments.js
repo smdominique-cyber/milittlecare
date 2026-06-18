@@ -278,25 +278,37 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
   // must supply a parentScope `{ columnName: 'subject_caregiver_id',
   // value: <caregiver_id> }` so the slot reads/writes against the
   // per-caregiver projection rather than the provider-level path.
-  // Single-instance per caregiver — annual cycle via the provider-
+  // Single-instance per caregiver — cycle-tracked via the provider-
   // entered next-due date (same pattern as radon).
+  //
+  // 2026-06-18 cadence reframe: R 400.1933(1)-(2) requires renewal "at
+  // the time of subsequent license renewals," NOT annually. Michigan
+  // home licenses run ~2-3 years (R 400.1925 has a 29-month floor),
+  // so the resolver does not enforce a calendar-year cycle. Many
+  // licensing consultants tell providers to refresh annually as a
+  // hedge — that's noted in the help, but it is not the rule.
 
   caregiver_physician_attestation: {
     title: 'Physician attestation of health',
     badge: { text: 'Required', tone: 'required' },
     help:
       'Upload the signed physician attestation of mental and physical ' +
-      'health for this caregiver — R 400.1933(1)-(2). The form is ' +
-      'completed and signed by a licensed physician once a year. ' +
-      'Replace with the new form after each annual visit; the prior ' +
-      'copy stays in archive for the retention window.',
+      'health for this caregiver — R 400.1933(1)-(2). A licensed ' +
+      'physician completes and signs the form; the rule requires it ' +
+      'stay current as of each license renewal (initial issuance + ' +
+      'every subsequent renewal). Many licensing consultants ' +
+      'recommend a yearly refresh as a hedge — that is a ' +
+      'recommendation, not a requirement. Replace with the new form ' +
+      'after each attestation; the prior copy stays in archive for ' +
+      'the retention window.',
     multi: false,
     requiresDueDate: true,
     dueDateLabel: 'Next attestation due',
     dueDateHelp:
-      'Enter the date this caregiver\'s next annual physician ' +
-      'attestation is due — typically the date of the most recent ' +
-      'attestation plus 1 year. R 400.1933 — the rule is an annual ' +
-      'cycle, not a fixed calendar date.',
+      'Enter the date this caregiver\'s attestation is next due. The ' +
+      'rule (R 400.1933) requires it stay current as of each license ' +
+      'renewal — set this to your license renewal date, or sooner if ' +
+      'your licensing consultant recommends an annual refresh as a ' +
+      'hedge.',
   },
 })

@@ -5,7 +5,11 @@
 -- 2026-06-17. Backs the THREE per-caregiver staff-record compliance
 -- rows the registry has carried as 'not_yet_modelled' since Phase 1:
 --
---   caregiver_physician_attestation_annual    R 400.1933        (THIS PR — wired end-to-end)
+--   caregiver_physician_attestation_at_renewal  R 400.1933        (THIS PR — wired end-to-end)
+--     (registry key renamed from _annual on 2026-06-18 — R 400.1933
+--      says "renewed at the time of subsequent license renewals,"
+--      not annually. Resolver mechanism is unchanged; the rename
+--      tracks the cadence semantics. Doc-type string is unchanged.)
 --   caregiver_discipline_policy_ack_at_hire   R 400.1906(1)(e)(iii)  (next PR — design recorded below)
 --   caregiver_daily_arrival_departure         R 400.1906        (next PR — design recorded below)
 --

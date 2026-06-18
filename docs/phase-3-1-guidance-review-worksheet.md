@@ -811,7 +811,7 @@ sub-work in 3.1's §4).
 
 ### E7 — Physician attestation of staff health (annual) — **rule citation unconfirmed**
 
-- **`requirement_key`:** `caregiver_physician_attestation_annual`
+- **`requirement_key`:** `caregiver_physician_attestation_annual` *(renamed to `caregiver_physician_attestation_at_renewal` on 2026-06-18 — see CLAUDE.md cadence decision; historical worksheet text preserved)*
 - **Rule citation (drafted):** ❓ (Phase 1 marked as *"R 400.1933 (?)"*)
 - **Gap state(s):** `unknown` reason `feature-not-yet-shipped` —
   PR #18 surface; no in-app capture flow today.

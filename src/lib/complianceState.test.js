@@ -919,8 +919,9 @@ describe('Pattern E — feature-not-yet-shipped', () => {
   // resolver tests live in dedicated describes below.
   //
   // 2026-06-17 PR #17/#18 foundation (mig 045): the per-caregiver
-  // scoping column ships, and caregiver_physician_attestation_annual
-  // flips to shipped via the new buildPerCaregiverComplianceDocResolver.
+  // scoping column ships, and caregiver_physician_attestation_at_renewal
+  // (renamed from _annual on 2026-06-18 per the renewal-tied cadence
+  // decision) flips to shipped via buildPerCaregiverComplianceDocResolver.
   // Its resolver tests live in a dedicated describe below.
   //
   // What remains here: the two follow-up caregiver rows that ship in
@@ -1373,8 +1374,14 @@ describe('compliance_documents-backed resolvers (J1/J2/J8 — mig 039 + mig 040)
 // `subject_caregiver_id` to the state so the fixTarget deep-links
 // to that caregiver's drill-in page.
 
-describe('caregiver_physician_attestation_annual (per-caregiver, cycle, mig 045)', () => {
-  const requirement = REQUIREMENT_REGISTRY.caregiver_physician_attestation_annual
+describe('caregiver_physician_attestation_at_renewal (per-caregiver, cycle, mig 045)', () => {
+  // 2026-06-18 — registry key renamed from _annual → _at_renewal.
+  // The resolver mechanism is unchanged (cycle mode, requiresDueDate=true,
+  // today-vs-provider-entered-next_due_on). The rename + reframed copy
+  // reflect that R 400.1933 says "renewed at the time of subsequent
+  // license renewals," not annually. The doc-type string
+  // ('caregiver_physician_attestation') was NOT renamed.
+  const requirement = REQUIREMENT_REGISTRY.caregiver_physician_attestation_at_renewal
 
   const cg = (overrides = {}) => ({
     id: 'cg-1',
@@ -1389,7 +1396,9 @@ describe('caregiver_physician_attestation_annual (per-caregiver, cycle, mig 045)
     subject_caregiver_id: 'cg-1',
     uploaded_at: '2026-06-01T00:00:00Z',
     archived_at: null,
-    next_due_on: '2027-06-01',   // 1 year out — future
+    // Set to ~3 years out so the same fixture covers the renewal-tied
+    // cadence (Michigan home licenses run ~2-3 years per R 400.1925).
+    next_due_on: '2029-06-01',
     ...overrides,
   })
 

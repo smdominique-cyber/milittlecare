@@ -217,7 +217,7 @@ real R 400 obligation.
 
 ### 3.1 PR #18 — Staff file gaps (E7 / E8 / E9)
 - **Status:** **NOT BUILT, blocked on substrate extension.**
-  Three rows: `caregiver_physician_attestation_annual`,
+  Three rows: `caregiver_physician_attestation_at_renewal` (renamed from `_annual` on 2026-06-18),
   `caregiver_discipline_policy_ack_at_hire`,
   `caregiver_daily_arrival_departure`. All resolve to
   `patternENotYetModelled`. The first two are document-shaped but
