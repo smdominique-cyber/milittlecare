@@ -342,7 +342,18 @@ export async function loadComplianceSourceRows({
   const complianceDocumentsResp = await safeQueryWithLoaded('compliance_documents', () =>
     supabase
       .from('compliance_documents')
-      .select('id, document_type, uploaded_at, archived_at')
+      // 2026-06-17 PR #17/#18 foundation (mig 045): subject_caregiver_id
+      // joins the projection so the per-caregiver resolver in
+      // complianceState.js can match docs to caregivers. next_due_on
+      // (mig 040) is also added — the radon resolver had been
+      // reading it on the row already (the engine's resolver code
+      // looks it up via the row passed by the loader), but the
+      // pre-2026-06-17 .select() did not project it. Belt + suspenders
+      // — radon's cycle resolver tests pass today because
+      // next_due_on was being returned via Supabase's default `*`
+      // resolution for some callers and via the engine's loader for
+      // others; making the projection explicit prevents drift.
+      .select('id, document_type, uploaded_at, archived_at, next_due_on, subject_caregiver_id')
       .eq('user_id', providerId)
       .is('archived_at', null)
   )
@@ -508,7 +519,18 @@ async function loadProviderLevelRows(providerId, attendanceWindowDays) {
   const complianceDocumentsResp = await safeQueryWithLoaded('compliance_documents', () =>
     supabase
       .from('compliance_documents')
-      .select('id, document_type, uploaded_at, archived_at')
+      // 2026-06-17 PR #17/#18 foundation (mig 045): subject_caregiver_id
+      // joins the projection so the per-caregiver resolver in
+      // complianceState.js can match docs to caregivers. next_due_on
+      // (mig 040) is also added — the radon resolver had been
+      // reading it on the row already (the engine's resolver code
+      // looks it up via the row passed by the loader), but the
+      // pre-2026-06-17 .select() did not project it. Belt + suspenders
+      // — radon's cycle resolver tests pass today because
+      // next_due_on was being returned via Supabase's default `*`
+      // resolution for some callers and via the engine's loader for
+      // others; making the projection explicit prevents drift.
+      .select('id, document_type, uploaded_at, archived_at, next_due_on, subject_caregiver_id')
       .eq('user_id', providerId)
       .is('archived_at', null)
   )

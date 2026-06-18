@@ -32,7 +32,9 @@
 --   DEFERRED — DOCUMENT-shaped but the substrate would need a
 --     per-caregiver scoping column (subject_caregiver_id) before
 --     they fit cleanly. Reported as follow-up; not in this PR.
---       caregiver_physician_attestation_annual
+--       caregiver_physician_attestation_at_renewal  (was _annual in
+--                                                this header before
+--                                                the 2026-06-18 rename)
 --       caregiver_discipline_policy_ack_at_hire
 --
 --   OUT — not document-shaped at all:

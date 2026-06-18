@@ -23,6 +23,7 @@ import {
   buildProfileUpdate,
   STEPS_PER_PROVIDER,
 } from '@/lib/onboarding'
+import { ensureLicenseeSelfCaregiverRow } from '@/lib/licenseeRoster'
 import { onboardingReducer, initialOnboardingState, STATUS } from './onboardingReducer'
 
 // The profile columns the wizard reads and writes.
@@ -73,13 +74,95 @@ export function useOnboarding() {
   }, [user?.id])
 
   // Apply one wizard event to Supabase; throws on failure.
+  //
+  // SIDE EFFECT on first completion: when this persist transitions the
+  // profile from "not yet completed" → "completed" (i.e. the answer or
+  // skip that resolved the final step), it also ensures the licensee
+  // has a `caregivers` self-row. See src/lib/licenseeRoster.js for the
+  // rationale + the single-create-path discipline. The side effect is
+  // intentionally fired AFTER the primary profile write succeeds —
+  // never before — so a failed profile write cannot leave a stray
+  // self-row. The self-row create is best-effort: if it fails, we log
+  // and proceed; mig 046 catches up any licensee whose post-completion
+  // create did not stick (e.g., transient network) on next page load
+  // via a one-time sweep. Onboarding is not blocked.
+  //
+  // Licensee gate (2026-06-18 Step 2 review): the side effect is
+  // additionally gated on the absence of an active `staff_memberships`
+  // row for the current user. RoleProvider treats that absence as the
+  // definitive "this account is a licensee" signal (useRole.jsx:37-44)
+  // and routes non-licensees away from useOnboarding entirely. The
+  // gate here is insurance, not the primary defense — a future refactor
+  // that exposes onboarding to a staff/co-provider account must not
+  // silently create a self-row that puts that account into the
+  // caregivers table as its own licensee. The check is one extra
+  // round-trip on completion (rare event, cost acceptable). On gate
+  // error (RLS / network), we skip the create — mig 046 (or any future
+  // run) catches up.
+  //
+  // `license_type` was considered as the signal but rejected: it is
+  // not in PROFILE_COLUMNS so the hydrate path doesn't see it, and a
+  // staff account that ever entered onboarding could in principle
+  // answer screen 1 and have `license_type` set on its OWN profile
+  // row — making it an unreliable filter. `staff_memberships` absence
+  // is what `RoleProvider` already uses and is the same source of
+  // truth.
   async function persist(event) {
     const profile = profileRef.current
     if (!profile) throw new Error('profile not loaded')
+    const wasCompleted = !!(profile.onboarding_state && profile.onboarding_state.completed_at)
     const { update, nextProfile } = buildProfileUpdate({ profile, event })
     const { error } = await supabase.from('profiles').update(update).eq('id', profile.id)
     if (error) throw error
     profileRef.current = nextProfile
+    const nowCompleted = !!(nextProfile.onboarding_state && nextProfile.onboarding_state.completed_at)
+    if (!wasCompleted && nowCompleted && user) {
+      // Licensee gate — see comment block above for rationale.
+      // staff_memberships predates this hook (mig 020 area). We query
+      // by `staff_user_id = auth.uid()` AND `status = 'active'`; any
+      // hit means the account is a staff member of someone else's
+      // home and the self-row create must be skipped. The query
+      // mirrors useRole.jsx:37-43 exactly so a future refactor of the
+      // licensee detection rule can be made in one place.
+      let isLicensee = true  // optimistic; corrected below
+      try {
+        const { data: memberships, error: mErr } = await supabase
+          .from('staff_memberships')
+          .select('id')
+          .eq('staff_user_id', user.id)
+          .eq('status', 'active')
+          .limit(1)
+        if (mErr) {
+          console.error('useOnboarding: staff_memberships gate query failed; skipping self-row create', mErr)
+          isLicensee = false
+        } else if (memberships && memberships.length > 0) {
+          // A staff account completed onboarding. Should not happen
+          // today (RoleProvider routes them away) but we refuse to
+          // pollute caregivers if it ever does.
+          console.warn('useOnboarding: completion fired for non-licensee account; skipping self-row create')
+          isLicensee = false
+        }
+      } catch (mThrew) {
+        console.error('useOnboarding: staff_memberships gate threw; skipping self-row create', mThrew)
+        isLicensee = false
+      }
+      if (isLicensee) {
+        // Onboarding only runs for licensees (confirmed above by the
+        // gate). The helper itself is defensive (it gates on user.id
+        // and uses the unique (licensee_id, app_user_id) constraint
+        // for idempotency). A catch here is paranoid — the helper
+        // does not throw — but we wrap anyway so any future contract
+        // change is contained.
+        try {
+          const { error: roleErr } = await ensureLicenseeSelfCaregiverRow({ user })
+          if (roleErr) {
+            console.error('useOnboarding: licensee self-row create returned an error', roleErr)
+          }
+        } catch (selfErr) {
+          console.error('useOnboarding: licensee self-row create threw', selfErr)
+        }
+      }
+    }
   }
 
   const question = getQuestion(state.currentStep)

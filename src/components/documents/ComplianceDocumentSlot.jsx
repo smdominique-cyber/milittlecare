@@ -15,7 +15,7 @@ import {
 
 export const COMPLIANCE_DOCUMENTS_TABLE = 'compliance_documents'
 
-export default function ComplianceDocumentSlot({ documentType, onChanged }) {
+export default function ComplianceDocumentSlot({ documentType, subjectCaregiverId = null, onChanged }) {
   const config = COMPLIANCE_DOCUMENT_TYPE_CONFIG[documentType]
   if (!config) {
     if (typeof console !== 'undefined') {
@@ -27,6 +27,16 @@ export default function ComplianceDocumentSlot({ documentType, onChanged }) {
     }
     return null
   }
+  // 2026-06-17 PR #17/#18 foundation (mig 045) — per-caregiver
+  // scoping. When the caller supplies subjectCaregiverId, the slot
+  // reads/writes via the subject_caregiver_id projection: filter on
+  // it during SELECT, INSERT it with the new row. Caller-side
+  // parentScope mechanism is the same pattern FundingDocumentSlot
+  // uses for funding_source_id; DocumentSlot already understands the
+  // parentScope prop.
+  const parentScope = subjectCaregiverId
+    ? { columnName: 'subject_caregiver_id', value: subjectCaregiverId }
+    : null
   return (
     <DocumentSlot
       table={COMPLIANCE_DOCUMENTS_TABLE}
@@ -35,6 +45,7 @@ export default function ComplianceDocumentSlot({ documentType, onChanged }) {
       config={config}
       buildStoragePath={buildStoragePath}
       getSignedUrl={getSignedComplianceDocUrl}
+      parentScope={parentScope}
       onChanged={onChanged}
     />
   )

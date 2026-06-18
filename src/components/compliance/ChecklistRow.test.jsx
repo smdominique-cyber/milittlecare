@@ -20,9 +20,9 @@ import { trackingCopy, TRACKING_SHIPS_WITH } from './ChecklistRow'
 // -----------------------------------------------------------------------------
 
 describe('trackingCopy — per-row entries (the staff_files mashup fix)', () => {
-  it('caregiver_physician_attestation_annual → PR #18', () => {
+  it('caregiver_physician_attestation_at_renewal → PR #18', () => {
     const req = {
-      key: 'caregiver_physician_attestation_annual',
+      key: 'caregiver_physician_attestation_at_renewal',
       category: 'staff_files',
     }
     expect(trackingCopy(req)).toBe('PR #18 (staff file gaps)')
@@ -49,7 +49,7 @@ describe('trackingCopy — per-row entries (the staff_files mashup fix)', () => 
     // render the same combined "PR #18 ... and PR #17 ..." string
     // because the lookup keyed on category alone.
     const physician = trackingCopy({
-      key: 'caregiver_physician_attestation_annual', category: 'staff_files',
+      key: 'caregiver_physician_attestation_at_renewal', category: 'staff_files',
     })
     const discipline = trackingCopy({
       key: 'caregiver_discipline_policy_ack_at_hire', category: 'staff_files',
