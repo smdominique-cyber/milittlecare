@@ -123,11 +123,10 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
     badge: { text: 'Required', tone: 'required' },
     help:
       'Upload your most recent radon test report from a certified ' +
-      'tester. Rules R 400.1932 / R 400.1934 require a test on a ' +
-      '4-year cycle — replace this with the latest report after each ' +
-      'retest. If you have older reports for the same home, the ' +
-      '"Replace" flow keeps the prior one in archive for the ' +
-      'retention window.',
+      'tester. R 400.1915(4) requires a test on a 4-year cycle — ' +
+      'replace this with the latest report after each retest. If you ' +
+      'have older reports for the same home, the "Replace" flow keeps ' +
+      'the prior one in archive for the retention window.',
     multi: false,
     // 2026-06-14 mig 040: the resolver compares this date against
     // today. The slot captures it as a required input alongside the
@@ -139,16 +138,17 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
     dueDateHelp:
       'Enter the date this radon test cycle is next due. Your tester ' +
       'should have given you a recommended retest date; otherwise ' +
-      'use the report date + 4 years (R 400.1932 / R 400.1934).',
+      'use the report date + 4 years (R 400.1915(4)).',
   },
   property_heating_inspection: {
     title: 'Heating equipment inspection',
     badge: { text: 'Required', tone: 'required' },
     help:
       'Upload your most recent heating/HVAC inspection report from a ' +
-      'qualified contractor. R 400.1932 requires inspection on a ' +
-      '4-year cycle. Replace after each inspection; prior reports ' +
-      'stay in archive for the retention window.',
+      'qualified contractor. R 400.1945(4)–(5) requires inspection on ' +
+      'a 4-year cycle (renewed at each license renewal). Replace after ' +
+      'each inspection; prior reports stay in archive for the ' +
+      'retention window.',
     multi: false,
     // 2026-06-14 mig 040: see radon for the same boundary contract.
     requiresDueDate: true,
@@ -156,7 +156,7 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
     dueDateHelp:
       'Enter the date the next heating/HVAC inspection is due. Your ' +
       'contractor usually notes this on the report; otherwise use the ' +
-      'inspection date + 4 years (R 400.1932).',
+      'inspection date + 4 years (R 400.1945(4)–(5)).',
   },
   property_licensing_notebook: {
     title: 'Licensing notebook archive',
@@ -186,13 +186,13 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
       'A photo (or short attestation PDF) showing CO detectors are ' +
       'installed and operational on every level of the home — R ' +
       '400.1915(3) (the heating/ventilation rule, where CO lives — ' +
-      'NOT R 400.1948, which covers smoke detectors and fire ' +
-      'extinguishers only). The rule requires an operational CO ' +
-      'detector bearing a recognized-laboratory safety mark on all ' +
-      'levels approved for child care. One image per level is fine; ' +
-      'the slot keeps the most recent upload and archives the prior. ' +
-      'Re-photograph after a battery swap or replacement so the ' +
-      'on-file image matches what is installed.',
+      'NOT R 400.1948, which is the smoke-detector + fire-extinguisher ' +
+      'rule). The rule requires an operational CO detector bearing a ' +
+      'recognized-laboratory safety mark on all levels approved for ' +
+      'child care. One image per level is fine; the slot keeps the ' +
+      'most recent upload and archives the prior. Re-photograph after ' +
+      'a battery swap or replacement so the on-file image matches ' +
+      'what is installed.',
     multi: false,
   },
   property_smoke_detectors_per_floor: {
@@ -200,11 +200,12 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
     badge: { text: 'Required', tone: 'required' },
     help:
       'A photo (or short attestation PDF) showing working smoke ' +
-      'detectors on every floor — R 400.1948. One image per floor is ' +
-      'fine; this slot keeps the latest. Re-upload after a battery ' +
+      'detectors on every floor — R 400.1948(1). One image per floor ' +
+      'is fine; this slot keeps the latest. Re-upload after a battery ' +
       'change or new install so the on-file evidence matches what is ' +
-      'currently in the home. (R 400.1934 is the water-hazards rule; ' +
-      'this row is the detectors rule R 400.1948.)',
+      'currently in the home. (R 400.1948(3) is the per-floor fire-' +
+      'extinguisher subrule; this row is the per-floor smoke-detector ' +
+      'subrule, R 400.1948(1).)',
     multi: false,
   },
   property_fire_extinguishers_per_floor: {
@@ -213,9 +214,10 @@ export const COMPLIANCE_DOCUMENT_TYPE_CONFIG = Object.freeze({
     help:
       'A photo (or service-tag attestation PDF) showing at least one ' +
       'fire extinguisher rated 2A-10BC or higher on every floor — R ' +
-      '400.1948. The image should show the rating label and the ' +
+      '400.1948(3). The image should show the rating label and the ' +
       'service tag with the most recent inspection date. Re-upload ' +
-      'after the annual service tag is renewed.',
+      'after the annual service tag is renewed. (R 400.1948(1) is ' +
+      'the per-floor smoke-detector subrule on the sibling row.)',
     multi: false,
   },
   property_animal_notification: {

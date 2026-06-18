@@ -640,10 +640,15 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   intake_firearms_disclosure: Object.freeze({
     key: 'intake_firearms_disclosure',
     category: 'child_files',
-    // Verified against the 2026 Family/Group Home TA Manual (May 2026)
-    // and CCL-3900. The intake-disclosure obligation is R 400.1907(1)(b);
-    // the substantive firearms-storage/handling rule is R 400.1935(1)-(2).
-    rule_citation: 'R 400.1907(1)(b) AND R 400.1935(1)-(2)',
+    // 2026-06-18 — citation corrected. The intake-disclosure obligation
+    // is R 400.1907(1)(b); the substantive firearms rule under the
+    // 2026 manual (R 400.1901-1963, eff April 27 2026, 2026 MR 8) is
+    // R 400.1916 (Firearms). The pre-correction "R 400.1935(1)-(2)"
+    // was wrong: R 400.1935 is "Diapering and toilet learning" in the
+    // 2026 numbering, per docs/regulatory-rule-mapping.md. The
+    // user-visible guidance copy already cites R 400.1916 — this fix
+    // brings the registry citation in line with the displayed copy.
+    rule_citation: 'R 400.1907(1)(b) AND R 400.1916',
     label: 'Firearms-on-premises disclosure',
     subject_type: 'child',
     data_authority: 'milittlecare',
@@ -2176,7 +2181,16 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   property_radon_test_quadrennial: Object.freeze({
     key: 'property_radon_test_quadrennial',
     category: 'property',
-    rule_citation: 'R 400.1934/1932',
+    // 2026-06-18 — citation corrected against the 2026 manual
+    // (R 400.1901-1963, eff April 27 2026, 2026 MR 8). The radon test
+    // cadence is R 400.1915(4); R 400.1915(5) sets the 4 pCi/L
+    // standard and (6) covers mitigation / the 12-month retest. The
+    // pre-correction blend "R 400.1934/1932" carried forward a Phase 1
+    // placeholder — R 400.1934 is now water hazards and R 400.1932 is
+    // biocontaminants in the 2026 numbering (see
+    // docs/regulatory-rule-mapping.md). Radon lives in Rule 15 with
+    // heating/ventilation/lighting.
+    rule_citation: 'R 400.1915(4)',
     label: 'Radon test (every 4 years)',
     subject_type: 'provider',
     data_authority: 'milittlecare',
@@ -2197,7 +2211,15 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   property_heating_inspection_quadrennial: Object.freeze({
     key: 'property_heating_inspection_quadrennial',
     category: 'property',
-    rule_citation: 'R 400.1932',
+    // 2026-06-18 — citation corrected against the 2026 manual. The
+    // heating-equipment inspection requirement is R 400.1945(4); the
+    // every-4-years-at-license-renewal cadence is R 400.1945(5). Rule
+    // 45 (R 400.1945) is "Heat-producing equipment" — distinct from
+    // R 400.1915 (heating/ventilation/lighting/radon) where general
+    // heating safety lives. The pre-correction "R 400.1932" was wrong:
+    // R 400.1932 is biocontaminants in the 2026 numbering. See
+    // docs/regulatory-rule-mapping.md.
+    rule_citation: 'R 400.1945(4)-(5)',
     label: 'Heating equipment inspection (every 4 years)',
     subject_type: 'provider',
     data_authority: 'milittlecare',
@@ -2242,9 +2264,13 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   property_smoke_detectors_per_floor: Object.freeze({
     key: 'property_smoke_detectors_per_floor',
     // 2026-06-17 — citation corrected from 'R 400.1934' (water hazards)
-    // to 'R 400.1948' (the smoke detectors + fire extinguishers rule,
-    // per docs/regulatory-rule-mapping.md).
-    rule_citation: 'R 400.1948',
+    // to 'R 400.1948' (the smoke detectors + fire extinguishers rule).
+    // 2026-06-18 — narrowed to R 400.1948(1) (the smoke-detectors-per-
+    // floor subrule). R 400.1948(3) is the fire-extinguisher-per-floor
+    // subrule, which the sibling row cites. The pinning test below
+    // asserts smoke ≠ extinguisher subrule. See
+    // docs/regulatory-rule-mapping.md.
+    rule_citation: 'R 400.1948(1)',
     category: 'property',
     label: 'Smoke detectors per floor',
     subject_type: 'provider',
@@ -2260,9 +2286,12 @@ export const REQUIREMENT_REGISTRY = Object.freeze({
   property_fire_extinguishers_per_floor: Object.freeze({
     key: 'property_fire_extinguishers_per_floor',
     // 2026-06-17 — citation corrected from 'R 400.1934' (water hazards)
-    // to 'R 400.1948' (the smoke detectors + fire extinguishers rule,
-    // per docs/regulatory-rule-mapping.md and user directive).
-    rule_citation: 'R 400.1948',
+    // to 'R 400.1948' (the smoke detectors + fire extinguishers rule).
+    // 2026-06-18 — narrowed to R 400.1948(3) (the fire-extinguisher-
+    // 2A-10BC-per-floor subrule). R 400.1948(1) is the smoke-detectors
+    // subrule, which the sibling row cites. See
+    // docs/regulatory-rule-mapping.md.
+    rule_citation: 'R 400.1948(3)',
     category: 'property',
     label: 'Fire extinguishers per floor (2A-10BC+)',
     subject_type: 'provider',
@@ -2707,15 +2736,30 @@ export const NEEDS_PROVIDER_DATA_REASONS = Object.freeze(new Set([
  * can render "couldn't verify — refresh to retry" instead of the
  * data_anomaly bucket's "contact support."
  *
- * Membership is the six load-failure guard reasons emitted by the E5
- * (training-data-load-failure) and §2a coverage-completion resolvers.
+ * 2026-06-18 — classification is now SUFFIX-BASED. Any UNKNOWN reason
+ * matching the regex `/^.+-load-failure$/` routes to the load_failure
+ * bucket regardless of whether it appears in this Set. The Set itself
+ * is the canonical inventory of CURRENTLY-EMITTED reasons — useful for
+ * docs, tests, and exhaustiveness audits — but it is no longer
+ * load-bearing for classification. Two reasons were missing from the
+ * previous enumeration (`compliance-documents-load-failure` from
+ * buildComplianceDocResolver and `drill-logs-load-failure` from
+ * buildDrillResolver) and both shipped to production misclassified as
+ * data_anomaly. The suffix-based rule ends that recurrence by removing
+ * the foot-gun: a new `<table>-load-failure` guard is correct the
+ * moment it lands, with or without an update here.
+ *
  * NOT included: 'training-requirements-catalog-empty' — that fires
  * when the statewide catalog LOADED successfully but contained no PD
  * rows, which is a deployment/seed anomaly (migration 013 missing),
- * not a transient load failure; it stays data_anomaly.
+ * not a transient load failure; it stays data_anomaly. (It also lacks
+ * the `-load-failure` suffix, so the suffix rule excludes it
+ * automatically.)
  *
- * If a future resolver adds a '<table>-load-failure' guard, add the
- * reason here or it will misclassify as data_anomaly.
+ * Inventory below — keep in lockstep with the resolver guards. New
+ * additions should keep the `<table>-load-failure` shape so the suffix
+ * classifier picks them up. The classifyUnknownReason test asserts the
+ * suffix rule routes every Set member to 'load_failure'.
  */
 export const LOAD_FAILURE_REASONS = Object.freeze(new Set([
   'caregivers-load-failure',
@@ -2724,7 +2768,20 @@ export const LOAD_FAILURE_REASONS = Object.freeze(new Set([
   'miregistry-training-entries-load-failure',
   'funding-documents-load-failure',
   'attendance-acks-load-failure',
+  // 2026-06-18 — backfill of two reasons that were emitted by
+  // resolvers but missing from this Set (and therefore misclassified
+  // as data_anomaly through classifyUnknownReason's Set lookup):
+  'compliance-documents-load-failure',  // buildComplianceDocResolver (radon, heating, ERP, ...)
+  'drill-logs-load-failure',            // buildDrillResolver (fire / tornado / other-emergencies)
 ]))
+
+/**
+ * Suffix that identifies a load-failure UNKNOWN reason. The
+ * classification function tests reasons against this regex first; the
+ * Set above is documentation, not authority. Exported so tests can
+ * verify the convention is enforced.
+ */
+export const LOAD_FAILURE_REASON_SUFFIX = /^.+-load-failure$/
 
 /**
  * Classify an `unknown` state into a UI surface bucket. The checklist's
@@ -2771,7 +2828,12 @@ export function classifyUnknownReason({ state } = {}) {
   if (reason === 'awaiting-provider-input') return 'awaiting_input'
   if (reason === 'feature-not-yet-shipped') return 'feature_not_yet_shipped'
   if (reason && NEEDS_PROVIDER_DATA_REASONS.has(reason)) return 'needs_provider_data'
-  if (reason && LOAD_FAILURE_REASONS.has(reason)) return 'load_failure'
+  // 2026-06-18 — suffix-based routing: any `<table>-load-failure`
+  // reason is a transient retry condition. The Set above is now
+  // documentation-only; this regex is authority. See the comment block
+  // above LOAD_FAILURE_REASONS for the rationale (two previously-
+  // missed reasons shipped misclassified as data_anomaly).
+  if (reason && LOAD_FAILURE_REASON_SUFFIX.test(reason)) return 'load_failure'
   return 'data_anomaly'
 }
 

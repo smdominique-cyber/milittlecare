@@ -609,16 +609,16 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
       return (
         'Upload your most recent radon test report in Business Info ' +
         '→ Property and enter the next-due date the tester ' +
-        'recommended. R 400.1934 / R 400.1932 require a test on a ' +
-        '4-year cycle; this row flips to expired the day after the ' +
-        'date you enter.'
+        'recommended. R 400.1915(4) requires a test on a 4-year ' +
+        'cycle; this row flips to expired the day after the date you ' +
+        'enter.'
       )
     },
     expired:
       'Your radon test is past due. Upload a current report in ' +
       'Business Info → Property and enter the new next-due date ' +
-      '(R 400.1934 / R 400.1932). The prior report stays in archive ' +
-      'for the retention window.',
+      '(R 400.1915(4)). The prior report stays in archive for the ' +
+      'retention window.',
   },
   property_heating_inspection_quadrennial: {
     surface: SURFACE.BUSINESS_INFO_PROPERTY,
@@ -635,14 +635,15 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
       return (
         'Upload your most recent heating/HVAC inspection report in ' +
         'Business Info → Property and enter the next-due date ' +
-        'your contractor noted. R 400.1932 is a 4-year cycle; this ' +
-        'row flips to expired the day after that date.'
+        'your contractor noted. R 400.1945(4)–(5) is a 4-year cycle ' +
+        '(at each license renewal); this row flips to expired the day ' +
+        'after that date.'
       )
     },
     expired:
       'Your heating inspection is past due. Upload a current report ' +
       'in Business Info → Property and enter the new next-due ' +
-      'date (R 400.1932). The prior report stays archived.',
+      'date (R 400.1945(4)–(5)). The prior report stays archived.',
   },
   property_licensing_notebook_archive: {
     surface: SURFACE.BUSINESS_INFO_PROPERTY,
@@ -675,7 +676,7 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
     surface: SURFACE.BUSINESS_INFO_PROPERTY,
     missing:
       'Upload a photo (one image per floor is fine) showing working ' +
-      'smoke detectors in Business Info → Property. R 400.1948 ' +
+      'smoke detectors in Business Info → Property. R 400.1948(1) ' +
       'requires detectors on every floor. Re-upload after a battery ' +
       'swap or new install so the on-file image matches what is ' +
       'installed.',
@@ -686,7 +687,7 @@ export const CHECKLIST_GUIDANCE = Object.freeze({
       'Upload a photo of each floor’s fire extinguisher rated ' +
       '2A-10BC or higher, showing the rating label and the service ' +
       'tag with the most recent inspection date, in Business Info → ' +
-      'Property. R 400.1948 requires at least one extinguisher per ' +
+      'Property. R 400.1948(3) requires at least one extinguisher per ' +
       'floor. Re-upload after the annual service tag is renewed.',
   },
   property_smoking_prohibition_posted: {
