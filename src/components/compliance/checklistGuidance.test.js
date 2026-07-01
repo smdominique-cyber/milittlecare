@@ -391,6 +391,53 @@ describe('load_failure bucket', () => {
     expect(gap.guidanceText).toContain('retention')
     expect(gap.guidanceText).toContain('contact support')
   })
+
+  // 2026-06-18 — pins the live-gate scenario the user reproduces by
+  // forcing a DevTools block on compliance_documents and drill_logs.
+  // Pre-fix these rendered the per-row dataAnomaly / generic
+  // "contact support" copy. Post-fix they render the refresh copy
+  // because the suffix classifier routes them to load_failure.
+  describe('regression — formerly-misrouted load-failure reasons', () => {
+    const rowsByLoadFailureReason = [
+      // compliance-documents-load-failure — emitted by every doc-backed
+      // row built with buildComplianceDocResolver.
+      ['property_radon_test_quadrennial',          'compliance-documents-load-failure'],
+      ['property_heating_inspection_quadrennial',  'compliance-documents-load-failure'],
+      ['property_licensing_notebook_archive',      'compliance-documents-load-failure'],
+      ['property_co_detectors_per_level',          'compliance-documents-load-failure'],
+      ['property_smoke_detectors_per_floor',       'compliance-documents-load-failure'],
+      ['property_fire_extinguishers_per_floor',    'compliance-documents-load-failure'],
+      ['property_animal_notification',             'compliance-documents-load-failure'],
+      ['property_smoking_prohibition_posted',      'compliance-documents-load-failure'],
+      ['emergency_response_plan_on_file',          'compliance-documents-load-failure'],
+      ['cdc_fingerprint_reprint_currency',         'compliance-documents-load-failure'],
+      // drill-logs-load-failure — emitted by every drill row built
+      // with buildDrillResolver.
+      ['drill_fire_quarterly',                     'drill-logs-load-failure'],
+      ['drill_tornado_seasonal',                   'drill-logs-load-failure'],
+      ['drill_other_emergencies_annual',           'drill-logs-load-failure'],
+    ]
+    for (const [key, reason] of rowsByLoadFailureReason) {
+      it(`${key} + ${reason} → "refresh to retry" copy (not "contact support")`, () => {
+        const gap = gapFor(key, { kind: 'unknown', reason }, CTX)
+        expect(gap.guidanceText).toBe(LOAD_FAILURE_GUIDANCE)
+        expect(gap.guidanceText).toContain('refresh to retry')
+        expect(gap.guidanceText).not.toContain('contact support')
+        expect(gap.severity).toBe('info')
+        expect(gap.fixTarget).toBeUndefined() // transient → no button
+      })
+    }
+  })
+
+  // 2026-06-18 — suffix-driven routing means future load-failure
+  // reasons are correct-by-construction. Pin a hypothetical so the
+  // suffix rule cannot silently regress to Set-only.
+  it('a hypothetical future *-load-failure reason → refresh copy without any code change', () => {
+    const gap = gapFor('caregiver_professional_development_hours',
+      { kind: 'unknown', reason: 'children-load-failure' }, CTX)
+    expect(gap.guidanceText).toBe(LOAD_FAILURE_GUIDANCE)
+    expect(gap.severity).toBe('info')
+  })
 })
 
 // -----------------------------------------------------------------------------

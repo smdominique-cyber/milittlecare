@@ -26,6 +26,9 @@ import {
   NEEDS_PROVIDER_DATA_REASONS,
   // Phase 3.1 prerequisite (2026-06-10).
   LOAD_FAILURE_REASONS,
+  // 2026-06-18 — load-failure suffix routing (replaces Set-membership
+  // as the load-bearing rule; Set is now documentation-only).
+  LOAD_FAILURE_REASON_SUFFIX,
 } from './complianceState'
 import { ACK_TYPES } from './acknowledgments'
 
@@ -1330,21 +1333,73 @@ describe('compliance_documents-backed resolvers (J1/J2/J8 — mig 039 + mig 040)
   // copy-paste regression is caught loudly at test time, BEFORE it gets
   // baked into the audit-trail evidence the checklist renders.
 
-  describe('PR #21 inventory rows — rule_citation correctness (mig 043 cites)', () => {
-    it('property_co_detectors_per_level cites R 400.1915(3) — the heating/ventilation rule where CO lives (combustion hazard), not R 400.1934 (water hazards) and not R 400.1948 (smoke + fire detectors)', () => {
+  describe('J-group property rows — rule_citation correctness (2026 manual, eff April 27 2026)', () => {
+    // 2026-06-18 — second-pass audit against the 2026 manual.
+    // R 400.1932 became biocontaminants (was a placeholder for property)
+    // and R 400.1934 became water hazards. Property rows that historically
+    // shared a blanket R 400.1934 / R 400.1932 citation now route to
+    // their real homes per docs/regulatory-rule-mapping.md.
+
+    it('J1 — property_radon_test_quadrennial cites R 400.1915(4) — Rule 15 (heating/ventilation/lighting/radon) subrule (4) is the test cadence; the pre-correction blend "R 400.1934/1932" was a Phase 1 placeholder', () => {
+      expect(REQUIREMENT_REGISTRY.property_radon_test_quadrennial.rule_citation).toBe('R 400.1915(4)')
+    })
+
+    it('J2 — property_heating_inspection_quadrennial cites R 400.1945(4)-(5) — Rule 45 (heat-producing equipment), NOT R 400.1915 (which holds CO/radon) and NOT R 400.1932 (biocontaminants in 2026)', () => {
+      expect(REQUIREMENT_REGISTRY.property_heating_inspection_quadrennial.rule_citation).toBe('R 400.1945(4)-(5)')
+    })
+
+    it('J3 — property_co_detectors_per_level cites R 400.1915(3) — Rule 15 subrule (3); CO lives with the combustion hazard, not with the smoke/fire detectors at R 400.1948', () => {
       expect(REQUIREMENT_REGISTRY.property_co_detectors_per_level.rule_citation).toBe('R 400.1915(3)')
     })
-    it('property_smoke_detectors_per_floor cites R 400.1948 — the detectors-and-extinguishers rule, not R 400.1934 (water hazards)', () => {
-      expect(REQUIREMENT_REGISTRY.property_smoke_detectors_per_floor.rule_citation).toBe('R 400.1948')
+
+    it('J4 — property_smoke_detectors_per_floor cites R 400.1948(1) — the per-floor smoke-detector subrule, distinct from R 400.1948(3) (the sibling fire-extinguisher subrule)', () => {
+      expect(REQUIREMENT_REGISTRY.property_smoke_detectors_per_floor.rule_citation).toBe('R 400.1948(1)')
     })
-    it('property_fire_extinguishers_per_floor cites R 400.1948 — same rule as smoke detectors, not R 400.1934 (water hazards)', () => {
-      expect(REQUIREMENT_REGISTRY.property_fire_extinguishers_per_floor.rule_citation).toBe('R 400.1948')
+
+    it('J5 — property_fire_extinguishers_per_floor cites R 400.1948(3) — the per-floor 2A-10BC fire-extinguisher subrule, distinct from R 400.1948(1) (smoke detectors)', () => {
+      expect(REQUIREMENT_REGISTRY.property_fire_extinguishers_per_floor.rule_citation).toBe('R 400.1948(3)')
     })
-    it('property_animal_notification cites R 400.1917 — the animals-and-pets rule, not R 400.1937 (the food-allergy rule it was wrongly under)', () => {
+
+    it('J6 — property_animal_notification cites R 400.1917 — Rule 17 (animals and pets); NOT R 400.1937 (food allergy plan), which is what the pre-correction registry incorrectly cited', () => {
       expect(REQUIREMENT_REGISTRY.property_animal_notification.rule_citation).toBe('R 400.1917')
     })
-    it('property_smoking_prohibition_posted cites R 400.1918 — the smoking-or-vaping rule, not R 400.1934 (water hazards)', () => {
+
+    it('J7 — property_smoking_prohibition_posted cites R 400.1918 — Rule 18 (smoking or vaping); NOT R 400.1934 (water hazards)', () => {
       expect(REQUIREMENT_REGISTRY.property_smoking_prohibition_posted.rule_citation).toBe('R 400.1918')
+    })
+
+    it('J8 — property_licensing_notebook_archive cites R 400.1906(3) — Rule 6 subrule (3) is the parent-availability obligation for the licensing notebook', () => {
+      expect(REQUIREMENT_REGISTRY.property_licensing_notebook_archive.rule_citation).toBe('R 400.1906(3)')
+    })
+
+    it('smoke + fire-extinguisher rows do NOT share an identical citation (the subrules must differ — smoke=(1), extinguisher=(3))', () => {
+      const smoke = REQUIREMENT_REGISTRY.property_smoke_detectors_per_floor.rule_citation
+      const ext   = REQUIREMENT_REGISTRY.property_fire_extinguishers_per_floor.rule_citation
+      expect(smoke).not.toBe(ext)
+      // Both must still anchor to Rule 48.
+      expect(smoke).toContain('R 400.1948')
+      expect(ext).toContain('R 400.1948')
+    })
+
+    it('no surviving registry row cites the stale R 400.1932 (biocontaminants in 2026) or R 400.1934 (water hazards) as a primary property citation', () => {
+      // Property rows that previously shared the Phase 1 placeholder.
+      // The intake-water-activities rows DO still cite R 400.1934(10);
+      // those are correctly the water-activities subrule and outside
+      // the J-group, so this audit is scoped to property_* rows only.
+      const propertyKeys = Object.keys(REQUIREMENT_REGISTRY)
+        .filter(k => k.startsWith('property_'))
+      for (const key of propertyKeys) {
+        const cite = REQUIREMENT_REGISTRY[key].rule_citation
+        // The bare-rule check: a property citation should not be just
+        // R 400.1932 or R 400.1934 (with or without subrule) — those
+        // rules are biocontaminants / water hazards in 2026.
+        expect(cite, `${key} cite "${cite}" must not reference R 400.1932 (biocontaminants)`).not.toMatch(/R 400\.1932\b/)
+        expect(cite, `${key} cite "${cite}" must not reference R 400.1934 (water hazards)`).not.toMatch(/R 400\.1934\b/)
+      }
+    })
+
+    it('intake_firearms_disclosure cites R 400.1907(1)(b) AND R 400.1916 — Rule 7 for intake disclosure + Rule 16 for the firearms rule; NOT R 400.1935 (diapering in 2026)', () => {
+      expect(REQUIREMENT_REGISTRY.intake_firearms_disclosure.rule_citation).toBe('R 400.1907(1)(b) AND R 400.1916')
     })
   })
 })
@@ -3238,10 +3293,18 @@ describe('Phase 3 — classifyUnknownReason', () => {
   // of data_anomaly so guidance can render "couldn't verify — refresh"
   // instead of "contact support" for a transient table-load failure.
   describe('load_failure bucket — transient source-table load failures', () => {
-    it('LOAD_FAILURE_REASONS contains exactly the six guard reasons emitted in code', () => {
+    it('LOAD_FAILURE_REASONS inventory matches the guard reasons emitted in code', () => {
+      // 2026-06-18 — extended from 6 → 8. compliance-documents-load-failure
+      // (buildComplianceDocResolver, line 411) and drill-logs-load-failure
+      // (buildDrillResolver, line 468) were emitted by resolvers but
+      // missing from this Set and therefore misclassified as
+      // data_anomaly. Both are now first-class entries; the suffix
+      // classifier makes future additions correct-by-construction.
       expect([...LOAD_FAILURE_REASONS].sort()).toEqual([
         'attendance-acks-load-failure',
         'caregivers-load-failure',
+        'compliance-documents-load-failure',
+        'drill-logs-load-failure',
         'funding-documents-load-failure',
         'miregistry-training-entries-load-failure',
         'staff-training-records-load-failure',
@@ -3256,8 +3319,59 @@ describe('Phase 3 — classifyUnknownReason', () => {
       }
     })
 
+    // 2026-06-18 — the live bug. Both reasons used to route to
+    // data_anomaly ("contact support") because they were absent from
+    // the Set. Pin them so a future revert of the suffix rule + Set
+    // backfill is caught instantly.
+    it('compliance-documents-load-failure → load_failure (was the live bug — property docs + ERP)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'compliance-documents-load-failure' } }))
+        .toBe('load_failure')
+    })
+
+    it('drill-logs-load-failure → load_failure (was the live bug — three drill rows)', () => {
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'drill-logs-load-failure' } }))
+        .toBe('load_failure')
+    })
+
+    // 2026-06-18 — suffix-based routing is the load-bearing rule;
+    // membership in the Set is documentation. A future
+    // `<new-table>-load-failure` guard must classify correctly even
+    // before someone updates the Set.
+    it('any reason matching the `*-load-failure` suffix routes to load_failure (future-proofing)', () => {
+      const hypotheticals = [
+        'medication-events-load-failure',
+        'acknowledgments-load-failure',
+        'children-load-failure',
+        'profiles-load-failure',
+        'something-completely-new-load-failure',
+      ]
+      for (const reason of hypotheticals) {
+        expect(LOAD_FAILURE_REASONS.has(reason)).toBe(false) // not yet inventoried
+        expect(LOAD_FAILURE_REASON_SUFFIX.test(reason)).toBe(true)
+        expect(classifyUnknownReason({ state: { kind: 'unknown', reason } }))
+          .toBe('load_failure')
+      }
+    })
+
+    it('LOAD_FAILURE_REASON_SUFFIX is exported and is a RegExp', () => {
+      expect(LOAD_FAILURE_REASON_SUFFIX).toBeInstanceOf(RegExp)
+    })
+
+    it('reasons that merely CONTAIN "load-failure" but do not END in `-load-failure` are NOT load_failure', () => {
+      // Defensive — the suffix must anchor at end-of-string so e.g. an
+      // `unrecognized-load-failure-status` style reason can never bypass
+      // the data_anomaly route. (No such reason exists today; this
+      // pins the anchoring behavior so suffix never accidentally
+      // becomes substring.)
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'caregivers-load-failure-archived' } }))
+        .toBe('data_anomaly')
+      expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'load-failure' } }))
+        .toBe('data_anomaly') // requires at least one char before the suffix
+    })
+
     it('training-requirements-catalog-empty STAYS data_anomaly (loaded-but-empty catalog is a seed/deployment anomaly, not a transient load failure)', () => {
       expect(LOAD_FAILURE_REASONS.has('training-requirements-catalog-empty')).toBe(false)
+      expect(LOAD_FAILURE_REASON_SUFFIX.test('training-requirements-catalog-empty')).toBe(false)
       expect(classifyUnknownReason({ state: { kind: 'unknown', reason: 'training-requirements-catalog-empty' } }))
         .toBe('data_anomaly')
     })
@@ -3269,6 +3383,29 @@ describe('Phase 3 — classifyUnknownReason', () => {
     it('LOAD_FAILURE_REASONS and NEEDS_PROVIDER_DATA_REASONS are disjoint (a reason has exactly one bucket)', () => {
       for (const reason of LOAD_FAILURE_REASONS) {
         expect(NEEDS_PROVIDER_DATA_REASONS.has(reason)).toBe(false)
+      }
+    })
+
+    // 2026-06-18 — the audit. Every `-load-failure` reason that
+    // resolvers in complianceState.js currently emit must appear in
+    // LOAD_FAILURE_REASONS. The suffix classifier protects routing
+    // even when the Set lags; this test protects the inventory.
+    it('every -load-failure reason emitted by resolvers is also in LOAD_FAILURE_REASONS (inventory audit)', () => {
+      // Hand-rolled inventory cross-checked against the grep results
+      // in complianceState.js. If a new resolver lands with a new
+      // load-failure reason, this list must be updated alongside it.
+      const emittedByResolvers = [
+        'caregivers-load-failure',
+        'staff-training-records-load-failure',
+        'training-data-load-failure',
+        'miregistry-training-entries-load-failure',
+        'funding-documents-load-failure',
+        'attendance-acks-load-failure',
+        'compliance-documents-load-failure',
+        'drill-logs-load-failure',
+      ]
+      for (const reason of emittedByResolvers) {
+        expect(LOAD_FAILURE_REASONS.has(reason)).toBe(true)
       }
     })
   })
